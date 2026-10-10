@@ -768,7 +768,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         // Explorer restarted: the tray icon has to be added again.
         _ if msg != 0 && msg as isize == TASKBAR_CREATED.load(Ordering::Relaxed) => {
-            update_tray(hwnd, NIM_ADD);
+            ui::PINNED.store(config().pinned, Ordering::Relaxed);
+        update_tray(hwnd, NIM_ADD);
             0
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -847,6 +848,7 @@ fn main() {
         );
         TASKBAR_CREATED.store(RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()) as isize, Ordering::Relaxed);
 
+        ui::PINNED.store(config().pinned, Ordering::Relaxed);
         update_tray(hwnd, NIM_ADD);
         register_hotkeys();
         apply_all();

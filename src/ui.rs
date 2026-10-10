@@ -776,7 +776,7 @@ fn zone_rects() -> Vec<R> {
         .collect()
 }
 static PICKING: AtomicBool = AtomicBool::new(false);
-/// Keeps the panel open when it loses focus: the pin button (stays on for later opens) or `--show`.
+/// Keeps the panel open when it loses focus: the pin button (saved in the config) or `--show`.
 pub static PINNED: AtomicBool = AtomicBool::new(false);
 static LAST_CLOSE: AtomicU64 = AtomicU64::new(0);
 
@@ -1922,7 +1922,10 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
         }
         Hit::Reapply => crate::apply_all(),
         Hit::Pin => {
-            PINNED.fetch_xor(true, Ordering::Relaxed);
+            let pinned = !PINNED.fetch_xor(true, Ordering::Relaxed);
+            let mut cfg = crate::config();
+            cfg.pinned = pinned;
+            cfg.save();
         }
         Hit::Exit => {
             DestroyWindow(hwnd);

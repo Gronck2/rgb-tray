@@ -190,6 +190,8 @@ pub struct Config {
     pub schemes: Vec<Scheme>,
     /// ISO layout (tall Enter, short left Shift) in the key editor.
     pub iso_layout: bool,
+    /// The panel is pinned: it stays open and on top when it loses focus.
+    pub pinned: bool,
     pub presets: Vec<Preset>,
     /// Per-key colors of versions before 0.4, moved to the first Logitech keyboard found
     /// (kept in the file until then).
@@ -207,6 +209,7 @@ impl Default for Config {
             custom_colors: vec![0xFFFFFF; 16],
             schemes: Vec::new(),
             iso_layout: false,
+            pinned: false,
             presets: Vec::new(),
             per_key: false,
             keys: KeyColors::new(),
