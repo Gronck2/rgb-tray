@@ -8,6 +8,7 @@ mod hid;
 mod installer;
 mod keymap;
 mod services;
+mod traymenu;
 mod ui;
 
 use std::io::Write as _;
@@ -53,12 +54,6 @@ fn schedule_wake_reapply(hwnd: HWND) {
         SetTimer(hwnd, TIMER_REAPPLY_LATE, 10000, None);
     }
 }
-
-const ID_OPEN: usize = 1;
-const ID_REAPPLY: usize = 2;
-const ID_AUTOSTART: usize = 3;
-const ID_EXIT: usize = 4;
-const ID_KEYS: usize = 5;
 
 const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const APP_NAME: &str = "rgbtray";
@@ -628,46 +623,6 @@ unsafe fn remove_tray(hwnd: HWND) {
     Shell_NotifyIconW(NIM_DELETE, &nid);
 }
 
-// ---------------------------------------------------------------- right-click menu
-
-unsafe fn append(menu: HMENU, flags: u32, id: usize, text: &str) {
-    AppendMenuW(menu, flags, id, wide(text).as_ptr());
-}
-
-unsafe fn show_menu(hwnd: HWND) {
-    let menu = CreatePopupMenu();
-    append(menu, MF_STRING, ID_OPEN, "Открыть панель");
-    // The key editor of the first connected keyboard with per-key lighting.
-    let keyboard = PRESENT.lock().unwrap().iter().find(|id| devices::kind_of(id).per_key).cloned();
-    append(menu, MF_STRING | if keyboard.is_some() { 0 } else { MF_GRAYED }, ID_KEYS, "Цвета клавиш…");
-    append(menu, MF_STRING, ID_REAPPLY, "Применить заново");
-    let autostart = if autostart_enabled() { MF_CHECKED } else { 0 };
-    append(menu, MF_STRING | autostart, ID_AUTOSTART, "Запускать вместе с Windows");
-    append(menu, MF_SEPARATOR, 0, "");
-    append(menu, MF_STRING | MF_GRAYED, 0, &format!("RGB Tray {}", installer::VERSION));
-    append(menu, MF_STRING, ID_EXIT, "Выход");
-    SetMenuDefaultItem(menu, ID_OPEN as u32, 0);
-
-    let mut pt: POINT = zeroed();
-    GetCursorPos(&mut pt);
-    SetForegroundWindow(hwnd);
-    let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, null());
-    DestroyMenu(menu);
-    PostMessageW(hwnd, WM_NULL, 0, 0);
-    match cmd as usize {
-        ID_OPEN => ui::toggle(),
-        ID_KEYS => {
-            if let Some(id) = keyboard {
-                editor::open(&id);
-            }
-        }
-        ID_REAPPLY => apply_all(),
-        ID_AUTOSTART => set_autostart(!autostart_enabled()),
-        ID_EXIT => quit(),
-        _ => {}
-    }
-}
-
 // ---------------------------------------------------------------- autostart
 
 fn autostart_enabled() -> bool {
@@ -709,7 +664,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_TRAY => {
             match (lparam & 0xFFFF) as u32 {
                 WM_LBUTTONUP => ui::toggle(),
-                WM_RBUTTONUP => show_menu(hwnd),
+                WM_RBUTTONUP => traymenu::show(),
                 _ => {}
             }
             0
@@ -813,6 +768,8 @@ fn main() {
             editor::snapshot(&path, dark, 1.5)
         } else if path.contains("setup") {
             installer::snapshot(&path, dark, 1.5, num(3) == 1)
+        } else if path.contains("traymenu") {
+            traymenu::snapshot(&path, dark, 1.5)
         } else if path.contains("alert") {
             alert::snapshot(&path, dark, 1.5, num(3) as u8)
         } else {
