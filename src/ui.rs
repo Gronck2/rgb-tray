@@ -236,6 +236,9 @@ fn slider_rect() -> R {
     R { x: PAD, y: SLIDER_Y, w: W - 2.0 * PAD, h: SLIDER_H }
 }
 
+/// Height of the header strip by which a pinned panel can be dragged.
+const HEADER_DRAG_H: f32 = 52.0;
+
 /// The pin button left of the refresh button in the header.
 fn pin_rect() -> R {
     R { x: W - PAD - 32.0 - 36.0, y: 12.0, w: 32.0, h: 32.0 }
@@ -843,7 +846,13 @@ unsafe fn fit_height(hwnd: HWND) {
     if rc.bottom - rc.top == want {
         return;
     }
-    let y = if anchor_bottom { rc.bottom - want } else { rc.top };
+    let mut y = if anchor_bottom { rc.bottom - want } else { rc.top };
+    // Keep a panel that was dragged near the bottom of the screen fully visible.
+    let mut mi: MONITORINFO = zeroed();
+    mi.cbSize = size_of::<MONITORINFO>() as u32;
+    if GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut mi) != 0 {
+        y = y.min(mi.rcWork.bottom - want).max(mi.rcWork.top);
+    }
     SetWindowPos(hwnd, null_mut(), rc.left, y, rc.right - rc.left, want, SWP_NOZORDER | SWP_NOACTIVATE);
     // The render target is created for the window size.
     with_flyout(|f| {
@@ -970,12 +979,28 @@ unsafe fn open() -> windows::core::Result<()> {
     };
     let near_x = (pt.x - w / 2).clamp(work.left + margin, work.right - w - margin);
     let near_y = (pt.y - h / 2).clamp(work.top + margin, work.bottom - h - margin);
-    let (x, y) = match edge {
+    let (mut x, mut y) = match edge {
         0 => (work.left + margin, near_y),      // ABE_LEFT
         1 => (near_x, work.top + margin),       // ABE_TOP
         2 => (work.right - w - margin, near_y), // ABE_RIGHT
         _ => (near_x, work.bottom - h - margin),
     };
+    // A pinned panel that was dragged away opens where it was left, if that is still on a screen.
+    let saved = if PINNED.load(Ordering::Relaxed) { crate::config().panel_pos } else { None };
+    let mut moved = false;
+    if let Some((sx, sy)) = saved {
+        let rc = RECT { left: sx, top: sy, right: sx + w, bottom: sy + h };
+        let mon = MonitorFromRect(&rc, MONITOR_DEFAULTTONULL);
+        if !mon.is_null() {
+            let mut smi: MONITORINFO = zeroed();
+            smi.cbSize = size_of::<MONITORINFO>() as u32;
+            GetMonitorInfoW(mon, &mut smi);
+            let wk = smi.rcWork;
+            x = sx.clamp(wk.left, (wk.right - w).max(wk.left));
+            y = sy.clamp(wk.top, (wk.bottom - h).max(wk.top));
+            moved = true;
+        }
+    }
 
     let hwnd = CreateWindowExW(
         WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
@@ -1012,7 +1037,7 @@ unsafe fn open() -> windows::core::Result<()> {
         tracking_leave: false,
         autostart: crate::autostart_enabled(),
         was_active: false,
-        anchor_bottom: edge == 3,
+        anchor_bottom: edge == 3 && !moved,
     };
     FLYOUT.with(|c| *c.borrow_mut() = Some(fly));
     ShowWindow(hwnd, SW_SHOW);
@@ -2118,6 +2143,32 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 open_menu(i, x, y);
             }
             invalidate();
+            0
+        }
+        // A pinned panel is dragged by the empty part of its header.
+        WM_NCHITTEST if PINNED.load(Ordering::Relaxed) => {
+            let mut pt = POINT { x: (lparam & 0xFFFF) as i16 as i32, y: ((lparam >> 16) & 0xFFFF) as i16 as i32 };
+            ScreenToClient(hwnd, &mut pt);
+            let caption = with_flyout(|f| {
+                let (x, y) = (pt.x as f32 / f.scale, pt.y as f32 / f.scale);
+                y >= 0.0 && y < HEADER_DRAG_H && menu_preset().is_none() && hit_test(x, y).is_none()
+            });
+            if caption == Some(true) {
+                HTCAPTION as LRESULT
+            } else {
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+        }
+        // No maximizing or system menu from the drag area.
+        WM_NCLBUTTONDBLCLK | WM_NCRBUTTONUP => 0,
+        WM_EXITSIZEMOVE => {
+            let mut rc: RECT = zeroed();
+            GetWindowRect(hwnd, &mut rc);
+            // From now on the panel grows downwards from where it was put.
+            with_flyout(|f| f.anchor_bottom = false);
+            let mut cfg = crate::config();
+            cfg.panel_pos = Some((rc.left, rc.top));
+            cfg.save();
             0
         }
         WM_TIMER if wparam == TIMER_FOCUS => {

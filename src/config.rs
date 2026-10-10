@@ -211,6 +211,9 @@ pub struct Config {
     pub iso_layout: bool,
     /// The panel is pinned: it stays open and on top when it loses focus.
     pub pinned: bool,
+    /// Top-left corner (screen pixels) of the pinned panel after the user dragged it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub panel_pos: Option<(i32, i32)>,
     pub presets: Vec<Preset>,
     /// Per-key colors of versions before 0.4, moved to the first Logitech keyboard found
     /// (kept in the file until then).
@@ -229,6 +232,7 @@ impl Default for Config {
             schemes: Vec::new(),
             iso_layout: false,
             pinned: false,
+            panel_pos: None,
             presets: Vec::new(),
             per_key: false,
             keys: KeyColors::new(),
