@@ -873,8 +873,42 @@ pub fn toggle() {
     }
 }
 
+/// Whether a font family is installed (checked once per name).
+fn font_installed(dw: &IDWriteFactory, family: &str) -> bool {
+    static KNOWN: Mutex<Vec<(String, bool)>> = Mutex::new(Vec::new());
+    // Snapshots can pretend to run on Windows 10.
+    if std::env::var_os("RGBTRAY_DEMO_WIN10").is_some() {
+        return false;
+    }
+    if let Some(&(_, ok)) = KNOWN.lock().unwrap().iter().find(|(n, _)| n == family) {
+        return ok;
+    }
+    let ok = unsafe {
+        let mut fonts = None;
+        let name: Vec<u16> = family.encode_utf16().chain([0]).collect();
+        let (mut index, mut exists) = (0u32, windows::Win32::Foundation::BOOL(0));
+        dw.GetSystemFontCollection(&mut fonts, false).is_ok()
+            && fonts.is_some_and(|f| f.FindFamilyName(windows::core::PCWSTR(name.as_ptr()), &mut index, &mut exists).is_ok() && exists.as_bool())
+    };
+    KNOWN.lock().unwrap().push((family.to_string(), ok));
+    ok
+}
+
+/// Windows 10 lacks the Windows 11 fonts: icons fall back to Segoe MDL2 Assets (same code
+/// points) and Segoe UI Variable to Segoe UI.
+fn available_family(dw: &IDWriteFactory, family: &str) -> String {
+    let fallback = match family {
+        "Segoe Fluent Icons" => "Segoe MDL2 Assets",
+        f if f.starts_with("Segoe UI Variable") => "Segoe UI",
+        _ => return family.to_string(),
+    };
+    if font_installed(dw, family) { family.to_string() } else { fallback.to_string() }
+}
+
 pub(crate) fn text_format(dw: &IDWriteFactory, family: windows::core::PCWSTR, size: f32, weight: DWRITE_FONT_WEIGHT, align: DWRITE_TEXT_ALIGNMENT) -> windows::core::Result<IDWriteTextFormat> {
     unsafe {
+        let family: Vec<u16> = available_family(dw, &family.to_string().unwrap_or_default()).encode_utf16().chain([0]).collect();
+        let family = windows::core::PCWSTR(family.as_ptr());
         let f = dw.CreateTextFormat(family, None, weight, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, size, w!("ru-RU"))?;
         f.SetTextAlignment(align)?;
         f.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
