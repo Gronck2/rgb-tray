@@ -229,9 +229,10 @@ fn rollback_key(code: u8) -> Option<Rgb> {
 /// Presets in PRESETS that use two chosen colors (shown as dots on their buttons).
 const GRADIENT: usize = 1;
 const WASD: usize = 2;
+const LETTERS: usize = 3;
 
 fn two_color(i: usize) -> bool {
-    matches!(i, GRADIENT | WASD)
+    matches!(i, GRADIENT | WASD | LETTERS)
 }
 
 /// Starting colors of the two-color presets.
@@ -258,10 +259,9 @@ fn preset_keys(iso: bool) -> Vec<KeyDef> {
     keys
 }
 
-fn apply_preset(i: usize, brush: Rgb, colors: [Rgb; 2]) {
+fn apply_preset(i: usize, colors: [Rgb; 2]) {
     let mut cfg = crate::config();
     let keys = preset_keys(cfg.iso_layout);
-    let brush = if brush == OFF { PALETTE[0] } else { brush };
     let center = |kd: &KeyDef| (kd.x + kd.w / 2.0) / keymap::WIDTH;
     match i {
         // Static rainbow across the keyboard: zero cost, the firmware just holds it.
@@ -285,11 +285,11 @@ fn apply_preset(i: usize, brush: Rgb, colors: [Rgb; 2]) {
             }
         }
 
-        // Only letters lit.
+        // Letters (Latin and Cyrillic legends) in one color, everything else in the other.
         _ => {
             for kd in keys.iter().filter(|k| k.code != 0) {
                 let letter = kd.y > 0.0 && kd.label.len() == 1 && kd.label.chars().all(|c| c.is_ascii_alphabetic());
-                set_tracked(&mut cfg, kd.code, if letter || !kd.ru.is_empty() && kd.label.len() == 1 { brush } else { OFF });
+                set_tracked(&mut cfg, kd.code, if letter || !kd.ru.is_empty() && kd.label.len() == 1 { colors[0] } else { colors[1] });
             }
         }
     }
@@ -927,7 +927,7 @@ fn pick(c: Rgb) {
     })
     .flatten();
     if let Some((i, colors)) = preset {
-        apply_preset(i, OFF, colors);
+        apply_preset(i, colors);
     }
 }
 
@@ -949,7 +949,7 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
         }
         Hit::Fill => fill_all(brush),
         Hit::Clear => fill_all(OFF),
-        Hit::Preset(i) => apply_preset(i, brush, colors[i]),
+        Hit::Preset(i) => apply_preset(i, colors[i]),
         Hit::WordBox => {}
 
         Hit::WordApply => {
