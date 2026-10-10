@@ -113,6 +113,8 @@ enum Hit {
     Zone(usize),
     Effect(usize),
     Slider,
+    /// The speed slider of breathing and spectrum.
+    Speed,
     Autostart,
     Reapply,
     Exit,
@@ -339,6 +341,24 @@ fn slider_rect() -> R {
     R { x: PAD, y: SLIDER_Y, w: W - 2.0 * PAD, h: SLIDER_H }
 }
 
+/// The small speed slider at the right end of the "Effect" label line.
+fn speed_rect() -> R {
+    R { x: W - PAD - 130.0, y: EFFECT_LABEL_Y - 1.0, w: 130.0, h: 22.0 }
+}
+
+/// Margin between a slider's ends and its track: the thumb's radius.
+const SPEED_THUMB: f32 = 7.0;
+
+/// The speed slider is shown while a device on the panel breathes or cycles.
+fn speed_shown() -> bool {
+    let active = crate::active_ids();
+    let cfg = crate::config();
+    active.iter().any(|id| {
+        let d = cfg.device(id).visible();
+        !d.per_key && matches!(d.effect, Effect::Breathe | Effect::Cycle)
+    })
+}
+
 /// Height of the header strip by which a pinned panel can be dragged.
 const HEADER_DRAG_H: f32 = 52.0;
 
@@ -458,6 +478,9 @@ fn lower_layout() -> Vec<(R, Hit)> {
         v.push((R { x: PAD + i as f32 * seg_w, y: SEG_Y, w: seg_w, h: SEG_H }, Hit::Effect(i)));
     }
     v.push((slider_rect(), Hit::Slider));
+    if speed_shown() {
+        v.push((speed_rect(), Hit::Speed));
+    }
     v.push((R { x: PAD - 4.0, y: FOOTER_Y, w: 250.0, h: 36.0 }, Hit::Autostart));
     v.push((R { x: W - PAD - 92.0, y: FOOTER_Y, w: 92.0, h: 36.0 }, Hit::Exit));
     v
@@ -933,6 +956,8 @@ struct Flyout {
     hover: Option<Hit>,
     /// Brightness while the slider is being dragged.
     drag: Option<u8>,
+    /// Speed while its slider is being dragged.
+    drag_speed: Option<u8>,
     tracking_leave: bool,
     autostart: bool,
     /// The panel has had keyboard focus at least once.
@@ -1159,6 +1184,7 @@ unsafe fn open() -> windows::core::Result<()> {
         theme,
         hover: None,
         drag: None,
+        drag_speed: None,
         tracking_leave: false,
         autostart: crate::autostart_enabled(),
         was_active: false,
@@ -1218,12 +1244,15 @@ struct View {
     /// Connected, unlinked and archived devices (on every page of the list).
     devices: Vec<DeviceView>,
     brightness: u8,
+    speed: u8,
+    speed_shown: bool,
     selected: Option<String>,
     /// Top of the section under the device list.
     lower_y: f32,
 }
 
 fn view() -> View {
+    let speed_shown = speed_shown();
     let rows = rows();
     let lower_y = lower_y_of(&rows);
     let selected = selected();
@@ -1252,6 +1281,8 @@ fn view() -> View {
         devices,
         // The slider edits the overall brightness, or the selected device's share of it.
         brightness: selected.as_ref().map_or(cfg.brightness, |id| cfg.device(id).brightness),
+        speed: cfg.speed,
+        speed_shown,
         selected,
         lower_y,
     }
@@ -1330,6 +1361,26 @@ impl Flyout {
                 }
             }
         }
+    }
+
+    /// A Windows 11 slider: track filled up to `value` (0..=100) and a round thumb of radius
+    /// `thumb`, whose dot shrinks while dragged and grows under the mouse.
+    unsafe fn slider(&self, rt: &ID2D1RenderTarget, s: R, value: u8, thumb: f32, dragging: bool, hovered: bool) {
+        let t = &self.theme;
+        let (x0, x1) = (s.x + thumb, s.x + s.w - thumb);
+        let tx = x0 + (x1 - x0) * value.min(100) as f32 / 100.0;
+        self.fill(rt, R { x: x0, y: s.cy() - 2.0, w: x1 - x0, h: 4.0 }, 2.0, t.text2);
+        self.fill(rt, R { x: x0, y: s.cy() - 2.0, w: tx - x0, h: 4.0 }, 2.0, t.accent);
+        self.circle(rt, tx, s.cy(), thumb, if t.dark { col(0x45, 0x45, 0x45, 1.0) } else { col(255, 255, 255, 1.0) });
+        self.ring(rt, tx, s.cy(), thumb - 0.5, t.stroke, 1.0);
+        let inner = if dragging {
+            0.45
+        } else if hovered {
+            0.65
+        } else {
+            0.55
+        };
+        self.circle(rt, tx, s.cy(), thumb * inner, t.accent);
     }
 
     unsafe fn fill(&self, rt: &ID2D1RenderTarget, r: R, radius: f32, c: D2D1_COLOR_F) {
@@ -1483,6 +1534,12 @@ impl Flyout {
             }
             self.text(rt, crate::i18n::pick(*label), &f.center, r, if on { t.on_accent } else { t.text });
         }
+        if v.speed_shown {
+            let s = speed_rect();
+            self.text(rt, tr!("Скорость", "Speed"), &f.sub_right, R { x: s.x - 96.0, y: EFFECT_LABEL_Y, w: 90.0, h: 20.0 }, t.text2);
+            let speed = self.drag_speed.unwrap_or(v.speed);
+            self.slider(rt, s, speed, SPEED_THUMB, self.drag_speed.is_some(), hover(Hit::Speed));
+        }
 
         // Brightness slider.
         let brightness = self.drag.unwrap_or(v.brightness);
@@ -1493,21 +1550,7 @@ impl Flyout {
         };
         self.text(rt, label, &f.label, R { x: PAD, y: BRIGHT_LABEL_Y, w: 200.0, h: 20.0 }, t.text);
         self.text(rt, &value, &f.label_right, R { x: W - PAD - 140.0, y: BRIGHT_LABEL_Y, w: 140.0, h: 20.0 }, t.text2);
-        let s = slider_rect();
-        let (x0, x1) = (s.x + 10.0, s.x + s.w - 10.0);
-        let tx = x0 + (x1 - x0) * brightness as f32 / 100.0;
-        self.fill(rt, R { x: x0, y: s.cy() - 2.0, w: x1 - x0, h: 4.0 }, 2.0, t.text2);
-        self.fill(rt, R { x: x0, y: s.cy() - 2.0, w: tx - x0, h: 4.0 }, 2.0, t.accent);
-        self.circle(rt, tx, s.cy(), 10.0, if t.dark { col(0x45, 0x45, 0x45, 1.0) } else { col(255, 255, 255, 1.0) });
-        self.ring(rt, tx, s.cy(), 9.5, t.stroke, 1.0);
-        let inner = if self.drag.is_some() {
-            4.5
-        } else if hover(Hit::Slider) {
-            6.5
-        } else {
-            5.5
-        };
-        self.circle(rt, tx, s.cy(), inner, t.accent);
+        self.slider(rt, slider_rect(), brightness, 10.0, self.drag.is_some(), hover(Hit::Slider));
 
         // Global presets.
         self.text(rt, tr!("Пресеты", "Presets"), &f.label, R { x: PAD, y: PRESET_LABEL_Y, w: 120.0, h: 20.0 }, t.text);
@@ -2043,6 +2086,7 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32, card: usize, zone: u
             theme: theme_for(dark),
             hover: None,
             drag: None,
+            drag_speed: None,
             tracking_leave: false,
             autostart: crate::autostart_enabled(),
             was_active: false,
@@ -2122,6 +2166,12 @@ fn slider_value(x: f32) -> u8 {
     let s = slider_rect();
     let (x0, x1) = (s.x + 10.0, s.x + s.w - 10.0);
     (((x - x0) / (x1 - x0)).clamp(0.0, 1.0) * 100.0).round().max(5.0) as u8
+}
+
+fn speed_value(x: f32) -> u8 {
+    let s = speed_rect();
+    let (x0, x1) = (s.x + SPEED_THUMB, s.x + s.w - SPEED_THUMB);
+    (((x - x0) / (x1 - x0)).clamp(0.0, 1.0) * 100.0).round() as u8
 }
 
 /// Runs a click action. No RefCell borrow may be held here: the color dialog and
@@ -2245,7 +2295,7 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
             crate::quit();
             return;
         }
-        Hit::Slider => {}
+        Hit::Slider | Hit::Speed => {}
     }
     invalidate();
 }
@@ -2278,6 +2328,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     f.drag = Some(slider_value(x));
                     return true;
                 }
+                if f.drag_speed.is_some() {
+                    f.drag_speed = Some(speed_value(x));
+                    return true;
+                }
                 let h = hit_test(x, y);
                 let changed = h != f.hover;
                 f.hover = h;
@@ -2299,7 +2353,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_LBUTTONDOWN => {
             let started = with_flyout(|f| {
                 let (x, y) = mouse_pos(lparam, f.scale);
-                (hit_test(x, y) == Some(Hit::Slider)).then(|| f.drag = Some(slider_value(x))).is_some()
+                match hit_test(x, y) {
+                    Some(Hit::Slider) => f.drag = Some(slider_value(x)),
+                    Some(Hit::Speed) => f.drag_speed = Some(speed_value(x)),
+                    _ => return false,
+                }
+                true
             });
             if started == Some(true) {
                 SetCapture(hwnd);
@@ -2308,11 +2367,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             0
         }
         WM_LBUTTONUP => {
-            let (drag, hit) = with_flyout(|f| {
+            let (drag, drag_speed, hit) = with_flyout(|f| {
                 let (x, y) = mouse_pos(lparam, f.scale);
-                (f.drag.take(), hit_test(x, y))
+                (f.drag.take(), f.drag_speed.take(), hit_test(x, y))
             })
-            .unwrap_or((None, None));
+            .unwrap_or((None, None, None));
             // A click anywhere except the field being edited finishes renaming.
             let renaming = RENAME.load(Ordering::Relaxed);
             if renaming != usize::MAX && !matches!(hit, Some(Hit::Preset(i) | Hit::PresetRename(i)) if i == renaming) {
@@ -2335,6 +2394,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(b) = drag {
                 ReleaseCapture();
                 crate::set_brightness(selected().as_deref(), b);
+                invalidate();
+            } else if let Some(s) = drag_speed {
+                ReleaseCapture();
+                crate::set_speed(s);
                 invalidate();
             } else if let Some(h) = hit {
                 // Clicking the chip that is being renamed keeps editing instead of applying it.

@@ -30,6 +30,25 @@ impl Effect {
     }
 }
 
+/// Speed of breathing and spectrum, 0..=100; 50 is the normal speed.
+static SPEED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(NORMAL_SPEED);
+pub const NORMAL_SPEED: u8 = 50;
+
+/// Sets the speed of breathing and spectrum for the next applies (one for all devices, so
+/// their breathing stays in step).
+pub fn set_speed(speed: u8) {
+    SPEED.store(speed.min(100), std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn speed() -> u8 {
+    SPEED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// How many times faster than normal: 1/4 at speed 0, 1 at 50, 4 at 100.
+pub fn speed_factor(speed: u8) -> f32 {
+    2f32.powf((speed.min(100) as f32 - NORMAL_SPEED as f32) / 25.0)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
@@ -351,6 +370,15 @@ mod tests {
         assert_eq!(Rgb(255, 100, 0).scaled(100), Rgb(255, 100, 0));
         assert_eq!(Rgb(255, 100, 0).scaled(250), Rgb(255, 100, 0));
         assert_eq!(Rgb(255, 100, 0).scaled(0), Rgb(0, 0, 0));
+    }
+
+    #[test]
+    fn speed_factors() {
+        assert_eq!(speed_factor(NORMAL_SPEED), 1.0);
+        assert_eq!(speed_factor(0), 0.25);
+        assert_eq!(speed_factor(100), 4.0);
+        assert_eq!(speed_factor(250), 4.0);
+        assert!((0..100).all(|s| speed_factor(s) < speed_factor(s + 1)));
     }
 
     #[test]

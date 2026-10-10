@@ -7,7 +7,8 @@ use crate::hid::{self, Hid};
 const VID: u16 = 0x0B05;
 const AURA_REPORT: u8 = 0x5D;
 const KBD_REPORT: u8 = 0x5A;
-const SPEED_MEDIUM: u8 = 0xEB;
+/// Aura effect speeds: slow, medium, fast (as in asusctl).
+const SPEEDS: [u8; 3] = [0xE1, 0xEB, 0xF5];
 /// Device id of the laptop keyboard.
 const ID: &str = "asus";
 
@@ -69,7 +70,7 @@ impl Device for Asus {
         };
         let Rgb(r, g, b) = color;
         let breathe = (effect == Effect::Breathe) as u8;
-        Self::send(&self.aura, &[AURA_REPORT, 0xB3, 0x00, mode, r, g, b, SPEED_MEDIUM, 0x00, breathe])?;
+        Self::send(&self.aura, &[AURA_REPORT, 0xB3, 0x00, mode, r, g, b, SPEEDS[(super::speed() as usize * 3 / 101).min(2)], 0x00, breathe])?;
         Self::send(&self.aura, &[AURA_REPORT, 0xB5, 0, 0, 0])?;
         Self::send(&self.aura, &[AURA_REPORT, 0xB4])
     }

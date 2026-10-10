@@ -199,6 +199,7 @@ fn apply_all() {
             cfg.clone()
         };
         check_services(&cfg);
+        devices::set_speed(cfg.speed);
         let mut no_link = d.no_link;
         // A wireless device without a link can't tell its serial: it is the most recently
         // seen absent device of its model.
@@ -300,6 +301,15 @@ fn set_effect(ids: &[String], e: Effect) {
 }
 
 /// `device`: None sets the overall brightness, Some the device's share of it.
+/// Speed of breathing and spectrum for all devices.
+fn set_speed(speed: u8) {
+    let mut cfg = config();
+    cfg.speed = speed.min(100);
+    cfg.save();
+    drop(cfg);
+    apply_all();
+}
+
 fn set_brightness(device: Option<&str>, pct: u8) {
     let mut cfg = config();
     match device {

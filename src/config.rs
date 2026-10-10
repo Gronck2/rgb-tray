@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::devices::{kind_of, Effect, Rgb, KINDS};
+use crate::devices::{kind_of, Effect, Rgb, KINDS, NORMAL_SPEED};
 
 /// Settings of one device (by device id: "naga-123456H246", "logitech-1A2B3C4D", ...).
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -190,6 +190,9 @@ pub struct Preset {
     pub devices: BTreeMap<String, DeviceConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hotkey: Option<Hotkey>,
+    /// Speed of breathing and spectrum (`devices::speed`).
+    #[serde(default = "normal_speed", skip_serializing_if = "is_normal_speed")]
+    pub speed: u8,
     /// Per-key colors of versions before 0.4 (now part of the keyboard's settings).
     #[serde(default, skip_serializing_if = "is_false")]
     per_key: bool,
@@ -202,6 +205,9 @@ pub struct Preset {
 pub struct Config {
     /// 0..=100
     pub brightness: u8,
+    /// Speed of breathing and spectrum for all devices, 0..=100 (`devices::speed`).
+    #[serde(skip_serializing_if = "is_normal_speed")]
+    pub speed: u8,
     /// Every device ever connected, by device id (disconnected ones are the archive).
     pub devices: BTreeMap<String, DeviceConfig>,
     /// Custom colors of the color picker, as COLORREF (0x00BBGGRR).
@@ -233,6 +239,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             brightness: 100,
+            speed: NORMAL_SPEED,
             devices: BTreeMap::new(),
             custom_colors: vec![0xFFFFFF; 16],
             schemes: Vec::new(),
@@ -248,6 +255,14 @@ impl Default for Config {
     }
 }
 
+fn normal_speed() -> u8 {
+    NORMAL_SPEED
+}
+
+fn is_normal_speed(s: &u8) -> bool {
+    *s == NORMAL_SPEED
+}
+
 fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
@@ -259,6 +274,7 @@ impl Config {
             brightness: self.brightness,
             devices: self.devices.iter().map(|(id, d)| (id.clone(), d.lighting())).collect(),
             hotkey: None,
+            speed: self.speed,
             per_key: false,
             keys: KeyColors::new(),
         }
@@ -267,6 +283,7 @@ impl Config {
     /// Takes over the preset's lighting; devices the preset doesn't know keep theirs.
     pub fn load_preset(&mut self, p: &Preset) {
         self.brightness = p.brightness;
+        self.speed = p.speed;
         for (id, d) in self.devices.iter_mut() {
             if let Some(pd) = p.devices.get(id) {
                 d.set_lighting(pd);
@@ -276,7 +293,11 @@ impl Config {
 
     /// Whether the current lighting is exactly this preset.
     pub fn matches(&self, p: &Preset) -> bool {
-        self.brightness == p.brightness && self.devices.iter().all(|(id, d)| p.devices.get(id).is_none_or(|pd| d.same_lighting(pd)))
+        // The speed shows only while something breathes or cycles.
+        let animated = self.devices.values().any(|d| matches!(d.visible().effect, Effect::Breathe | Effect::Cycle) && !d.per_key);
+        self.brightness == p.brightness
+            && (self.speed == p.speed || !animated)
+            && self.devices.iter().all(|(id, d)| p.devices.get(id).is_none_or(|pd| d.same_lighting(pd)))
     }
 
     /// The color all these devices show, when they all show the same single color.
@@ -483,6 +504,25 @@ mod tests {
         assert!(cfg.matches(&p));
         assert_eq!(cfg.brightness, 70);
         assert_eq!(cfg.devices["naga-A"].name, "Mouse");
+    }
+
+    #[test]
+    fn preset_speed_matters_only_while_animating() {
+        let mut cfg = Config::default();
+        cfg.devices.insert("naga-A".into(), device(Effect::Static, "#FF0000"));
+        let p = cfg.snapshot("P".into());
+        cfg.speed = 90;
+        assert!(cfg.matches(&p));
+        cfg.devices.get_mut("naga-A").unwrap().effect = Effect::Breathe;
+        let p = cfg.snapshot("P".into());
+        cfg.speed = 10;
+        assert!(!cfg.matches(&p));
+        cfg.load_preset(&p);
+        assert_eq!(cfg.speed, 90);
+        assert!(cfg.matches(&p));
+        // Presets of older versions have no speed: normal.
+        let old: Preset = toml::from_str("name = \"Old\"\nbrightness = 100\n[devices]\n").unwrap();
+        assert_eq!(old.speed, NORMAL_SPEED);
     }
 
     #[test]

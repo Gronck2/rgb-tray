@@ -50,10 +50,15 @@ pub fn cycle_hue(t: f32) -> f32 {
     t / CYCLE_PERIOD * 360.0
 }
 
+/// Frames get effect time: real time scaled by the speed setting, accumulated frame by frame
+/// so a speed change goes on smoothly from the current phase.
 fn run() {
-    let start = Instant::now();
+    let mut last = Instant::now();
+    let mut t = 0.0;
     loop {
-        let t = start.elapsed().as_secs_f32();
+        let now = Instant::now();
+        t += (now - last).as_secs_f32() * super::speed_factor(super::speed());
+        last = now;
         ANIMATIONS.lock().unwrap().retain_mut(|(_, frame)| frame(t));
         std::thread::sleep(FRAME);
     }

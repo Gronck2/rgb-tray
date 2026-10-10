@@ -45,8 +45,14 @@ const EFFECT_STATIC: u16 = 0x0001;
 const EFFECT_CYCLE: u16 = 0x0003;
 const EFFECT_BREATHE: u16 = 0x000A;
 
+/// Effect periods at normal speed.
 const BREATHE_PERIOD_MS: u16 = 4000;
 const CYCLE_PERIOD_MS: u16 = 10000;
+
+/// An effect period at the current speed setting.
+fn period_ms(normal: u16) -> u16 {
+    (normal as f32 / super::speed_factor(super::speed())).round().clamp(500.0, u16::MAX as f32) as u16
+}
 
 // 0x8081 functions.
 const KEYS_SET_INDIVIDUAL: u8 = 1; // up to 4 × [zone, r, g, b]
@@ -249,11 +255,11 @@ impl Device for Logitech {
                 // A pre-dimmed color pulses too faintly to see at low brightness; the
                 // effect has its own intensity parameter (1..=100) instead.
                 let Rgb(r, g, b) = color;
-                let [ph, pl] = BREATHE_PERIOD_MS.to_be_bytes();
+                let [ph, pl] = period_ms(BREATHE_PERIOD_MS).to_be_bytes();
                 (EFFECT_BREATHE, [r, g, b, ph, pl, 0, brightness.clamp(1, 100), 0, 0, 0])
             }
             Effect::Cycle => {
-                let [ph, pl] = CYCLE_PERIOD_MS.to_be_bytes();
+                let [ph, pl] = period_ms(CYCLE_PERIOD_MS).to_be_bytes();
                 (EFFECT_CYCLE, [0, 0, 0, 0, 0, ph, pl, brightness.clamp(1, 100), 0, 0])
             }
         };

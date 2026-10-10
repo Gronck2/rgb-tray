@@ -46,9 +46,9 @@ const MODELS: &[Model] = &[
 /// How lighting values are addressed.
 #[derive(Clone, Copy, Debug)]
 enum Channel {
-    /// Protocol up to 11: value ids 0x80 brightness, 0x81 effect, 0x83 color.
+    /// Protocol up to 11: value ids 0x80 brightness, 0x81 effect, 0x82 speed, 0x83 color.
     Legacy,
-    /// Protocol 12+: a channel (3 RGB Matrix, 2 RGBLight) with values 1 brightness, 2 effect, 4 color.
+    /// Protocol 12+: a channel (3 RGB Matrix, 2 RGBLight) with values 1 brightness, 2 effect, 3 speed, 4 color.
     Custom(u8),
 }
 
@@ -60,6 +60,7 @@ impl Channel {
                 0x80 + match value {
                     Value::Brightness => 0,
                     Value::Effect => 1,
+                    Value::Speed => 2,
                     Value::Color => 3,
                 },
             ],
@@ -68,6 +69,7 @@ impl Channel {
                 match value {
                     Value::Brightness => 1,
                     Value::Effect => 2,
+                    Value::Speed => 3,
                     Value::Color => 4,
                 },
             ],
@@ -80,6 +82,7 @@ enum Value {
     Brightness,
     Effect,
     Color,
+    Speed,
 }
 
 pub struct Via {
@@ -231,6 +234,8 @@ impl Device for Via {
             Effect::Off => return self.set(Value::Effect, &[EFFECT_OFF]),
             Effect::Cycle if self.cycle.is_some() => {
                 self.set(Value::Effect, &[self.cycle.unwrap_or(EFFECT_STATIC)])?;
+                // QMK effect speed 0..=255, about 128 normal. Not every firmware has it, so a refusal is ignored.
+                let _ = self.set(Value::Speed, &[(super::speed() as u32 * 255 / 100) as u8]);
                 let (h, s) = hue_sat(color);
                 self.set(Value::Color, &[h, s])?;
                 return self.set(Value::Brightness, &[value_of(color, brightness)]);
