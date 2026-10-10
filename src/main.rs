@@ -1,0 +1,867 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod alert;
+mod config;
+mod devices;
+mod editor;
+mod hid;
+mod installer;
+mod keymap;
+mod services;
+mod ui;
+
+use std::io::Write as _;
+use std::mem::{size_of, zeroed};
+use std::ptr::{null, null_mut};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::{Mutex, OnceLock};
+
+use windows_sys::Win32::Foundation::*;
+use windows_sys::Win32::Graphics::Gdi::*;
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::Registry::*;
+use windows_sys::Win32::System::Threading::CreateMutexW;
+use windows_sys::Win32::UI::Controls::Dialogs::*;
+use windows_sys::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
+use windows_sys::Win32::UI::Shell::*;
+use windows_sys::Win32::UI::WindowsAndMessaging::*;
+
+use config::Config;
+use devices::{Effect, Rgb};
+
+const WM_TRAY: u32 = WM_APP + 1;
+/// Posted by background threads: re-apply lighting soon (debounced).
+const WM_REAPPLY_SOON: u32 = WM_APP + 2;
+/// Posted after an apply finished: refresh icon, tooltip and panel.
+const WM_APPLIED: u32 = WM_APP + 3;
+/// Posted by the battery poller with fresh levels.
+const WM_BATTERY: u32 = WM_APP + 4;
+
+const TIMER_REAPPLY: usize = 1;
+/// Second pass after wake: the ASUS keyboard may reset to white a few seconds later.
+const TIMER_REAPPLY_LATE: usize = 2;
+
+/// GUID_CONSOLE_DISPLAY_STATE: 0 off, 1 on, 2 dimmed. Modern Standby (S0ix) laptops
+/// send no resume broadcast, so the display turning back on is the wake signal.
+const GUID_CONSOLE_DISPLAY_STATE: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0x6fe69556_704a_47a0_8f24_c28d936fda47);
+static DISPLAY_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+fn schedule_wake_reapply(hwnd: HWND) {
+    unsafe {
+        SetTimer(hwnd, TIMER_REAPPLY, 3000, None);
+        SetTimer(hwnd, TIMER_REAPPLY_LATE, 10000, None);
+    }
+}
+
+const ID_OPEN: usize = 1;
+const ID_REAPPLY: usize = 2;
+const ID_AUTOSTART: usize = 3;
+const ID_EXIT: usize = 4;
+const ID_KEYS: usize = 5;
+
+const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+const APP_NAME: &str = "rgbtray";
+
+static CONFIG: OnceLock<Mutex<Config>> = OnceLock::new();
+/// Ids of devices found (and answering) at the last apply.
+static PRESENT: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// Battery levels of wireless devices from the last check.
+static STATUS: Mutex<Vec<(String, devices::Battery)>> = Mutex::new(Vec::new());
+/// Devices whose receiver/dock is plugged in but which don't answer (off, asleep, out of range).
+/// Their STATUS entry is the last known battery level.
+static NO_LINK: Mutex<Vec<String>> = Mutex::new(Vec::new());/// Logitech's Dynamic Lighting service is active and can hang the G915 (see `services`).
+static LAMPARRAY_WARN: AtomicBool = AtomicBool::new(false);
+
+fn check_services(cfg: &Config) {
+    let has_logitech = cfg.devices.keys().any(|id| devices::kind_of(id).key == "logitech");
+    LAMPARRAY_WARN.store(has_logitech && services::interferes(services::LOGI_LAMPARRAY), Ordering::Relaxed);
+}
+
+/// Turns the Logitech LampArray service off (asks for administrator rights), then refreshes
+/// the panel once it has stopped.
+fn disable_lamparray() {
+    if !services::disable(services::LOGI_LAMPARRAY) {
+        return;
+    }
+    std::thread::spawn(|| {
+        for _ in 0..10 {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            if !services::interferes(services::LOGI_LAMPARRAY) {
+                break;
+            }
+        }
+        check_services(&config().clone());
+        post(WM_APPLIED);
+    });
+}
+
+/// Serializes applies coming from different threads.
+static APPLY_LOCK: Mutex<()> = Mutex::new(());
+static HWND_MAIN: AtomicIsize = AtomicIsize::new(0);
+static TASKBAR_CREATED: AtomicIsize = AtomicIsize::new(0);
+
+fn config() -> std::sync::MutexGuard<'static, Config> {
+    CONFIG.get_or_init(|| Mutex::new(Config::load())).lock().unwrap()
+}
+
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+fn log(msg: &str) {
+    #[cfg(debug_assertions)]
+    eprintln!("{msg}");
+    let path = Config::dir().join("rgbtray.log");
+    let _ = std::fs::create_dir_all(Config::dir());
+    if std::fs::metadata(&path).map(|m| m.len() > 512 * 1024).unwrap_or(false) {
+        let _ = std::fs::remove_file(&path);
+    }
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(f, "[{secs}] {msg}");
+    }
+}
+
+/// Logs every device command when a file named `trace` exists next to the config.
+fn trace_enabled() -> bool {
+    static TRACE: OnceLock<bool> = OnceLock::new();
+    *TRACE.get_or_init(|| Config::dir().join("trace").exists())
+}
+
+fn post(msg: u32) {
+    unsafe { PostMessageW(HWND_MAIN.load(Ordering::Relaxed) as HWND, msg, 0, 0) };
+}
+
+/// Devices shown on the panel: connected ones and those without a link, in panel order.
+fn active_ids() -> Vec<String> {
+    let mut ids = PRESENT.lock().unwrap().clone();
+    ids.extend(NO_LINK.lock().unwrap().iter().cloned());
+    config().sorted(ids)
+}
+
+/// Applies the saved settings to every connected device on a background thread.
+fn apply_all() {
+    std::thread::spawn(|| {
+        let _guard = APPLY_LOCK.lock().unwrap();
+        let d = devices::discover();
+        let ids: Vec<String> = d.found.iter().map(|f| f.id.clone()).collect();
+        log(&format!("apply: {ids:?}"));
+        let cfg = {
+            let mut cfg = config();
+            if cfg.register(&ids) {
+                cfg.save();
+            }
+            cfg.clone()
+        };
+        check_services(&cfg);
+        let mut no_link = d.no_link;
+        // A wireless device without a link can't tell its serial: it is the most recently
+        // seen absent device of its model.
+        for kind in d.no_link_kinds {
+            let guess = cfg
+                .devices
+                .iter()
+                .filter(|(id, _)| devices::kind_of(id).key == kind && !ids.contains(id) && !no_link.contains(id))
+                .max_by_key(|(_, dc)| dc.last_seen)
+                .map(|(id, _)| id.clone());
+            no_link.extend(guess);
+        }
+        let mut status = Vec::new();
+        let mut present = Vec::new();
+        for f in &d.found {
+            let dc = cfg.device(&f.id);
+            let kind = devices::kind_of(&f.id);
+            let brightness = cfg.effective_brightness(&f.id);
+            let res = if kind.per_key && dc.per_key {
+                f.dev.apply_keys(&dc.all_keys(), brightness)
+            } else if !kind.zones.is_empty() && !dc.zones.is_empty() {
+                let colors: Vec<(u8, Rgb)> = kind.zones.iter().map(|&(led, _)| (led, dc.zone_rgb(led))).collect();
+                f.dev.apply_zones(dc.effect, &colors, brightness)
+            } else {
+                f.dev.apply(dc.effect, dc.rgb(), brightness)
+            };
+            match res {
+                Err(e) if e == devices::NO_LINK => {
+                    no_link.push(f.id.clone());
+                    continue;
+                }
+                Err(e) => log(&format!("{}: {e}", f.id)),
+                Ok(()) => {}
+            }
+            present.push(f.id.clone());
+            if let Some(b) = f.dev.battery() {
+                status.push((f.id.clone(), b));
+            }
+        }
+        if !no_link.is_empty() {
+            log(&format!("no link: {no_link:?}"));
+        }
+        // Unreachable devices keep their last known battery level.
+        for (id, b) in STATUS.lock().unwrap().iter() {
+            if no_link.contains(id) {
+                status.push((id.clone(), *b));
+            }
+        }
+        *PRESENT.lock().unwrap() = present;
+        *STATUS.lock().unwrap() = status;
+        *NO_LINK.lock().unwrap() = no_link;
+        post(WM_APPLIED);
+    });
+}
+
+// ---------------------------------------------------------------- actions shared by the panel
+
+fn set_color(ids: &[String], c: Rgb) {
+    let mut cfg = config();
+    for id in ids {
+        let dc = cfg.device_mut(id);
+        dc.set_rgb(c);
+        // One color for the whole device replaces per-zone and per-key colors.
+        dc.zones.clear();
+        dc.per_key = false;
+        // Picking a color while the light is off or cycling means "show this color".
+        if matches!(dc.effect, Effect::Off | Effect::Cycle) {
+            dc.effect = Effect::Static;
+        }
+    }
+    cfg.save();
+    drop(cfg);
+    apply_all();
+}
+
+/// Colors one lighting zone of a device (e.g. the side panel of the mouse).
+fn set_zone_color(id: &str, led: u8, c: Rgb) {
+    let mut cfg = config();
+    let dc = cfg.device_mut(id);
+    let leds: Vec<u8> = devices::kind_of(id).zones.iter().map(|z| z.0).collect();
+    dc.set_zone(led, c, &leds);
+    if matches!(dc.effect, Effect::Off | Effect::Cycle) {
+        dc.effect = Effect::Static;
+    }
+    cfg.save();
+    drop(cfg);
+    apply_all();
+}
+
+fn set_effect(ids: &[String], e: Effect) {
+    let mut cfg = config();
+    for id in ids {
+        let dc = cfg.device_mut(id);
+        dc.effect = e;
+        dc.per_key = false;
+    }
+    cfg.save();
+    drop(cfg);
+    apply_all();
+}
+
+/// `device`: None sets the overall brightness, Some the device's share of it.
+fn set_brightness(device: Option<&str>, pct: u8) {
+    let mut cfg = config();
+    match device {
+        None => cfg.brightness = pct.min(100),
+        Some(id) => cfg.device_mut(id).brightness = pct.min(100),
+    }
+    cfg.save();
+    drop(cfg);
+    apply_all();
+}
+
+/// Removes a disconnected device with its settings.
+fn forget_device(id: &str) {
+    let mut cfg = config();
+    cfg.forget(id);
+    cfg.save();
+}
+
+fn rename_device(id: &str, name: &str) {
+    let mut cfg = config();
+    let name = name.trim();
+    let default = devices::kind_of(id).name;
+    cfg.device_mut(id).name = if name == default { String::new() } else { name.to_string() };
+    cfg.save();
+}
+// ---------------------------------------------------------------- battery
+
+const BATTERY_POLL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+const SNOOZE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+/// Above this level (or on charge) the warnings are re-armed.
+const BATTERY_REARM: u8 = 15;
+
+/// Per device: highest warning shown (1 = low, 2 = critical) and an optional snooze deadline.
+static BATTERY_WARNED: Mutex<Vec<(String, u8, Option<std::time::Instant>)>> = Mutex::new(Vec::new());
+
+/// Seconds since the last keyboard/mouse input in this session.
+fn idle_seconds() -> u32 {
+    use windows_sys::Win32::System::SystemInformation::GetTickCount;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+    unsafe {
+        let mut li = LASTINPUTINFO { cbSize: size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+        if GetLastInputInfo(&mut li) == 0 {
+            return 0;
+        }
+        GetTickCount().wrapping_sub(li.dwTime) / 1000
+    }
+}
+
+/// Re-reads battery levels every few minutes while the user is active. Asking a sleeping
+/// wireless keyboard would wake it up and drain the battery, so idle periods are skipped.
+fn spawn_battery_poller() {
+    std::thread::spawn(|| loop {
+        std::thread::sleep(BATTERY_POLL);
+        if idle_seconds() > 120 {
+            continue;
+        }
+        let found = {
+            let _guard = APPLY_LOCK.lock().unwrap();
+            devices::batteries()
+        };
+        // A device that had no link answers again: re-apply so it gets its lighting and status.
+        let reconnected = found.iter().any(|(k, _)| NO_LINK.lock().unwrap().contains(k));
+        if !found.is_empty() {
+            let mut status = STATUS.lock().unwrap();
+            for (id, b) in found {
+                status.retain(|(k, _)| *k != id);
+                status.push((id, b));
+            }
+        }
+        post(if reconnected { WM_REAPPLY_SOON } else { WM_BATTERY });
+    });
+}
+
+/// The receiver doesn't always announce a keyboard waking up, so while some device has no
+/// link it is looked for every half minute; once it answers, everything is re-applied.
+fn spawn_link_watch() {
+    std::thread::spawn(|| loop {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        let missing = NO_LINK.lock().unwrap().clone();
+        if missing.is_empty() {
+            continue;
+        }
+        let back = {
+            let _guard = APPLY_LOCK.lock().unwrap();
+            devices::answering()
+        };
+        if missing.iter().any(|id| back.contains(id)) {
+            post(WM_REAPPLY_SOON);
+        }
+    });
+}
+
+/// Shows the low-battery alert when a device crosses 10% or 5%, once per threshold.
+fn check_batteries() {
+    let status = STATUS.lock().unwrap().clone();
+    let no_link = NO_LINK.lock().unwrap().clone();
+    let mut warned = BATTERY_WARNED.lock().unwrap();
+    // A stale level of an unreachable device isn't news.
+    for (id, b) in status.into_iter().filter(|(k, _)| !no_link.contains(k)) {
+        let pos = warned.iter().position(|(k, _, _)| *k == id).unwrap_or_else(|| {
+            warned.push((id.clone(), 0, None));
+            warned.len() - 1
+        });
+        let entry = &mut warned[pos];
+        if b.charging || b.percent > BATTERY_REARM {
+            if entry.1 > 0 {
+                alert::dismiss_for(&id);
+            }
+            *entry = (id, 0, None);
+            continue;
+        }
+        let level = if b.percent <= devices::CRITICAL_BATTERY {
+            2
+        } else if b.percent <= devices::LOW_BATTERY {
+            1
+        } else {
+            0
+        };
+        let snooze_over = entry.2.is_some_and(|until| std::time::Instant::now() >= until);
+        if level > entry.1 || (level > 0 && snooze_over) {
+            entry.1 = level.max(entry.1);
+            entry.2 = None;
+            let name = config().display_name(&id);
+            alert::show(id, &name, b);
+        }
+    }
+}
+
+fn snooze_battery_alert(id: &str) {
+    if let Some(entry) = BATTERY_WARNED.lock().unwrap().iter_mut().find(|e| e.0 == id) {
+        entry.2 = Some(std::time::Instant::now() + SNOOZE);
+    }
+}
+
+// ---------------------------------------------------------------- presets and hotkeys
+
+const HOTKEY_BASE: i32 = 0x100;
+const MAX_HOTKEYS: i32 = 64;
+
+/// (Re)registers the global hotkeys of all presets.
+fn register_hotkeys() {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, MOD_NOREPEAT};
+    let hwnd = HWND_MAIN.load(Ordering::Relaxed) as HWND;
+    unsafe {
+        for id in 0..MAX_HOTKEYS {
+            UnregisterHotKey(hwnd, HOTKEY_BASE + id);
+        }
+        let cfg = config();
+        for (i, p) in cfg.presets.iter().enumerate().take(MAX_HOTKEYS as usize) {
+            if let Some(h) = p.hotkey {
+                if RegisterHotKey(hwnd, HOTKEY_BASE + i as i32, h.mods | MOD_NOREPEAT, h.vk) == 0 {
+                    log(&format!("hotkey {} for \"{}\" is taken by another app", h.label(), p.name));
+                }
+            }
+        }
+    }
+}
+
+fn apply_preset(i: usize) {
+    let mut cfg = config();
+    let Some(p) = cfg.presets.get(i).cloned() else { return };
+    cfg.load_preset(&p);
+    cfg.save();
+    drop(cfg);
+    apply_all();
+}
+
+fn save_preset() {
+    let mut cfg = config();
+    let name = format!("Пресет {}", cfg.presets.len() + 1);
+    let p = cfg.snapshot(name);
+    cfg.presets.push(p);
+    cfg.save();
+}
+
+/// Replaces the preset's lighting with the current one; its name and hotkey stay.
+fn overwrite_preset(i: usize) {
+    let mut cfg = config();
+    if let Some(old) = cfg.presets.get(i) {
+        let mut p = cfg.snapshot(old.name.clone());
+        p.hotkey = old.hotkey;
+        cfg.presets[i] = p;
+        cfg.save();
+    }
+}
+
+fn delete_preset(i: usize) {
+    let mut cfg = config();
+    if i < cfg.presets.len() {
+        cfg.presets.remove(i);
+        cfg.save();
+    }
+    drop(cfg);
+    register_hotkeys();
+}
+
+fn rename_preset(i: usize, name: &str) {
+    let name = name.trim();
+    if name.is_empty() {
+        return;
+    }
+    let mut cfg = config();
+    if let Some(p) = cfg.presets.get_mut(i) {
+        p.name = name.to_string();
+    }
+    cfg.save();
+}
+
+fn set_preset_hotkey(i: usize, hotkey: Option<config::Hotkey>) {
+    let mut cfg = config();
+    // A hotkey belongs to one preset only.
+    if hotkey.is_some() {
+        for p in cfg.presets.iter_mut() {
+            if p.hotkey == hotkey {
+                p.hotkey = None;
+            }
+        }
+    }
+    if let Some(p) = cfg.presets.get_mut(i) {
+        p.hotkey = hotkey;
+    }
+    cfg.save();
+    drop(cfg);
+    register_hotkeys();
+}
+
+fn quit() {
+    unsafe { DestroyWindow(HWND_MAIN.load(Ordering::Relaxed) as HWND) };
+}
+
+unsafe fn pick_color(owner: HWND, initial: Rgb) -> Option<Rgb> {
+    let mut custom = [0u32; 16];
+    {
+        let cfg = config();
+        for (dst, src) in custom.iter_mut().zip(cfg.custom_colors.iter()) {
+            *dst = *src;
+        }
+    }
+    let mut cc: CHOOSECOLORW = zeroed();
+    cc.lStructSize = size_of::<CHOOSECOLORW>() as u32;
+    cc.hwndOwner = owner;
+    cc.rgbResult = initial.0 as u32 | (initial.1 as u32) << 8 | (initial.2 as u32) << 16;
+    cc.lpCustColors = custom.as_mut_ptr();
+    cc.Flags = CC_RGBINIT | CC_FULLOPEN | CC_ANYCOLOR;
+    let ok = ChooseColorW(&mut cc) != 0;
+    config().custom_colors = custom.to_vec();
+    ok.then(|| {
+        let v = cc.rgbResult;
+        Rgb(v as u8, (v >> 8) as u8, (v >> 16) as u8)
+    })
+}
+
+// ---------------------------------------------------------------- tray icon
+
+/// Draws a round 32x32 icon in the given color (rainbow for the cycle effect).
+unsafe fn make_icon(effect: Effect, c: Rgb, low_battery: bool) -> HICON {
+    let accent = ui::theme().accent;
+    let badge = Rgb((accent.r * 255.0) as u8, (accent.g * 255.0) as u8, (accent.b * 255.0) as u8);
+    const S: i32 = 32;
+    let mut bi: BITMAPINFO = zeroed();
+    bi.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+    bi.bmiHeader.biWidth = S;
+    bi.bmiHeader.biHeight = -S;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    let mut bits = null_mut();
+    let color_bmp = CreateDIBSection(null_mut(), &bi, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
+    let px = std::slice::from_raw_parts_mut(bits as *mut u32, (S * S) as usize);
+    let center = (S as f32 - 1.0) / 2.0;
+    for y in 0..S {
+        for x in 0..S {
+            let (dx, dy) = (x as f32 - center, y as f32 - center);
+            let d = (dx * dx + dy * dy).sqrt();
+            let alpha = (14.5 - d).clamp(0.0, 1.0);
+            let Rgb(r, g, b) = match effect {
+                Effect::Off => Rgb(90, 90, 90),
+                Effect::Cycle => hue(dy.atan2(dx).to_degrees() + 180.0),
+                _ => c,
+            };
+            // Off: just a ring.
+            let alpha = if effect == Effect::Off && d < 10.5 { 0.0 } else { alpha };
+            // Low battery: accent-colored badge in the bottom-right corner with a dark outline.
+            let (bx, by) = (x as f32 - 24.5, y as f32 - 24.5);
+            let bd = (bx * bx + by * by).sqrt();
+            let (Rgb(r, g, b), alpha) = if low_battery && bd < 7.5 {
+                (if bd < 5.8 { badge } else { Rgb(0x20, 0x20, 0x20) }, (7.5 - bd).clamp(0.0, 1.0))
+            } else {
+                (Rgb(r, g, b), alpha)
+            };
+            let a = (alpha * 255.0) as u32;
+            let pm = |v: u8| v as u32 * a / 255;
+            px[(y * S + x) as usize] = (a << 24) | (pm(r) << 16) | (pm(g) << 8) | pm(b);
+        }
+    }
+    let mask_bits = vec![0u8; (S * S / 8) as usize];
+    let mask_bmp = CreateBitmap(S, S, 1, 1, mask_bits.as_ptr() as _);
+    let ii = ICONINFO { fIcon: 1, xHotspot: 0, yHotspot: 0, hbmMask: mask_bmp, hbmColor: color_bmp };
+    let icon = CreateIconIndirect(&ii);
+    DeleteObject(color_bmp);
+    DeleteObject(mask_bmp);
+    icon
+}
+
+fn hue(deg: f32) -> Rgb {
+    let h = (deg.rem_euclid(360.0)) / 60.0;
+    let x = 1.0 - (h % 2.0 - 1.0).abs();
+    let (r, g, b) = match h as u32 {
+        0 => (1.0, x, 0.0),
+        1 => (x, 1.0, 0.0),
+        2 => (0.0, 1.0, x),
+        3 => (0.0, x, 1.0),
+        4 => (x, 0.0, 1.0),
+        _ => (1.0, 0.0, x),
+    };
+    Rgb((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8)
+}
+
+static ICON: AtomicIsize = AtomicIsize::new(0);
+
+/// Adds (`NIM_ADD`) or refreshes (`NIM_MODIFY`) the tray icon from the current config.
+unsafe fn update_tray(hwnd: HWND, action: u32) {
+    let ids = active_ids();
+    let (effect, color, tip, low) = {
+        let cfg = config();
+        let present = PRESENT.lock().unwrap();
+        let status = STATUS.lock().unwrap();
+        let no_link = NO_LINK.lock().unwrap();
+        // The icon follows the first connected device.
+        let dc = ids.iter().find(|id| present.contains(id)).map(|id| cfg.device(id)).unwrap_or_default();
+        let mut tip = String::from("Подсветка");
+        for id in &ids {
+            let name = cfg.display_name(id);
+            if no_link.contains(id) {
+                tip.push_str(&format!("\n{name}: нет связи"));
+                continue;
+            }
+            tip.push_str(&format!("\n{}: {}", name, cfg.device(id).effect.label().to_lowercase()));
+            if let Some((_, b)) = status.iter().find(|(s, _)| s == id) {
+                tip.push_str(&format!(", {}", b.label()));
+            }
+        }
+        let low = status.iter().any(|(k, b)| b.is_low() && !no_link.contains(k));
+        (dc.effect, dc.rgb(), tip, low)
+    };
+    let icon = make_icon(effect, color, low);
+    let mut nid: NOTIFYICONDATAW = zeroed();
+    nid.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
+    nid.hWnd = hwnd;
+    nid.uID = 1;
+    nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    nid.uCallbackMessage = WM_TRAY;
+    nid.hIcon = icon;
+    for (i, ch) in tip.encode_utf16().take(nid.szTip.len() - 1).enumerate() {
+        nid.szTip[i] = ch;
+    }
+    Shell_NotifyIconW(action, &nid);
+    let old = ICON.swap(icon as isize, Ordering::Relaxed);
+    if old != 0 {
+        DestroyIcon(old as HICON);
+    }
+}
+
+unsafe fn remove_tray(hwnd: HWND) {
+    let mut nid: NOTIFYICONDATAW = zeroed();
+    nid.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
+    nid.hWnd = hwnd;
+    nid.uID = 1;
+    Shell_NotifyIconW(NIM_DELETE, &nid);
+}
+
+// ---------------------------------------------------------------- right-click menu
+
+unsafe fn append(menu: HMENU, flags: u32, id: usize, text: &str) {
+    AppendMenuW(menu, flags, id, wide(text).as_ptr());
+}
+
+unsafe fn show_menu(hwnd: HWND) {
+    let menu = CreatePopupMenu();
+    append(menu, MF_STRING, ID_OPEN, "Открыть панель");
+    // The key editor of the first connected keyboard with per-key lighting.
+    let keyboard = PRESENT.lock().unwrap().iter().find(|id| devices::kind_of(id).per_key).cloned();
+    append(menu, MF_STRING | if keyboard.is_some() { 0 } else { MF_GRAYED }, ID_KEYS, "Цвета клавиш…");
+    append(menu, MF_STRING, ID_REAPPLY, "Применить заново");
+    let autostart = if autostart_enabled() { MF_CHECKED } else { 0 };
+    append(menu, MF_STRING | autostart, ID_AUTOSTART, "Запускать вместе с Windows");
+    append(menu, MF_SEPARATOR, 0, "");
+    append(menu, MF_STRING | MF_GRAYED, 0, &format!("RGB Tray {}", installer::VERSION));
+    append(menu, MF_STRING, ID_EXIT, "Выход");
+    SetMenuDefaultItem(menu, ID_OPEN as u32, 0);
+
+    let mut pt: POINT = zeroed();
+    GetCursorPos(&mut pt);
+    SetForegroundWindow(hwnd);
+    let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, null());
+    DestroyMenu(menu);
+    PostMessageW(hwnd, WM_NULL, 0, 0);
+    match cmd as usize {
+        ID_OPEN => ui::toggle(),
+        ID_KEYS => {
+            if let Some(id) = keyboard {
+                editor::open(&id);
+            }
+        }
+        ID_REAPPLY => apply_all(),
+        ID_AUTOSTART => set_autostart(!autostart_enabled()),
+        ID_EXIT => quit(),
+        _ => {}
+    }
+}
+
+// ---------------------------------------------------------------- autostart
+
+fn autostart_enabled() -> bool {
+    unsafe {
+        let mut size = 0u32;
+        RegGetValueW(HKEY_CURRENT_USER, wide(RUN_KEY).as_ptr(), wide(APP_NAME).as_ptr(), RRF_RT_REG_SZ, null_mut(), null_mut(), &mut size)
+            == ERROR_SUCCESS
+    }
+}
+
+fn set_autostart(on: bool) {
+    let exe = std::env::current_exe().unwrap_or_default();
+    set_autostart_for(on.then_some(exe.as_path()));
+}
+
+/// Starts the given exe with Windows (`None` removes autostart).
+fn set_autostart_for(exe: Option<&std::path::Path>) {
+    unsafe {
+        if let Some(exe) = exe {
+            let value = wide(&format!("\"{}\"", exe.display()));
+            RegSetKeyValueW(
+                HKEY_CURRENT_USER,
+                wide(RUN_KEY).as_ptr(),
+                wide(APP_NAME).as_ptr(),
+                REG_SZ,
+                value.as_ptr() as _,
+                (value.len() * 2) as u32,
+            );
+        } else {
+            RegDeleteKeyValueW(HKEY_CURRENT_USER, wide(RUN_KEY).as_ptr(), wide(APP_NAME).as_ptr());
+        }
+    }
+}
+
+// ---------------------------------------------------------------- window
+
+unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    match msg {
+        WM_TRAY => {
+            match (lparam & 0xFFFF) as u32 {
+                WM_LBUTTONUP => ui::toggle(),
+                WM_RBUTTONUP => show_menu(hwnd),
+                _ => {}
+            }
+            0
+        }
+        // Devices plugged/unplugged or the PC woke up: re-apply once things settle.
+        WM_DEVICECHANGE if wparam == DBT_DEVNODES_CHANGED as usize => {
+            SetTimer(hwnd, TIMER_REAPPLY, 2000, None);
+            1
+        }
+        WM_POWERBROADCAST => {
+            if wparam == PBT_APMRESUMEAUTOMATIC as usize {
+                schedule_wake_reapply(hwnd);
+            } else if wparam == PBT_POWERSETTINGCHANGE as usize && lparam != 0 {
+                let s = &*(lparam as *const windows_sys::Win32::System::Power::POWERBROADCAST_SETTING);
+                let g = &s.PowerSetting;
+                let d = &GUID_CONSOLE_DISPLAY_STATE;
+                let same = (g.data1, g.data2, g.data3, g.data4) == (d.data1, d.data2, d.data3, d.data4);
+                if same && s.DataLength >= 1 {
+                    let on = s.Data[0] == 1;
+                    if on && !DISPLAY_ON.swap(true, Ordering::Relaxed) {
+                        schedule_wake_reapply(hwnd);
+                    } else if !on {
+                        DISPLAY_ON.store(false, Ordering::Relaxed);
+                    }
+                }
+            }
+            1
+        }
+        WM_HOTKEY => {
+            let id = wparam as i32 - HOTKEY_BASE;
+            if (0..MAX_HOTKEYS).contains(&id) {
+                apply_preset(id as usize);
+                ui::refresh();
+            }
+            0
+        }
+        WM_REAPPLY_SOON => {
+            SetTimer(hwnd, TIMER_REAPPLY, 1000, None);
+            0
+        }
+        WM_TIMER if wparam == TIMER_REAPPLY || wparam == TIMER_REAPPLY_LATE => {
+            KillTimer(hwnd, wparam);
+            apply_all();
+            0
+        }
+        WM_APPLIED | WM_BATTERY => {
+            check_batteries();
+            update_tray(hwnd, NIM_MODIFY);
+            ui::refresh();
+            0
+        }
+        WM_DESTROY => {
+            remove_tray(hwnd);
+            PostQuitMessage(0);
+            0
+        }
+        // Explorer restarted: the tray icon has to be added again.
+        _ if msg != 0 && msg as isize == TASKBAR_CREATED.load(Ordering::Relaxed) => {
+            update_tray(hwnd, NIM_ADD);
+            0
+        }
+        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+fn main() {
+    // `--snapshot <file.png> [dark|light]`: detect devices, render the panel to a PNG and exit.
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--uninstall") {
+        installer::uninstall();
+        return;
+    }
+    if installer::is_setup(&args) {
+        unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+        installer::run(&args);
+        return;
+    }
+    if let Some(i) = args.iter().position(|a| a == "--snapshot") {
+        let path = args.get(i + 1).cloned().unwrap_or_else(|| "panel.png".into());
+        let dark = args.get(i + 2).map(|m| m == "dark");
+        let d = devices::discover();
+        let mut present: Vec<String> = d.found.iter().map(|f| f.id.clone()).collect();
+        config().register(&present);
+        check_services(&config().clone());
+        if std::env::var_os("RGBTRAY_DEMO_WARN").is_some() {
+            LAMPARRAY_WARN.store(true, Ordering::Relaxed);
+        }
+        let mut no_link = d.no_link;
+        if std::env::var_os("RGBTRAY_DEMO_NOLINK").is_some() {
+            if let Some(i) = present.iter().position(|id| id.starts_with("naga")) {
+                no_link.push(present.remove(i));
+            }
+        }
+        *NO_LINK.lock().unwrap() = no_link;
+        *PRESENT.lock().unwrap() = present;
+        *STATUS.lock().unwrap() = d.found.iter().filter_map(|f| f.dev.battery().map(|b| (f.id.clone(), b))).collect();
+        // Optional: selected card and zone of the panel.
+        let num = |k: usize| args.get(i + k).and_then(|s| s.parse().ok()).unwrap_or(0);
+        let res = if path.contains("editor") {
+            editor::snapshot(&path, dark, 1.5)
+        } else if path.contains("setup") {
+            installer::snapshot(&path, dark, 1.5, num(3) == 1)
+        } else if path.contains("alert") {
+            alert::snapshot(&path, dark, 1.5, num(3) as u8)
+        } else {
+            ui::snapshot(&path, dark, 1.5, num(3), num(4))
+        };
+        if let Err(e) = res {
+            log(&format!("snapshot: {e}"));
+        }
+        return;
+    }
+    unsafe {
+        let mutex_name = wide("Local\\rgbtray-single-instance");
+        CreateMutexW(null(), 0, mutex_name.as_ptr());
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            return;
+        }
+        SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
+        let hinst = GetModuleHandleW(null());
+        let class = wide("RgbTrayWindow");
+        let mut wc: WNDCLASSW = zeroed();
+        wc.lpfnWndProc = Some(wndproc);
+        wc.hInstance = hinst;
+        wc.lpszClassName = class.as_ptr();
+        RegisterClassW(&wc);
+        // A hidden top-level window (not message-only) so it receives WM_DEVICECHANGE broadcasts.
+        let hwnd = CreateWindowExW(0, class.as_ptr(), class.as_ptr(), 0, 0, 0, 0, 0, null_mut(), null_mut(), hinst, null());
+        HWND_MAIN.store(hwnd as isize, Ordering::Relaxed);
+        windows_sys::Win32::System::Power::RegisterPowerSettingNotification(
+            hwnd,
+            &GUID_CONSOLE_DISPLAY_STATE,
+            DEVICE_NOTIFY_WINDOW_HANDLE,
+        );
+        TASKBAR_CREATED.store(RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()) as isize, Ordering::Relaxed);
+
+        update_tray(hwnd, NIM_ADD);
+        register_hotkeys();
+        apply_all();
+        devices::logitech::spawn_watcher(|| post(WM_REAPPLY_SOON));
+        spawn_battery_poller();
+        spawn_link_watch();
+        if std::env::args().any(|a| a == "--show") {
+            ui::PINNED.store(true, Ordering::Relaxed);
+            ui::toggle();
+        }
+
+        let mut msg: MSG = zeroed();
+        while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+}
