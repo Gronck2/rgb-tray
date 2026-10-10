@@ -14,14 +14,43 @@ use windows_sys::Win32::System::IO::*;
 pub struct HidInfo {
     /// NUL-terminated device interface path.
     pub path: Vec<u16>,
+    pub vid: u16,
     pub pid: u16,
     pub usage_page: u16,
     pub usage: u16,
     pub feature_len: u16,
+    pub input_len: u16,
+    pub output_len: u16,
+}
+
+impl HidInfo {
+    /// The product name the device reports (empty if none or not readable).
+    pub fn product(&self) -> String {
+        unsafe {
+            let h = CreateFileW(self.path.as_ptr(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE, null(), OPEN_EXISTING, 0, null_mut());
+            if h == INVALID_HANDLE_VALUE {
+                return String::new();
+            }
+            let mut buf = [0u16; 128];
+            let ok = HidD_GetProductString(h, buf.as_mut_ptr() as _, (buf.len() * 2) as u32) != 0;
+            CloseHandle(h);
+            let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            if ok { String::from_utf16_lossy(&buf[..len]) } else { String::new() }
+        }
+    }
 }
 
 /// Lists present HID collections of the given vendor.
 pub fn enumerate(vid: u16) -> Vec<HidInfo> {
+    enumerate_where(Some(vid))
+}
+
+/// Lists every present HID collection (for diagnostics).
+pub fn enumerate_all() -> Vec<HidInfo> {
+    enumerate_where(None)
+}
+
+fn enumerate_where(vid: Option<u16>) -> Vec<HidInfo> {
     let mut out = Vec::new();
     unsafe {
         let mut guid: GUID = zeroed();
@@ -56,8 +85,10 @@ pub fn enumerate(vid: u16) -> Vec<HidInfo> {
             }
             let mut path = std::slice::from_raw_parts(p, len).to_vec();
             path.push(0);
-            if !String::from_utf16_lossy(&path).to_lowercase().contains(&format!("vid_{vid:04x}")) {
-                continue;
+            if let Some(vid) = vid {
+                if !String::from_utf16_lossy(&path).to_lowercase().contains(&format!("vid_{vid:04x}")) {
+                    continue;
+                }
             }
             if let Some(info) = query(path) {
                 out.push(info);
@@ -89,10 +120,13 @@ unsafe fn query(path: Vec<u16>) -> Option<HidInfo> {
     CloseHandle(h);
     ok.then(|| HidInfo {
         path,
+        vid: attr.VendorID,
         pid: attr.ProductID,
         usage_page: caps.UsagePage,
         usage: caps.Usage,
         feature_len: caps.FeatureReportByteLength,
+        input_len: caps.InputReportByteLength,
+        output_len: caps.OutputReportByteLength,
     })
 }
 

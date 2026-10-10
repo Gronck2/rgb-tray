@@ -482,6 +482,85 @@ fn quit() {
     unsafe { DestroyWindow(HWND_MAIN.load(Ordering::Relaxed) as HWND) };
 }
 
+// ---------------------------------------------------------------- diagnostics
+
+fn reg_string(key: &str, value: &str) -> String {
+    unsafe {
+        let mut buf = [0u16; 256];
+        let mut size = (buf.len() * 2) as u32;
+        let ok = RegGetValueW(HKEY_LOCAL_MACHINE, wide(key).as_ptr(), wide(value).as_ptr(), RRF_RT_REG_SZ, null_mut(), buf.as_mut_ptr() as _, &mut size) == ERROR_SUCCESS;
+        let len = buf.iter().position(|&c| c == 0).unwrap_or(0);
+        if ok { String::from_utf16_lossy(&buf[..len]) } else { String::new() }
+    }
+}
+
+/// A text report for "please add my device" requests: app and Windows versions, supported
+/// devices found, interfering services and every HID interface with its ids and report sizes.
+fn diagnose_report() -> String {
+    use std::fmt::Write as _;
+    let nt = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
+    let mut s = String::new();
+    let _ = writeln!(s, "RGB Tray {} — отчёт об устройствах", installer::VERSION);
+    let build = reg_string(nt, "CurrentBuild");
+    let mut product = reg_string(nt, "ProductName");
+    // The registry still says "Windows 10" on Windows 11; builds from 22000 on are 11.
+    if build.parse::<u32>().is_ok_and(|b| b >= 22000) {
+        product = product.replace("Windows 10", "Windows 11");
+    }
+    let _ = writeln!(s, "Windows: {product} {} (сборка {build})", reg_string(nt, "DisplayVersion"));
+    let found = {
+        let _guard = APPLY_LOCK.lock().unwrap();
+        devices::discover()
+    };
+    let _ = writeln!(s, "\nПоддерживаемые устройства:");
+    for f in &found.found {
+        let _ = writeln!(s, "  {} — {}", f.id, devices::kind_of(&f.id).name);
+    }
+    for id in &found.no_link {
+        let _ = writeln!(s, "  {id} — нет связи");
+    }
+    for kind in &found.no_link_kinds {
+        let _ = writeln!(s, "  {kind} — нет связи (номер неизвестен)");
+    }
+    if found.found.is_empty() && found.no_link.is_empty() && found.no_link_kinds.is_empty() {
+        let _ = writeln!(s, "  не найдено");
+    }
+    let lamparray = if services::interferes(services::LOGI_LAMPARRAY) { "активна (мешает G915)" } else { "отключена или нет" };
+    let _ = writeln!(s, "\nСлужба Logitech LampArray: {lamparray}");
+
+    let mut hids = hid::enumerate_all();
+    hids.sort_by_key(|h| (h.vid, h.pid, h.usage_page, h.usage));
+    let _ = writeln!(s, "\nHID-интерфейсы ({}):", hids.len());
+    let _ = writeln!(s, "VID:PID    UsagePage:Usage  in/out/feature  Название — путь");
+    for h in &hids {
+        let path = String::from_utf16_lossy(&h.path[..h.path.len().saturating_sub(1)]);
+        // The interface GUID at the end is the same for all of them.
+        let path = path.split("#{").next().unwrap_or(&path).to_string();
+        let _ = writeln!(
+            s,
+            "{:04X}:{:04X}  {:04X}:{:04X}        {:>3}/{:>3}/{:>3}     {} — {}",
+            h.vid, h.pid, h.usage_page, h.usage, h.input_len, h.output_len, h.feature_len, h.product(), path
+        );
+    }
+    s
+}
+
+/// Writes the device report to `path`, or next to the settings and opens it in Notepad.
+fn diagnose(path: Option<std::path::PathBuf>) {
+    let open = path.is_none();
+    let path = path.unwrap_or_else(|| Config::dir().join("rgbtray-diagnose.txt"));
+    let _ = std::fs::create_dir_all(Config::dir());
+    // A BOM so Notepad shows the Cyrillic text right on every Windows version.
+    let text = format!("\u{FEFF}{}", diagnose_report().replace('\n', "\r\n"));
+    match std::fs::write(&path, text) {
+        Ok(()) if open => {
+            let _ = std::process::Command::new("notepad.exe").arg(&path).spawn();
+        }
+        Ok(()) => {}
+        Err(e) => unsafe { message(&format!("Не удалось сохранить отчёт:\n{e}"), true) },
+    }
+}
+
 // ---------------------------------------------------------------- export / import
 
 /// Asks for a settings file to save to (`save`) or open; None when cancelled.
@@ -800,6 +879,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 fn main() {
     // `--snapshot <file.png> [dark|light]`: detect devices, render the panel to a PNG and exit.
     let args: Vec<String> = std::env::args().collect();
+    // `--diagnose [file.txt]`: device report for adding support for new devices.
+    if let Some(i) = args.iter().position(|a| a == "--diagnose") {
+        diagnose(args.get(i + 1).map(std::path::PathBuf::from));
+        return;
+    }
     if args.iter().any(|a| a == "--uninstall") {
         installer::uninstall();
         return;

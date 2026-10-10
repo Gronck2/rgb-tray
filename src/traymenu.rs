@@ -34,6 +34,7 @@ enum Item {
     Autostart,
     Export,
     Import,
+    Diagnose,
     Exit,
 }
 
@@ -45,7 +46,7 @@ enum Row {
     Version,
 }
 
-const ROWS: [Row; 10] = [
+const ROWS: [Row; 11] = [
     Row::Item(Item::Open),
     Row::Item(Item::Keys),
     Row::Item(Item::Reapply),
@@ -53,6 +54,7 @@ const ROWS: [Row; 10] = [
     Row::Divider,
     Row::Item(Item::Export),
     Row::Item(Item::Import),
+    Row::Item(Item::Diagnose),
     Row::Divider,
     Row::Version,
     Row::Item(Item::Exit),
@@ -276,6 +278,7 @@ impl Menu {
                         Item::Autostart => ("\u{E823}", "Запускать с Windows"),
                         Item::Export => ("\u{E74E}", "Сохранить настройки в файл…"),
                         Item::Import => ("\u{E8E5}", "Загрузить настройки из файла…"),
+                        Item::Diagnose => ("\u{E9D9}", "Отчёт об устройствах…"),
                         Item::Exit => ("\u{E7E8}", "Выход"),
                     };
                     self.text(rt, icon, &self.fmt.icon, R { x: r.x + 6.0, y: r.y, w: 28.0, h: r.h }, fg);
@@ -321,6 +324,10 @@ fn run(item: Item, keyboard: Option<String>) {
         Item::Autostart => crate::set_autostart(!crate::autostart_enabled()),
         Item::Export => crate::export_settings(),
         Item::Import => crate::import_settings(),
+        // Searching devices takes a moment; the report opens in Notepad when ready.
+        Item::Diagnose => {
+            std::thread::spawn(|| crate::diagnose(None));
+        }
         Item::Exit => crate::quit(),
     }
 }
