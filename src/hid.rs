@@ -35,7 +35,11 @@ impl HidInfo {
             let ok = HidD_GetProductString(h, buf.as_mut_ptr() as _, (buf.len() * 2) as u32) != 0;
             CloseHandle(h);
             let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-            if ok { String::from_utf16_lossy(&buf[..len]) } else { String::new() }
+            if ok {
+                String::from_utf16_lossy(&buf[..len])
+            } else {
+                String::new()
+            }
         }
     }
 }
@@ -72,7 +76,7 @@ fn enumerate_where(vid: Option<u16>) -> Vec<HidInfo> {
             if required == 0 {
                 continue;
             }
-            let mut buf = vec![0u64; (required as usize + 7) / 8];
+            let mut buf = vec![0u64; (required as usize).div_ceil(8)];
             let detail = buf.as_mut_ptr() as *mut SP_DEVICE_INTERFACE_DETAIL_DATA_W;
             (*detail).cbSize = size_of::<SP_DEVICE_INTERFACE_DETAIL_DATA_W>() as u32;
             if SetupDiGetDeviceInterfaceDetailW(set, &ifd, detail, required, null_mut(), null_mut()) == 0 {
@@ -118,7 +122,7 @@ unsafe fn query(path: Vec<u16>) -> Option<HidInfo> {
         }
     }
     CloseHandle(h);
-    ok.then(|| HidInfo {
+    ok.then_some(HidInfo {
         path,
         vid: attr.VendorID,
         pid: attr.ProductID,

@@ -272,17 +272,14 @@ impl Config {
 
     /// Whether the current lighting is exactly this preset.
     pub fn matches(&self, p: &Preset) -> bool {
-        self.brightness == p.brightness
-            && self.devices.iter().all(|(id, d)| p.devices.get(id).map_or(true, |pd| d.same_lighting(pd)))
+        self.brightness == p.brightness && self.devices.iter().all(|(id, d)| p.devices.get(id).is_none_or(|pd| d.same_lighting(pd)))
     }
 
     /// The color all these devices show, when they all show the same single color.
     pub fn uniform_color(&self, ids: &[String]) -> Option<Rgb> {
         let devices: Vec<DeviceConfig> = ids.iter().map(|id| self.device(id).visible()).collect();
         let first = devices.first()?;
-        let single = |d: &DeviceConfig| {
-            matches!(d.effect, Effect::Static | Effect::Breathe) && !d.per_key && d.zones.is_empty() && d.color == first.color
-        };
+        let single = |d: &DeviceConfig| matches!(d.effect, Effect::Static | Effect::Breathe) && !d.per_key && d.zones.is_empty() && d.color == first.color;
         devices.iter().all(single).then(|| first.rgb())
     }
 
@@ -394,10 +391,7 @@ impl Config {
     }
 
     pub fn load() -> Config {
-        std::fs::read_to_string(Self::path())
-            .ok()
-            .and_then(|s| toml::from_str(&s).ok())
-            .unwrap_or_default()
+        std::fs::read_to_string(Self::path()).ok().and_then(|s| toml::from_str(&s).ok()).unwrap_or_default()
     }
 
     pub fn save(&self) {

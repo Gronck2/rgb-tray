@@ -48,8 +48,7 @@ const TIMER_REAPPLY_EARLY: usize = 3;
 
 /// GUID_CONSOLE_DISPLAY_STATE: 0 off, 1 on, 2 dimmed. Modern Standby (S0ix) laptops
 /// send no resume broadcast, so the display turning back on is the wake signal.
-const GUID_CONSOLE_DISPLAY_STATE: windows_sys::core::GUID =
-    windows_sys::core::GUID::from_u128(0x6fe69556_704a_47a0_8f24_c28d936fda47);
+const GUID_CONSOLE_DISPLAY_STATE: windows_sys::core::GUID = windows_sys::core::GUID::from_u128(0x6fe69556_704a_47a0_8f24_c28d936fda47);
 static DISPLAY_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 fn schedule_wake_reapply(hwnd: HWND) {
@@ -70,7 +69,8 @@ static PRESENT: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static STATUS: Mutex<Vec<(String, devices::Battery)>> = Mutex::new(Vec::new());
 /// Devices whose receiver/dock is plugged in but which don't answer (off, asleep, out of range).
 /// Their STATUS entry is the last known battery level.
-static NO_LINK: Mutex<Vec<String>> = Mutex::new(Vec::new());/// Logitech's Dynamic Lighting service is active and can hang the G915 (see `services`).
+static NO_LINK: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// Logitech's Dynamic Lighting service is active and can hang the G915 (see `services`).
 static LAMPARRAY_WARN: AtomicBool = AtomicBool::new(false);
 
 fn check_services(cfg: &Config) {
@@ -494,9 +494,14 @@ fn reg_string(key: &str, value: &str) -> String {
     unsafe {
         let mut buf = [0u16; 256];
         let mut size = (buf.len() * 2) as u32;
-        let ok = RegGetValueW(HKEY_LOCAL_MACHINE, wide(key).as_ptr(), wide(value).as_ptr(), RRF_RT_REG_SZ, null_mut(), buf.as_mut_ptr() as _, &mut size) == ERROR_SUCCESS;
+        let ok = RegGetValueW(HKEY_LOCAL_MACHINE, wide(key).as_ptr(), wide(value).as_ptr(), RRF_RT_REG_SZ, null_mut(), buf.as_mut_ptr() as _, &mut size)
+            == ERROR_SUCCESS;
         let len = buf.iter().position(|&c| c == 0).unwrap_or(0);
-        if ok { String::from_utf16_lossy(&buf[..len]) } else { String::new() }
+        if ok {
+            String::from_utf16_lossy(&buf[..len])
+        } else {
+            String::new()
+        }
     }
 }
 
@@ -545,7 +550,15 @@ fn diagnose_report() -> String {
         let _ = writeln!(
             s,
             "{:04X}:{:04X}  {:04X}:{:04X}        {:>3}/{:>3}/{:>3}     {} — {}",
-            h.vid, h.pid, h.usage_page, h.usage, h.input_len, h.output_len, h.feature_len, h.product(), path
+            h.vid,
+            h.pid,
+            h.usage_page,
+            h.usage,
+            h.input_len,
+            h.output_len,
+            h.feature_len,
+            h.product(),
+            path
         );
     }
     s
@@ -576,7 +589,8 @@ unsafe fn settings_file_dialog(save: bool) -> Option<std::path::PathBuf> {
     if save {
         buf[..name.len()].copy_from_slice(&name);
     }
-    let filter: Vec<u16> = tr!("Настройки RGB Tray (*.toml)\0*.toml\0Все файлы\0*.*\0\0", "RGB Tray settings (*.toml)\0*.toml\0All files\0*.*\0\0").encode_utf16().collect();
+    let filter: Vec<u16> =
+        tr!("Настройки RGB Tray (*.toml)\0*.toml\0Все файлы\0*.*\0\0", "RGB Tray settings (*.toml)\0*.toml\0All files\0*.*\0\0").encode_utf16().collect();
     let ext = wide("toml");
     let mut ofn: OPENFILENAMEW = zeroed();
     ofn.lStructSize = size_of::<OPENFILENAMEW>() as u32;
@@ -795,8 +809,7 @@ unsafe fn remove_tray(hwnd: HWND) {
 fn autostart_enabled() -> bool {
     unsafe {
         let mut size = 0u32;
-        RegGetValueW(HKEY_CURRENT_USER, wide(RUN_KEY).as_ptr(), wide(APP_NAME).as_ptr(), RRF_RT_REG_SZ, null_mut(), null_mut(), &mut size)
-            == ERROR_SUCCESS
+        RegGetValueW(HKEY_CURRENT_USER, wide(RUN_KEY).as_ptr(), wide(APP_NAME).as_ptr(), RRF_RT_REG_SZ, null_mut(), null_mut(), &mut size) == ERROR_SUCCESS
     }
 }
 
@@ -810,14 +823,7 @@ fn set_autostart_for(exe: Option<&std::path::Path>) {
     unsafe {
         if let Some(exe) = exe {
             let value = wide(&format!("\"{}\"", exe.display()));
-            RegSetKeyValueW(
-                HKEY_CURRENT_USER,
-                wide(RUN_KEY).as_ptr(),
-                wide(APP_NAME).as_ptr(),
-                REG_SZ,
-                value.as_ptr() as _,
-                (value.len() * 2) as u32,
-            );
+            RegSetKeyValueW(HKEY_CURRENT_USER, wide(RUN_KEY).as_ptr(), wide(APP_NAME).as_ptr(), REG_SZ, value.as_ptr() as _, (value.len() * 2) as u32);
         } else {
             RegDeleteKeyValueW(HKEY_CURRENT_USER, wide(RUN_KEY).as_ptr(), wide(APP_NAME).as_ptr());
         }
@@ -891,7 +897,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         // Explorer restarted: the tray icon has to be added again.
         _ if msg != 0 && msg as isize == TASKBAR_CREATED.load(Ordering::Relaxed) => {
             ui::PINNED.store(config().pinned, Ordering::Relaxed);
-        update_tray(hwnd, NIM_ADD);
+            update_tray(hwnd, NIM_ADD);
             0
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -971,11 +977,7 @@ fn main() {
         // A hidden top-level window (not message-only) so it receives WM_DEVICECHANGE broadcasts.
         let hwnd = CreateWindowExW(0, class.as_ptr(), class.as_ptr(), 0, 0, 0, 0, 0, null_mut(), null_mut(), hinst, null());
         HWND_MAIN.store(hwnd as isize, Ordering::Relaxed);
-        windows_sys::Win32::System::Power::RegisterPowerSettingNotification(
-            hwnd,
-            &GUID_CONSOLE_DISPLAY_STATE,
-            DEVICE_NOTIFY_WINDOW_HANDLE,
-        );
+        windows_sys::Win32::System::Power::RegisterPowerSettingNotification(hwnd, &GUID_CONSOLE_DISPLAY_STATE, DEVICE_NOTIFY_WINDOW_HANDLE);
         TASKBAR_CREATED.store(RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()) as isize, Ordering::Relaxed);
 
         ui::PINNED.store(config().pinned, Ordering::Relaxed);

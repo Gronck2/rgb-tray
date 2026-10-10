@@ -19,12 +19,8 @@ pub struct Asus {
 impl Asus {
     pub fn find() -> Option<Asus> {
         let infos = hid::enumerate(VID);
-        let open = |usage: u16| {
-            infos
-                .iter()
-                .find(|i| i.usage_page == 0xFF31 && i.usage == usage && i.feature_len >= 64)
-                .and_then(|i| Hid::open(&i.path, true, false))
-        };
+        let open =
+            |usage: u16| infos.iter().find(|i| i.usage_page == 0xFF31 && i.usage == usage && i.feature_len >= 64).and_then(|i| Hid::open(&i.path, true, false));
         let lamp_array = infos
             .iter()
             .find(|i| i.usage_page == 0x0059 && i.usage == 0x0001 && i.feature_len > 1)
@@ -46,7 +42,11 @@ impl Asus {
     fn send(hid: &Hid, bytes: &[u8]) -> Result<(), String> {
         let mut buf = [0u8; 64];
         buf[..bytes.len()].copy_from_slice(bytes);
-        if hid.set_feature(&buf) { Ok(()) } else { Err("ASUS: send failed".into()) }
+        if hid.set_feature(&buf) {
+            Ok(())
+        } else {
+            Err("ASUS: send failed".into())
+        }
     }
 }
 

@@ -50,10 +50,7 @@ fn start_menu_link() -> PathBuf {
 
 /// Whether this exe was started as an installer (by file name or flag).
 pub fn is_setup(args: &[String]) -> bool {
-    let name = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()))
-        .unwrap_or_default();
+    let name = std::env::current_exe().ok().and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase())).unwrap_or_default();
     name.starts_with("rgbtray-setup") || args.iter().any(|a| a == "--install")
 }
 
@@ -106,11 +103,7 @@ fn icon_pixels(size: u32) -> Vec<u32> {
             if alpha <= 0.0 {
                 continue;
             }
-            let Rgb(r, g, b) = if d < inner {
-                Rgb(0x1C, 0x1C, 0x1C)
-            } else {
-                crate::hue(dy.atan2(dx).to_degrees() + 180.0)
-            };
+            let Rgb(r, g, b) = if d < inner { Rgb(0x1C, 0x1C, 0x1C) } else { crate::hue(dy.atan2(dx).to_degrees() + 180.0) };
             let a = (alpha * 255.0) as u32;
             let pm = |v: u8| v as u32 * a / 255;
             px[(y * size + x) as usize] = (a << 24) | (pm(r) << 16) | (pm(g) << 8) | pm(b);
@@ -141,12 +134,12 @@ fn write_icon(path: &Path) -> std::io::Result<()> {
             for x in 0..s {
                 let p = px[(y * s + x) as usize];
                 let a = p >> 24;
-                let un = |v: u32| if a == 0 { 0 } else { (v * 255 / a).min(255) };
+                let un = |v: u32| (v * 255).checked_div(a).map_or(0, |x| x.min(255));
                 let (r, g, b) = (un((p >> 16) & 0xFF), un((p >> 8) & 0xFF), un(p & 0xFF));
                 img.extend_from_slice(&[b as u8, g as u8, r as u8, a as u8]);
             }
         }
-        img.extend(std::iter::repeat(0u8).take((mask_row * s) as usize));
+        img.extend(std::iter::repeat_n(0u8, (mask_row * s) as usize));
         images.push((s, img));
     }
     let mut out = Vec::new();
@@ -233,7 +226,9 @@ fn install(opts: &Options) -> Result<(), String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("{} {e}", tr!("Не удалось создать папку:", "Could not create the folder:")))?;
     stop_running_instance();
     if me != exe {
-        copy_with_retry(&me, &exe).map_err(|e| format!("{} {e}", tr!("Не удалось скопировать файл (приложение ещё запущено?):", "Could not copy the file (is the app still running?):")))?;
+        copy_with_retry(&me, &exe).map_err(|e| {
+            format!("{} {e}", tr!("Не удалось скопировать файл (приложение ещё запущено?):", "Could not copy the file (is the app still running?):"))
+        })?;
     }
     let icon = dir.join("rgbtray.ico");
     let _ = write_icon(&icon);
@@ -538,7 +533,11 @@ impl Setup {
         match &self.stage {
             Stage::Ready => {
                 let text = if self.previous.is_some() {
-                    tr!("Работающая версия будет закрыта и заменена. Настройки, пресеты и цвета клавиш сохранятся.", "The running version will be closed and replaced. Settings, presets and key colors are kept.").to_string()
+                    tr!(
+                        "Работающая версия будет закрыта и заменена. Настройки, пресеты и цвета клавиш сохранятся.",
+                        "The running version will be closed and replaced. Settings, presets and key colors are kept."
+                    )
+                    .to_string()
                 } else {
                     format!("{} {}", tr!("Будет установлено в", "Installs to"), install_dir().display())
                 };
@@ -548,7 +547,13 @@ impl Setup {
                 self.checkbox(rt, hs[1].0, self.opts.shortcut, tr!("Ярлык в меню «Пуск»", "Start menu shortcut"), self.hover == Some(Hit::Shortcut));
             }
             Stage::Done => {
-                self.text(rt, tr!("Готово! Приложение запущено — значок уже в трее.", "Done! The app is running — its icon is in the tray."), &self.body, info, t.text);
+                self.text(
+                    rt,
+                    tr!("Готово! Приложение запущено — значок уже в трее.", "Done! The app is running — its icon is in the tray."),
+                    &self.body,
+                    info,
+                    t.text,
+                );
             }
             Stage::Failed(e) => {
                 self.text(rt, &format!("{} {e}", tr!("Не получилось:", "Failed:")), &self.body, R { h: 90.0, ..info }, t.text);

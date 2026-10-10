@@ -1,0 +1,53 @@
+# Pushing a version tag (v1.2.3) builds the installer from that commit and creates a
+# draft GitHub release with it. Review the notes and publish the draft by hand.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Check the tag matches Cargo.toml
+        id: version
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$version" -ne $env:GITHUB_REF_NAME) {
+            Write-Error "Tag $env:GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Installer
+        id: setup
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $setup = "dist/RGBTray-Setup-${{ steps.version.outputs.version }}.exe"
+          Copy-Item target/release/rgbtray.exe $setup
+          $hash = (Get-FileHash $setup -Algorithm SHA256).Hash
+          "setup=$setup" >> $env:GITHUB_OUTPUT
+          "sha256=$hash" >> $env:GITHUB_OUTPUT
+
+      - name: Draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = "SHA-256 of the installer: ``${{ steps.setup.outputs.sha256 }}``"
+          gh release create $env:GITHUB_REF_NAME "${{ steps.setup.outputs.setup }}" --draft --verify-tag `
+            --title "RGB Tray ${{ steps.version.outputs.version }}" --generate-notes --notes "$notes"

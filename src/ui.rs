@@ -251,8 +251,10 @@ fn keys_button_rect(card: R) -> R {
 
 /// Width of a device name as drawn on its card (cached; measuring needs DirectWrite).
 fn name_width(name: &str) -> f32 {
+    /// The text format used for measuring, and measured (name, width) pairs.
+    type Widths = (Option<IDWriteTextFormat>, Vec<(String, f32)>);
     thread_local! {
-        static CACHE: RefCell<(Option<IDWriteTextFormat>, Vec<(String, f32)>)> = const { RefCell::new((None, Vec::new())) };
+        static CACHE: RefCell<Widths> = const { RefCell::new((None, Vec::new())) };
     }
     CACHE.with(|c| {
         let mut c = c.borrow_mut();
@@ -392,13 +394,10 @@ const PRESET_ICONS_W: f32 = 73.0;
 /// For each preset the icon buttons come before the chip itself, so hit-testing finds them first.
 fn preset_chips() -> Vec<(R, Hit, String)> {
     let renaming = RENAME.load(Ordering::Relaxed);
-    let labels: Vec<String> = crate::config()
-        .presets
-        .iter()
-        .enumerate()
-        .map(|(i, p)| if i == renaming { RENAME_TEXT.lock().unwrap().clone() } else { preset_label(p) })
-        .collect();
-    let items = labels.into_iter().enumerate().map(|(i, l)| (l, Some(i))).chain(std::iter::once((tr!("+ Сохранить текущие", "+ Save current").to_string(), None)));
+    let labels: Vec<String> =
+        crate::config().presets.iter().enumerate().map(|(i, p)| if i == renaming { RENAME_TEXT.lock().unwrap().clone() } else { preset_label(p) }).collect();
+    let items =
+        labels.into_iter().enumerate().map(|(i, l)| (l, Some(i))).chain(std::iter::once((tr!("+ Сохранить текущие", "+ Save current").to_string(), None)));
     let mut out = Vec::new();
     let (mut x, mut row) = (PAD, 0);
     for (label, preset) in items {
@@ -682,9 +681,7 @@ fn read_dword(key: &str, value: &str) -> Option<u32> {
     let value: Vec<u16> = value.encode_utf16().chain([0]).collect();
     let mut data = 0u32;
     let mut size = 4u32;
-    let rc = unsafe {
-        RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr(), RRF_RT_REG_DWORD, null_mut(), &mut data as *mut u32 as _, &mut size)
-    };
+    let rc = unsafe { RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr(), RRF_RT_REG_DWORD, null_mut(), &mut data as *mut u32 as _, &mut size) };
     (rc == 0).then_some(data)
 }
 
@@ -707,7 +704,11 @@ pub(crate) fn theme() -> Theme {
 
 fn on_accent(accent: D2D1_COLOR_F) -> D2D1_COLOR_F {
     let luminance = 0.299 * accent.r + 0.587 * accent.g + 0.114 * accent.b;
-    if luminance > 0.6 { col(0, 0, 0, 1.0) } else { col(255, 255, 255, 1.0) }
+    if luminance > 0.6 {
+        col(0, 0, 0, 1.0)
+    } else {
+        col(255, 255, 255, 1.0)
+    }
 }
 
 fn dark_theme(accent: D2D1_COLOR_F) -> Theme {
@@ -911,10 +912,20 @@ fn available_family(dw: &IDWriteFactory, family: &str) -> String {
         f if f.starts_with("Segoe UI Variable") => "Segoe UI",
         _ => return family.to_string(),
     };
-    if font_installed(dw, family) { family.to_string() } else { fallback.to_string() }
+    if font_installed(dw, family) {
+        family.to_string()
+    } else {
+        fallback.to_string()
+    }
 }
 
-pub(crate) fn text_format(dw: &IDWriteFactory, family: windows::core::PCWSTR, size: f32, weight: DWRITE_FONT_WEIGHT, align: DWRITE_TEXT_ALIGNMENT) -> windows::core::Result<IDWriteTextFormat> {
+pub(crate) fn text_format(
+    dw: &IDWriteFactory,
+    family: windows::core::PCWSTR,
+    size: f32,
+    weight: DWRITE_FONT_WEIGHT,
+    align: DWRITE_TEXT_ALIGNMENT,
+) -> windows::core::Result<IDWriteTextFormat> {
     unsafe {
         let family: Vec<u16> = available_family(dw, &family.to_string().unwrap_or_default()).encode_utf16().chain([0]).collect();
         let family = windows::core::PCWSTR(family.as_ptr());
@@ -1002,20 +1013,7 @@ unsafe fn open() -> windows::core::Result<()> {
         }
     }
 
-    let hwnd = CreateWindowExW(
-        WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
-        class.as_ptr(),
-        class.as_ptr(),
-        WS_POPUP,
-        x,
-        y,
-        w,
-        h,
-        null_mut(),
-        null_mut(),
-        hinst,
-        null(),
-    );
+    let hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, class.as_ptr(), class.as_ptr(), WS_POPUP, x, y, w, h, null_mut(), null_mut(), hinst, null());
     let theme = theme();
     // Rounded corners and a dark border in dark mode (Windows 11).
     let round: u32 = 2; // DWMWCP_ROUND
@@ -1376,18 +1374,42 @@ impl Flyout {
         self.fill(rt, R { x: x0, y: s.cy() - 2.0, w: tx - x0, h: 4.0 }, 2.0, t.accent);
         self.circle(rt, tx, s.cy(), 10.0, if t.dark { col(0x45, 0x45, 0x45, 1.0) } else { col(255, 255, 255, 1.0) });
         self.ring(rt, tx, s.cy(), 9.5, t.stroke, 1.0);
-        let inner = if self.drag.is_some() { 4.5 } else if hover(Hit::Slider) { 6.5 } else { 5.5 };
+        let inner = if self.drag.is_some() {
+            4.5
+        } else if hover(Hit::Slider) {
+            6.5
+        } else {
+            5.5
+        };
         self.circle(rt, tx, s.cy(), inner, t.accent);
 
         // Global presets.
         self.text(rt, tr!("Пресеты", "Presets"), &f.label, R { x: PAD, y: PRESET_LABEL_Y, w: 120.0, h: 20.0 }, t.text);
         let capture = CAPTURE.load(Ordering::Relaxed);
         if capture != usize::MAX {
-            self.text(rt, tr!("Нажмите сочетание · Del — убрать · Esc", "Press a shortcut · Del — remove · Esc"), &f.sub_right, R { x: W - PAD - 250.0, y: PRESET_LABEL_Y, w: 250.0, h: 20.0 }, t.accent);
+            self.text(
+                rt,
+                tr!("Нажмите сочетание · Del — убрать · Esc", "Press a shortcut · Del — remove · Esc"),
+                &f.sub_right,
+                R { x: W - PAD - 250.0, y: PRESET_LABEL_Y, w: 250.0, h: 20.0 },
+                t.accent,
+            );
         } else if renaming_any() {
-            self.text(rt, tr!("Enter — сохранить · Esc — отмена", "Enter — save · Esc — cancel"), &f.sub_right, R { x: W - PAD - 250.0, y: PRESET_LABEL_Y, w: 250.0, h: 20.0 }, t.accent);
+            self.text(
+                rt,
+                tr!("Enter — сохранить · Esc — отмена", "Enter — save · Esc — cancel"),
+                &f.sub_right,
+                R { x: W - PAD - 250.0, y: PRESET_LABEL_Y, w: 250.0, h: 20.0 },
+                t.accent,
+            );
         } else {
-            self.text(rt, tr!("ПКМ по пресету — меню", "Right-click a preset for menu"), &f.sub_right, R { x: W - PAD - 200.0, y: PRESET_LABEL_Y, w: 200.0, h: 20.0 }, t.text2);
+            self.text(
+                rt,
+                tr!("ПКМ по пресету — меню", "Right-click a preset for menu"),
+                &f.sub_right,
+                R { x: W - PAD - 200.0, y: PRESET_LABEL_Y, w: 200.0, h: 20.0 },
+                t.text2,
+            );
         }
         let active: Vec<bool> = {
             let cfg = crate::config();
@@ -1419,7 +1441,13 @@ impl Flyout {
                 let caret_x = inner.x + (label.chars().count() as f32 * 6.9).min(inner.w - 2.0);
                 self.fill(rt, R { x: caret_x, y: r.y + 6.0, w: 1.5, h: r.h - 12.0 }, 0.0, t.text);
             } else {
-                let fg = if is_on(i) { t.on_accent } else if hit == Hit::SavePreset { t.text2 } else { t.text };
+                let fg = if is_on(i) {
+                    t.on_accent
+                } else if hit == Hit::SavePreset {
+                    t.text2
+                } else {
+                    t.text
+                };
                 self.text(rt, label, &f.center_small, text_r, fg);
             }
         }
@@ -1439,7 +1467,13 @@ impl Flyout {
                 self.fill(rt, r, 3.0, if on { col(255, 255, 255, 0.25) } else { t.card_hover });
             }
             let active_btn = (hit == Hit::PresetHotkey(i) && capture == i) || (hit == Hit::PresetRename(i) && renaming == i);
-            let mut fg = if active_btn { t.accent } else if on { t.on_accent } else { t.text2 };
+            let mut fg = if active_btn {
+                t.accent
+            } else if on {
+                t.on_accent
+            } else {
+                t.text2
+            };
             if disabled {
                 fg.a *= 0.4;
             }
@@ -1482,7 +1516,13 @@ impl Flyout {
             self.stroke(rt, r, 6.0, t.accent, 1.0);
             self.text(rt, ICON_WARNING, &f.icon, R { x: r.x + 10.0, y: r.y, w: 32.0, h: r.h }, t.accent);
             let text_w = disable_button_rect(r).x - r.x - 58.0;
-            self.text(rt, tr!("Мешает служба Logitech", "A Logitech service interferes"), &f.name, R { x: r.x + 50.0, y: r.y + 10.0, w: text_w, h: 20.0 }, t.text);
+            self.text(
+                rt,
+                tr!("Мешает служба Logitech", "A Logitech service interferes"),
+                &f.name,
+                R { x: r.x + 50.0, y: r.y + 10.0, w: text_w, h: 20.0 },
+                t.text,
+            );
             self.text(rt, tr!("Из-за неё G915 зависает", "It makes the G915 hang"), &f.sub, R { x: r.x + 50.0, y: r.y + 30.0, w: text_w, h: 16.0 }, t.text2);
             self.text(rt, tr!("и не слушает эффекты", "and ignore effects"), &f.sub, R { x: r.x + 50.0, y: r.y + 44.0, w: text_w, h: 16.0 }, t.text2);
             let b = disable_button_rect(r);
@@ -1496,7 +1536,13 @@ impl Flyout {
                 self.fill(rt, r, 6.0, t.card_hover);
             }
             let open = ARCHIVE_OPEN.load(Ordering::Relaxed);
-            self.text(rt, &format!("{} · {n}", tr!("Отключённые устройства", "Disconnected devices")), &f.sub, R { x: r.x + 14.0, y: r.y, w: r.w - 50.0, h: r.h }, t.text2);
+            self.text(
+                rt,
+                &format!("{} · {n}", tr!("Отключённые устройства", "Disconnected devices")),
+                &f.sub,
+                R { x: r.x + 14.0, y: r.y, w: r.w - 50.0, h: r.h },
+                t.text2,
+            );
             let chevron = if open { ICON_CHEVRON_UP } else { ICON_CHEVRON_DOWN };
             self.text(rt, chevron, &f.icon_tiny, R { x: r.x + r.w - 36.0, y: r.y, w: 24.0, h: r.h }, t.text2);
             return;
@@ -1526,7 +1572,11 @@ impl Flyout {
             let n = shown.iter().filter(|d| d.present).count();
             self.text(rt, ICON_ALL, &f.icon, R { x: r.x + 10.0, y: r.y, w: 32.0, h: r.h }, t.text);
             self.text(rt, tr!("Все устройства", "All devices"), &f.name, R { x: r.x + 50.0, y: r.y + 6.0, w: r.w - 100.0, h: 20.0 }, t.text);
-            let sub = if n == shown.len() { format!("{} {n}", tr!("Подключено", "Connected")) } else { format!("{} {n} {} {}", tr!("Подключено", "Connected"), tr!("из", "of"), shown.len()) };
+            let sub = if n == shown.len() {
+                format!("{} {n}", tr!("Подключено", "Connected"))
+            } else {
+                format!("{} {n} {} {}", tr!("Подключено", "Connected"), tr!("из", "of"), shown.len())
+            };
             self.text(rt, &sub, &f.sub, R { x: r.x + 50.0, y: r.y + 26.0, w: r.w - 100.0, h: 16.0 }, t.text2);
             for (k, d) in shown.iter().enumerate().take(8).rev() {
                 self.circle(rt, dx - k as f32 * 9.0, dy, 8.0, if selected { t.card } else { bg });
@@ -1655,7 +1705,12 @@ impl Flyout {
         // Soft shadow: a few widening translucent layers.
         for k in 1..=6 {
             let d = k as f32 * 2.0;
-            self.fill(rt, R { x: panel.x - d + 1.0, y: panel.y - d + 4.0, w: panel.w + 2.0 * d - 2.0, h: panel.h + 2.0 * d - 2.0 }, 8.0 + d, col(0, 0, 0, 0.05));
+            self.fill(
+                rt,
+                R { x: panel.x - d + 1.0, y: panel.y - d + 4.0, w: panel.w + 2.0 * d - 2.0, h: panel.h + 2.0 * d - 2.0 },
+                8.0 + d,
+                col(0, 0, 0, 0.05),
+            );
         }
         self.fill(rt, panel, 8.0, t.bg);
         self.fill(rt, panel, 8.0, t.card);
@@ -1680,7 +1735,14 @@ impl Flyout {
                     }
                     let (icon, label) = match item {
                         MenuItem::Apply => (ICON_PLAY, tr!("Применить", "Apply")),
-                        MenuItem::Overwrite => (ICON_SAVE, if same { tr!("Совпадает с текущими", "Same as current") } else { tr!("Перезаписать текущими", "Overwrite with current") }),
+                        MenuItem::Overwrite => (
+                            ICON_SAVE,
+                            if same {
+                                tr!("Совпадает с текущими", "Same as current")
+                            } else {
+                                tr!("Перезаписать текущими", "Overwrite with current")
+                            },
+                        ),
                         MenuItem::Rename => (ICON_RENAME, tr!("Переименовать", "Rename")),
                         _ => (ICON_DELETE, tr!("Удалить", "Delete")),
                     };
@@ -1876,7 +1938,6 @@ pub(crate) fn render_png(
 }
 
 // ---------------------------------------------------------------- input
-
 
 fn slider_value(x: f32) -> u8 {
     let s = slider_rect();
@@ -2151,7 +2212,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             ScreenToClient(hwnd, &mut pt);
             let caption = with_flyout(|f| {
                 let (x, y) = (pt.x as f32 / f.scale, pt.y as f32 / f.scale);
-                y >= 0.0 && y < HEADER_DRAG_H && menu_preset().is_none() && hit_test(x, y).is_none()
+                (0.0..HEADER_DRAG_H).contains(&y) && menu_preset().is_none() && hit_test(x, y).is_none()
             });
             if caption == Some(true) {
                 HTCAPTION as LRESULT

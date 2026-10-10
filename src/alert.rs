@@ -258,13 +258,20 @@ impl Alert {
         let level = (self.battery.percent as f32 / 100.0).clamp(0.08, 1.0);
         self.fill(rt, R { x: body.x + 4.0, y: body.y + 4.0, w: (body.w - 8.0) * level, h: body.h - 8.0 }, 1.5, warn);
 
-        let title = if self.battery.percent <= CRITICAL_BATTERY { tr!("Батарея почти разряжена", "Battery almost empty") } else { tr!("Низкий заряд батареи", "Battery low") };
+        let title = if self.battery.percent <= CRITICAL_BATTERY {
+            tr!("Батарея почти разряжена", "Battery almost empty")
+        } else {
+            tr!("Низкий заряд батареи", "Battery low")
+        };
         self.text(rt, title, &self.fmt.title, R { x: PAD + 58.0, y: PAD - 2.0, w: W - 2.0 * PAD - 176.0, h: 24.0 }, t.text);
         self.text(rt, &self.name, &self.fmt.name, R { x: PAD + 58.0, y: PAD + 22.0, w: W - 2.0 * PAD - 176.0, h: 20.0 }, t.text2);
         self.text(rt, &format!("{}%", self.battery.percent), &self.fmt.big, R { x: W - PAD - 126.0, y: PAD - 4.0, w: 90.0, h: 44.0 }, warn);
         self.text(
             rt,
-            tr!("Подключите кабель или поставьте на зарядку, чтобы устройство не отключилось.", "Plug in the cable or put it on the charger before the device turns off."),
+            tr!(
+                "Подключите кабель или поставьте на зарядку, чтобы устройство не отключилось.",
+                "Plug in the cable or put it on the charger before the device turns off."
+            ),
             &self.fmt.body,
             R { x: PAD, y: PAD + 48.0, w: W - 2.0 * PAD, h: 40.0 },
             t.text,

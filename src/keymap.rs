@@ -153,12 +153,7 @@ const COMMON: &[KeyDef] = &[
     key(k(0x4F), "\u{2192}", "", 17.25, R5, 1.0),
 ];
 
-const ANSI: &[KeyDef] = &[
-    key(k(0x31), "\\", "/", 13.5, R2, 1.5),
-    key(k(0x28), "Enter", "", 12.75, R3, 2.25),
-    key(m(0xE1), "Shift", "", 0.0, R4, 2.25),
-
-];
+const ANSI: &[KeyDef] = &[key(k(0x31), "\\", "/", 13.5, R2, 1.5), key(k(0x28), "Enter", "", 12.75, R3, 2.25), key(m(0xE1), "Shift", "", 0.0, R4, 2.25)];
 
 const ISO: &[KeyDef] = &[
     KeyDef { code: k(0x28), label: "Enter", ru: "", icon: false, x: 13.75, y: R2, w: 1.25, h: 2.0 },

@@ -329,7 +329,6 @@ fn write_word(word: &str, brush: Rgb) {
     send_all();
 }
 
-
 // ---------------------------------------------------------------- window state
 
 struct Formats {
@@ -575,8 +574,8 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Re
             rolling: false,
             last_painted: None,
             brush_color: PALETTE[0],
-        preset_colors: default_colors(),
-        slot: None,
+            preset_colors: default_colors(),
+            slot: None,
             word: tr!("ПРИВЕТ", "HELLO").into(),
             word_focus: true,
         };
@@ -789,12 +788,8 @@ impl Editor {
         let mut x = x0;
         // With a gradient dot selected, the palette marks (and sets) that dot's color.
         let brush = self.slot.map_or(self.brush_color, |(i, k)| self.preset_colors[i][k]);
-        let swatches: Vec<(Hit, Option<Rgb>)> = PALETTE
-            .iter()
-            .enumerate()
-            .map(|(i, c)| (Hit::Brush(i), Some(*c)))
-            .chain([(Hit::BrushOff, Some(OFF)), (Hit::BrushCustom, None)])
-            .collect();
+        let swatches: Vec<(Hit, Option<Rgb>)> =
+            PALETTE.iter().enumerate().map(|(i, c)| (Hit::Brush(i), Some(*c))).chain([(Hit::BrushOff, Some(OFF)), (Hit::BrushCustom, None)]).collect();
         for (hit, c) in swatches {
             let r = R { x, y: y + 2.0, w: 28.0, h: 28.0 };
             let chosen = match c {
@@ -897,7 +892,10 @@ impl Editor {
         self.fill(rt, R { x: 0.0, y: BOTTOM_Y - 12.0, w: W, h: 1.0 }, 0.0, self.theme.stroke);
         self.text(
             rt,
-            tr!("Можно вести мышью с зажатой кнопкой. Изменения сразу на клавиатуре. ПКМ по схеме — удалить.", "Drag to paint many keys. Changes apply instantly. Right-click a scheme to delete."),
+            tr!(
+                "Можно вести мышью с зажатой кнопкой. Изменения сразу на клавиатуре. ПКМ по схеме — удалить.",
+                "Drag to paint many keys. Changes apply instantly. Right-click a scheme to delete."
+            ),
             &self.fmt.body,
             R { x: MARGIN, y: BOTTOM_Y, w: 560.0, h: 36.0 },
             self.theme.text2,
@@ -1147,15 +1145,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 invalidate();
                 return 0;
             }
-            match hit {
-                Some(Hit::Scheme(i)) => {
-                    let mut cfg = crate::config();
-                    if i < cfg.schemes.len() {
-                        cfg.schemes.remove(i);
-                        cfg.save();
-                    }
+            if let Some(Hit::Scheme(i)) = hit {
+                let mut cfg = crate::config();
+                if i < cfg.schemes.len() {
+                    cfg.schemes.remove(i);
+                    cfg.save();
                 }
-                _ => {}
             }
             invalidate();
             0

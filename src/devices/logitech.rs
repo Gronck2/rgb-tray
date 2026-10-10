@@ -23,21 +23,8 @@ const FEATURE_BATTERY_VOLTAGE: u16 = 0x1001;
 const FEATURE_DEVICE_INFO: u16 = 0x0003;
 
 /// Li-ion discharge curve used by Logitech devices: (millivolts, percent), high to low.
-const VOLTAGE_CURVE: [(u16, u8); 13] = [
-    (4186, 100),
-    (4067, 90),
-    (3989, 80),
-    (3922, 70),
-    (3859, 60),
-    (3811, 50),
-    (3778, 40),
-    (3751, 30),
-    (3717, 20),
-    (3671, 10),
-    (3646, 5),
-    (3579, 2),
-    (3500, 0),
-];
+const VOLTAGE_CURVE: [(u16, u8); 13] =
+    [(4186, 100), (4067, 90), (3989, 80), (3922, 70), (3859, 60), (3811, 50), (3778, 40), (3751, 30), (3717, 20), (3671, 10), (3646, 5), (3579, 2), (3500, 0)];
 
 fn percent_from_millivolts(mv: u16) -> u8 {
     if mv >= VOLTAGE_CURVE[0].0 {
