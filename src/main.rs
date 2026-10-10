@@ -41,6 +41,8 @@ const WM_BATTERY: u32 = WM_APP + 4;
 const TIMER_REAPPLY: usize = 1;
 /// Second pass after wake: the ASUS keyboard may reset to white a few seconds later.
 const TIMER_REAPPLY_LATE: usize = 2;
+/// First pass right after wake, to cut the white flash of the ASUS keyboard short.
+const TIMER_REAPPLY_EARLY: usize = 3;
 
 /// GUID_CONSOLE_DISPLAY_STATE: 0 off, 1 on, 2 dimmed. Modern Standby (S0ix) laptops
 /// send no resume broadcast, so the display turning back on is the wake signal.
@@ -50,6 +52,7 @@ static DISPLAY_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool
 
 fn schedule_wake_reapply(hwnd: HWND) {
     unsafe {
+        SetTimer(hwnd, TIMER_REAPPLY_EARLY, 500, None);
         SetTimer(hwnd, TIMER_REAPPLY, 3000, None);
         SetTimer(hwnd, TIMER_REAPPLY_LATE, 10000, None);
     }
@@ -850,7 +853,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             SetTimer(hwnd, TIMER_REAPPLY, 1000, None);
             0
         }
-        WM_TIMER if wparam == TIMER_REAPPLY || wparam == TIMER_REAPPLY_LATE => {
+        WM_TIMER if wparam == TIMER_REAPPLY_EARLY || wparam == TIMER_REAPPLY || wparam == TIMER_REAPPLY_LATE => {
             KillTimer(hwnd, wparam);
             apply_all();
             0
