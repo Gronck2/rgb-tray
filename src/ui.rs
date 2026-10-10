@@ -65,7 +65,7 @@ pub(crate) const PALETTE: [Rgb; 9] = [
     Rgb(0xFF, 0x3C, 0xAA),
     Rgb(0xFF, 0xFF, 0xFF),
 ];
-const EFFECT_LABELS: [&str; 4] = ["Статичный", "Дыхание", "Спектр", "Выкл."];
+const EFFECT_LABELS: [crate::i18n::Text; 4] = [("Статичный", "Static"), ("Дыхание", "Breathing"), ("Спектр", "Spectrum"), ("Выкл.", "Off")];
 /// Segoe Fluent Icons glyphs.
 const ICON_ALL: &str = "\u{E82F}";
 const ICON_CHEVRON_DOWN: &str = "\u{E70D}";
@@ -178,12 +178,12 @@ fn rows() -> Vec<(R, Row)> {
 fn last_seen_label(last_seen: u64) -> String {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
     if last_seen == 0 {
-        return "Не подключено".into();
+        return tr!("Не подключено", "Not connected").into();
     }
     match now.saturating_sub(last_seen) / 86_400 {
-        0 => "Не подключено · сегодня".into(),
-        1 => "Не подключено · вчера".into(),
-        n => format!("Не подключено · {n} дн. назад"),
+        0 => tr!("Не подключено · сегодня", "Not connected · today").into(),
+        1 => tr!("Не подключено · вчера", "Not connected · yesterday").into(),
+        n => format!("{} · {n} {}", tr!("Не подключено", "Not connected"), tr!("дн. назад", "days ago")),
     }
 }
 
@@ -398,7 +398,7 @@ fn preset_chips() -> Vec<(R, Hit, String)> {
         .enumerate()
         .map(|(i, p)| if i == renaming { RENAME_TEXT.lock().unwrap().clone() } else { preset_label(p) })
         .collect();
-    let items = labels.into_iter().enumerate().map(|(i, l)| (l, Some(i))).chain(std::iter::once(("+ Сохранить текущие".to_string(), None)));
+    let items = labels.into_iter().enumerate().map(|(i, l)| (l, Some(i))).chain(std::iter::once((tr!("+ Сохранить текущие", "+ Save current").to_string(), None)));
     let mut out = Vec::new();
     let (mut x, mut row) = (PAD, 0);
     for (label, preset) in items {
@@ -755,7 +755,7 @@ fn select(id: Option<String>) {
 }
 
 /// Zones of the device on the selected card.
-fn selected_zones() -> &'static [(u8, &'static str)] {
+fn selected_zones() -> &'static [(u8, crate::i18n::Text)] {
     selected().map_or(&[], |id| kind_of(&id).zones)
 }
 
@@ -1273,7 +1273,7 @@ impl Flyout {
         rt.Clear(Some(&t.bg));
 
         // Header.
-        self.text(rt, "Подсветка", &f.title, R { x: PAD, y: 12.0, w: 200.0, h: 32.0 }, t.text);
+        self.text(rt, tr!("Подсветка", "Lighting"), &f.title, R { x: PAD, y: 12.0, w: 200.0, h: 32.0 }, t.text);
         let refresh = R { x: W - PAD - 32.0, y: 12.0, w: 32.0, h: 32.0 };
         if hover(Hit::Reapply) {
             self.fill(rt, refresh, 4.0, t.card_hover);
@@ -1297,7 +1297,7 @@ impl Flyout {
         // Everything below the list is laid out relative to its top.
         rt.SetTransform(&Matrix3x2::translation(0.0, v.lower_y));
         // Color palette.
-        self.text(rt, "Цвет", &f.label, R { x: PAD, y: COLOR_LABEL_Y, w: 200.0, h: 20.0 }, t.text);
+        self.text(rt, tr!("Цвет", "Color"), &f.label, R { x: PAD, y: COLOR_LABEL_Y, w: 200.0, h: 20.0 }, t.text);
         let zones = selected_zones();
         if !zones.is_empty() {
             // Which zone the palette paints: whole device or one zone.
@@ -1306,7 +1306,7 @@ impl Flyout {
             let all = R { x: rects[0].x, y: rects[0].y, w: rects.iter().map(|r| r.w).sum(), h: rects[0].h };
             self.fill(rt, all, 4.0, t.card);
             self.stroke(rt, all, 4.0, t.stroke, 1.0);
-            let names = std::iter::once("Вся мышь").chain(zones.iter().map(|z| z.1));
+            let names = std::iter::once(tr!("Вся мышь", "All")).chain(zones.iter().map(|z| crate::i18n::pick(z.1)));
             for (k, (name, r)) in names.zip(rects).enumerate() {
                 let r = r.inset(3.0);
                 if zone == k {
@@ -1343,7 +1343,7 @@ impl Flyout {
         }
 
         // Effect segmented control.
-        self.text(rt, "Эффект", &f.label, R { x: PAD, y: EFFECT_LABEL_Y, w: 200.0, h: 20.0 }, t.text);
+        self.text(rt, tr!("Эффект", "Effect"), &f.label, R { x: PAD, y: EFFECT_LABEL_Y, w: 200.0, h: 20.0 }, t.text);
         let seg = R { x: PAD, y: SEG_Y, w: W - 2.0 * PAD, h: SEG_H };
         self.fill(rt, seg, 6.0, t.card);
         self.stroke(rt, seg, 6.0, t.stroke, 1.0);
@@ -1357,15 +1357,15 @@ impl Flyout {
             } else if hover(Hit::Effect(i)) {
                 self.fill(rt, r, 4.0, t.card_hover);
             }
-            self.text(rt, label, &f.center, r, if on { t.on_accent } else { t.text });
+            self.text(rt, crate::i18n::pick(*label), &f.center, r, if on { t.on_accent } else { t.text });
         }
 
         // Brightness slider.
         let brightness = self.drag.unwrap_or(v.brightness);
         let (label, value) = if v.selected.is_none() {
-            ("Общая яркость", format!("{brightness}%"))
+            (tr!("Общая яркость", "Brightness"), format!("{brightness}%"))
         } else {
-            ("Яркость устройства", format!("{brightness}% от общей"))
+            (tr!("Яркость устройства", "Device brightness"), format!("{brightness}% {}", tr!("от общей", "of global")))
         };
         self.text(rt, label, &f.label, R { x: PAD, y: BRIGHT_LABEL_Y, w: 200.0, h: 20.0 }, t.text);
         self.text(rt, &value, &f.label_right, R { x: W - PAD - 140.0, y: BRIGHT_LABEL_Y, w: 140.0, h: 20.0 }, t.text2);
@@ -1380,14 +1380,14 @@ impl Flyout {
         self.circle(rt, tx, s.cy(), inner, t.accent);
 
         // Global presets.
-        self.text(rt, "Пресеты", &f.label, R { x: PAD, y: PRESET_LABEL_Y, w: 120.0, h: 20.0 }, t.text);
+        self.text(rt, tr!("Пресеты", "Presets"), &f.label, R { x: PAD, y: PRESET_LABEL_Y, w: 120.0, h: 20.0 }, t.text);
         let capture = CAPTURE.load(Ordering::Relaxed);
         if capture != usize::MAX {
-            self.text(rt, "Нажмите сочетание · Del — убрать · Esc", &f.sub_right, R { x: W - PAD - 250.0, y: PRESET_LABEL_Y, w: 250.0, h: 20.0 }, t.accent);
+            self.text(rt, tr!("Нажмите сочетание · Del — убрать · Esc", "Press a shortcut · Del — remove · Esc"), &f.sub_right, R { x: W - PAD - 250.0, y: PRESET_LABEL_Y, w: 250.0, h: 20.0 }, t.accent);
         } else if renaming_any() {
-            self.text(rt, "Enter — сохранить · Esc — отмена", &f.sub_right, R { x: W - PAD - 250.0, y: PRESET_LABEL_Y, w: 250.0, h: 20.0 }, t.accent);
+            self.text(rt, tr!("Enter — сохранить · Esc — отмена", "Enter — save · Esc — cancel"), &f.sub_right, R { x: W - PAD - 250.0, y: PRESET_LABEL_Y, w: 250.0, h: 20.0 }, t.accent);
         } else {
-            self.text(rt, "ПКМ по пресету — меню", &f.sub_right, R { x: W - PAD - 200.0, y: PRESET_LABEL_Y, w: 200.0, h: 20.0 }, t.text2);
+            self.text(rt, tr!("ПКМ по пресету — меню", "Right-click a preset for menu"), &f.sub_right, R { x: W - PAD - 200.0, y: PRESET_LABEL_Y, w: 200.0, h: 20.0 }, t.text2);
         }
         let active: Vec<bool> = {
             let cfg = crate::config();
@@ -1457,13 +1457,13 @@ impl Flyout {
             self.stroke(rt, sw, 10.0, t.text2, 1.0);
             self.circle(rt, sw.x + 10.0, sw.cy(), if hover(Hit::Autostart) { 6.0 } else { 5.0 }, t.text2);
         }
-        self.text(rt, "Запускать вместе с Windows", &f.sub, R { x: sw.x + 50.0, y: FOOTER_Y, w: 200.0, h: 36.0 }, t.text);
+        self.text(rt, tr!("Запускать вместе с Windows", "Start with Windows"), &f.sub, R { x: sw.x + 50.0, y: FOOTER_Y, w: 200.0, h: 36.0 }, t.text);
         let exit = R { x: W - PAD - 92.0, y: FOOTER_Y, w: 92.0, h: 36.0 };
         if hover(Hit::Exit) {
             self.fill(rt, exit, 4.0, t.card_hover);
         }
         self.text(rt, ICON_POWER, &f.icon_small, R { x: exit.x + 6.0, y: exit.y, w: 24.0, h: exit.h }, t.text);
-        self.text(rt, "Выход", &f.sub, R { x: exit.x + 34.0, y: exit.y, w: 56.0, h: exit.h }, t.text);
+        self.text(rt, tr!("Выход", "Exit"), &f.sub, R { x: exit.x + 34.0, y: exit.y, w: 56.0, h: exit.h }, t.text);
 
         rt.SetTransform(&Matrix3x2::identity());
         self.draw_menu(rt);
@@ -1482,12 +1482,12 @@ impl Flyout {
             self.stroke(rt, r, 6.0, t.accent, 1.0);
             self.text(rt, ICON_WARNING, &f.icon, R { x: r.x + 10.0, y: r.y, w: 32.0, h: r.h }, t.accent);
             let text_w = disable_button_rect(r).x - r.x - 58.0;
-            self.text(rt, "Мешает служба Logitech", &f.name, R { x: r.x + 50.0, y: r.y + 10.0, w: text_w, h: 20.0 }, t.text);
-            self.text(rt, "Из-за неё G915 зависает", &f.sub, R { x: r.x + 50.0, y: r.y + 30.0, w: text_w, h: 16.0 }, t.text2);
-            self.text(rt, "и не слушает эффекты", &f.sub, R { x: r.x + 50.0, y: r.y + 44.0, w: text_w, h: 16.0 }, t.text2);
+            self.text(rt, tr!("Мешает служба Logitech", "A Logitech service interferes"), &f.name, R { x: r.x + 50.0, y: r.y + 10.0, w: text_w, h: 20.0 }, t.text);
+            self.text(rt, tr!("Из-за неё G915 зависает", "It makes the G915 hang"), &f.sub, R { x: r.x + 50.0, y: r.y + 30.0, w: text_w, h: 16.0 }, t.text2);
+            self.text(rt, tr!("и не слушает эффекты", "and ignore effects"), &f.sub, R { x: r.x + 50.0, y: r.y + 44.0, w: text_w, h: 16.0 }, t.text2);
             let b = disable_button_rect(r);
             self.fill(rt, b, 4.0, if hover(Hit::DisableService) { D2D1_COLOR_F { a: 0.85, ..t.accent } } else { t.accent });
-            self.text(rt, "Отключить", &f.center_small, b, t.on_accent);
+            self.text(rt, tr!("Отключить", "Disable"), &f.center_small, b, t.on_accent);
             return;
         }
         if let Row::ArchiveHeader(n) = row {
@@ -1496,7 +1496,7 @@ impl Flyout {
                 self.fill(rt, r, 6.0, t.card_hover);
             }
             let open = ARCHIVE_OPEN.load(Ordering::Relaxed);
-            self.text(rt, &format!("Отключённые устройства · {n}"), &f.sub, R { x: r.x + 14.0, y: r.y, w: r.w - 50.0, h: r.h }, t.text2);
+            self.text(rt, &format!("{} · {n}", tr!("Отключённые устройства", "Disconnected devices")), &f.sub, R { x: r.x + 14.0, y: r.y, w: r.w - 50.0, h: r.h }, t.text2);
             let chevron = if open { ICON_CHEVRON_UP } else { ICON_CHEVRON_DOWN };
             self.text(rt, chevron, &f.icon_tiny, R { x: r.x + r.w - 36.0, y: r.y, w: 24.0, h: r.h }, t.text2);
             return;
@@ -1525,8 +1525,8 @@ impl Flyout {
             let shown: Vec<&DeviceView> = v.devices.iter().filter(|d| d.present || d.no_link).collect();
             let n = shown.iter().filter(|d| d.present).count();
             self.text(rt, ICON_ALL, &f.icon, R { x: r.x + 10.0, y: r.y, w: 32.0, h: r.h }, t.text);
-            self.text(rt, "Все устройства", &f.name, R { x: r.x + 50.0, y: r.y + 6.0, w: r.w - 100.0, h: 20.0 }, t.text);
-            let sub = if n == shown.len() { format!("Подключено {n}") } else { format!("Подключено {n} из {}", shown.len()) };
+            self.text(rt, tr!("Все устройства", "All devices"), &f.name, R { x: r.x + 50.0, y: r.y + 6.0, w: r.w - 100.0, h: 20.0 }, t.text);
+            let sub = if n == shown.len() { format!("{} {n}", tr!("Подключено", "Connected")) } else { format!("{} {n} {} {}", tr!("Подключено", "Connected"), tr!("из", "of"), shown.len()) };
             self.text(rt, &sub, &f.sub, R { x: r.x + 50.0, y: r.y + 26.0, w: r.w - 100.0, h: 16.0 }, t.text2);
             for (k, d) in shown.iter().enumerate().take(8).rev() {
                 self.circle(rt, dx - k as f32 * 9.0, dy, 8.0, if selected { t.card } else { bg });
@@ -1541,11 +1541,11 @@ impl Flyout {
         let mut sub = vec![(
             "",
             if d.no_link {
-                "Нет связи".to_string()
+                tr!("Нет связи", "No link").to_string()
             } else if !d.present {
                 last_seen_label(d.cfg.last_seen)
             } else if d.cfg.per_key {
-                "Свои цвета клавиш".to_string()
+                tr!("Свои цвета клавиш", "Custom key colors").to_string()
             } else {
                 d.cfg.effect.label().to_string()
             },
@@ -1558,7 +1558,7 @@ impl Flyout {
         }
         // The level from before the link was lost.
         if let (true, Some(b)) = (d.no_link, d.battery) {
-            sub.push(("", format!("было {}%", b.percent)));
+            sub.push(("", format!("{} {}%", tr!("было", "was"), b.percent)));
         }
         let low = d.present && d.battery.is_some_and(|b| b.is_low());
         let name_color = if d.present { t.text } else { t.text2 };
@@ -1622,7 +1622,7 @@ impl Flyout {
                 self.fill(rt, kb, 4.0, if hover(Hit::Keys(i)) { t.card_hover } else { t.bg });
                 self.stroke(rt, kb, 4.0, t.stroke, 1.0);
                 self.text(rt, ICON_KEYBOARD, &f.icon_tiny, R { x: kb.x + 4.0, y: kb.y, w: 22.0, h: kb.h }, t.text);
-                self.text(rt, "Клавиши", &f.sub, R { x: kb.x + 26.0, y: kb.y, w: kb.w - 28.0, h: kb.h }, t.text);
+                self.text(rt, tr!("Клавиши", "Keys"), &f.sub, R { x: kb.x + 26.0, y: kb.y, w: kb.w - 28.0, h: kb.h }, t.text);
             }
             Row::Archived(id) if archived => {
                 // Forgetting asks for a second click.
@@ -1635,7 +1635,7 @@ impl Flyout {
                     self.stroke(rt, fb, 4.0, t.stroke, 1.0);
                 }
                 let fg = if armed { t.on_accent } else { t.text };
-                let label = if armed { "Точно?" } else { "Забыть" };
+                let label = if armed { tr!("Точно?", "Sure?") } else { tr!("Забыть", "Forget") };
                 self.text(rt, ICON_DELETE, &f.icon_tiny, R { x: fb.x + 4.0, y: fb.y, w: 22.0, h: fb.h }, fg);
                 self.text(rt, label, &f.sub, R { x: fb.x + 26.0, y: fb.y, w: fb.w - 28.0, h: fb.h }, fg);
             }
@@ -1679,10 +1679,10 @@ impl Flyout {
                         self.fill(rt, r, 4.0, t.card_hover);
                     }
                     let (icon, label) = match item {
-                        MenuItem::Apply => (ICON_PLAY, "Применить"),
-                        MenuItem::Overwrite => (ICON_SAVE, if same { "Совпадает с текущими" } else { "Перезаписать текущими" }),
-                        MenuItem::Rename => (ICON_RENAME, "Переименовать"),
-                        _ => (ICON_DELETE, "Удалить"),
+                        MenuItem::Apply => (ICON_PLAY, tr!("Применить", "Apply")),
+                        MenuItem::Overwrite => (ICON_SAVE, if same { tr!("Совпадает с текущими", "Same as current") } else { tr!("Перезаписать текущими", "Overwrite with current") }),
+                        MenuItem::Rename => (ICON_RENAME, tr!("Переименовать", "Rename")),
+                        _ => (ICON_DELETE, tr!("Удалить", "Delete")),
                     };
                     let mut fg = t.text;
                     if disabled {
@@ -1725,10 +1725,10 @@ impl Flyout {
                     let fg = if current { t.on_accent } else { t.text };
                     let label = match item {
                         MenuItem::Hotkey(Some(n)) => format!("F{}", 13 + n),
-                        MenuItem::Hotkey(None) => "Нет".to_string(),
+                        MenuItem::Hotkey(None) => tr!("Нет", "None").to_string(),
                         _ => match preset.hotkey {
                             Some(hk) if current => hk.label(),
-                            _ => "Сочетание…".to_string(),
+                            _ => tr!("Сочетание…", "Shortcut…").to_string(),
                         },
                     };
                     if item == MenuItem::Combo {
@@ -1744,7 +1744,7 @@ impl Flyout {
         self.fill(rt, R { x: panel.x, y: line_after_actions + MENU_GAP / 2.0 - 0.5, w: panel.w, h: 1.0 }, 0.0, t.stroke);
         self.text(
             rt,
-            "Горячая клавиша",
+            tr!("Горячая клавиша", "Hotkey"),
             &f.sub,
             R { x: panel.x + 14.0, y: line_after_actions + MENU_GAP, w: panel.w - 28.0, h: MENU_LABEL_H - 4.0 },
             t.text2,
@@ -1778,12 +1778,12 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32, card: usize, zone: u
         }
 
         if cfg.presets.is_empty() {
-            let mut a = cfg.snapshot("Работа".into());
+            let mut a = cfg.snapshot(tr!("Работа", "Work").into());
             a.hotkey = Some(crate::config::Hotkey { mods: 0, vk: VK_F13 });
-            let mut b = cfg.snapshot("Игра".into());
+            let mut b = cfg.snapshot(tr!("Игра", "Gaming").into());
             b.brightness = 40;
             b.hotkey = Some(crate::config::Hotkey { mods: 0x2 | 0x1, vk: 0x31 });
-            let c = cfg.snapshot("Ночь".into());
+            let c = cfg.snapshot(tr!("Ночь", "Night").into());
             cfg.presets = vec![a, b, c];
             cfg.presets[2].brightness = 10;
         }

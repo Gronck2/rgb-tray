@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[macro_use]
+mod i18n;
 mod alert;
 mod config;
 mod devices;
@@ -276,8 +278,9 @@ fn forget_device(id: &str) {
 fn rename_device(id: &str, name: &str) {
     let mut cfg = config();
     let name = name.trim();
-    let default = devices::kind_of(id).name;
-    cfg.device_mut(id).name = if name == default { String::new() } else { name.to_string() };
+    let kind = devices::kind_of(id);
+    let default = name == kind.names.0 || name == kind.names.1;
+    cfg.device_mut(id).name = if default { String::new() } else { name.to_string() };
     cfg.save();
 }
 // ---------------------------------------------------------------- battery
@@ -424,7 +427,7 @@ fn apply_preset(i: usize) {
 
 fn save_preset() {
     let mut cfg = config();
-    let name = format!("Пресет {}", cfg.presets.len() + 1);
+    let name = format!("{} {}", tr!("Пресет", "Preset"), cfg.presets.len() + 1);
     let p = cfg.snapshot(name);
     cfg.presets.push(p);
     cfg.save();
@@ -503,38 +506,38 @@ fn diagnose_report() -> String {
     use std::fmt::Write as _;
     let nt = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
     let mut s = String::new();
-    let _ = writeln!(s, "RGB Tray {} — отчёт об устройствах", installer::VERSION);
+    let _ = writeln!(s, "RGB Tray {} device report", installer::VERSION);
     let build = reg_string(nt, "CurrentBuild");
     let mut product = reg_string(nt, "ProductName");
     // The registry still says "Windows 10" on Windows 11; builds from 22000 on are 11.
     if build.parse::<u32>().is_ok_and(|b| b >= 22000) {
         product = product.replace("Windows 10", "Windows 11");
     }
-    let _ = writeln!(s, "Windows: {product} {} (сборка {build})", reg_string(nt, "DisplayVersion"));
+    let _ = writeln!(s, "Windows: {product} {} (build {build})", reg_string(nt, "DisplayVersion"));
     let found = {
         let _guard = APPLY_LOCK.lock().unwrap();
         devices::discover()
     };
-    let _ = writeln!(s, "\nПоддерживаемые устройства:");
+    let _ = writeln!(s, "\nSupported devices:");
     for f in &found.found {
-        let _ = writeln!(s, "  {} — {}", f.id, devices::kind_of(&f.id).name);
+        let _ = writeln!(s, "  {} — {}", f.id, devices::kind_of(&f.id).names.1);
     }
     for id in &found.no_link {
-        let _ = writeln!(s, "  {id} — нет связи");
+        let _ = writeln!(s, "  {id} — no link");
     }
     for kind in &found.no_link_kinds {
-        let _ = writeln!(s, "  {kind} — нет связи (номер неизвестен)");
+        let _ = writeln!(s, "  {kind} — no link (serial unknown)");
     }
     if found.found.is_empty() && found.no_link.is_empty() && found.no_link_kinds.is_empty() {
-        let _ = writeln!(s, "  не найдено");
+        let _ = writeln!(s, "  none found");
     }
-    let lamparray = if services::interferes(services::LOGI_LAMPARRAY) { "активна (мешает G915)" } else { "отключена или нет" };
-    let _ = writeln!(s, "\nСлужба Logitech LampArray: {lamparray}");
+    let lamparray = if services::interferes(services::LOGI_LAMPARRAY) { "running (makes the G915 hang)" } else { "disabled or absent" };
+    let _ = writeln!(s, "\nLogitech LampArray service: {lamparray}");
 
     let mut hids = hid::enumerate_all();
     hids.sort_by_key(|h| (h.vid, h.pid, h.usage_page, h.usage));
-    let _ = writeln!(s, "\nHID-интерфейсы ({}):", hids.len());
-    let _ = writeln!(s, "VID:PID    UsagePage:Usage  in/out/feature  Название — путь");
+    let _ = writeln!(s, "\nHID interfaces ({}):", hids.len());
+    let _ = writeln!(s, "VID:PID    UsagePage:Usage  in/out/feature  Product — path");
     for h in &hids {
         let path = String::from_utf16_lossy(&h.path[..h.path.len().saturating_sub(1)]);
         // The interface GUID at the end is the same for all of them.
@@ -553,14 +556,14 @@ fn diagnose(path: Option<std::path::PathBuf>) {
     let open = path.is_none();
     let path = path.unwrap_or_else(|| Config::dir().join("rgbtray-diagnose.txt"));
     let _ = std::fs::create_dir_all(Config::dir());
-    // A BOM so Notepad shows the Cyrillic text right on every Windows version.
+    // A BOM so Notepad shows non-ASCII product names right on every Windows version.
     let text = format!("\u{FEFF}{}", diagnose_report().replace('\n', "\r\n"));
     match std::fs::write(&path, text) {
         Ok(()) if open => {
             let _ = std::process::Command::new("notepad.exe").arg(&path).spawn();
         }
         Ok(()) => {}
-        Err(e) => unsafe { message(&format!("Не удалось сохранить отчёт:\n{e}"), true) },
+        Err(e) => unsafe { message(&format!("{}\n{e}", tr!("Не удалось сохранить отчёт:", "Could not save the report:")), true) },
     }
 }
 
@@ -573,7 +576,7 @@ unsafe fn settings_file_dialog(save: bool) -> Option<std::path::PathBuf> {
     if save {
         buf[..name.len()].copy_from_slice(&name);
     }
-    let filter: Vec<u16> = "Настройки RGB Tray (*.toml)\0*.toml\0Все файлы\0*.*\0\0".encode_utf16().collect();
+    let filter: Vec<u16> = tr!("Настройки RGB Tray (*.toml)\0*.toml\0Все файлы\0*.*\0\0", "RGB Tray settings (*.toml)\0*.toml\0All files\0*.*\0\0").encode_utf16().collect();
     let ext = wide("toml");
     let mut ofn: OPENFILENAMEW = zeroed();
     ofn.lStructSize = size_of::<OPENFILENAMEW>() as u32;
@@ -599,7 +602,7 @@ fn export_settings() {
         let Some(path) = settings_file_dialog(true) else { return };
         let text = toml::to_string_pretty(&*config()).unwrap_or_default();
         if let Err(e) = std::fs::write(&path, text) {
-            message(&format!("Не удалось сохранить настройки:\n{e}"), true);
+            message(&format!("{}\n{e}", tr!("Не удалось сохранить настройки:", "Could not save the settings:")), true);
         }
     }
 }
@@ -613,7 +616,7 @@ fn import_settings() {
         let new = match loaded {
             Ok(c) => c,
             Err(e) => {
-                message(&format!("Это не файл настроек RGB Tray:\n{e}"), true);
+                message(&format!("{}\n{e}", tr!("Это не файл настроек RGB Tray:", "This is not an RGB Tray settings file:")), true);
                 return;
             }
         };
@@ -624,10 +627,26 @@ fn import_settings() {
             cfg.save();
         }
         ui::PINNED.store(config().pinned, Ordering::Relaxed);
+        i18n::set(config().language.as_deref());
         register_hotkeys();
         apply_all();
+        update_tray(HWND_MAIN.load(Ordering::Relaxed) as HWND, NIM_MODIFY);
         ui::refresh();
     }
+}
+
+/// Switches the interface between Russian and English and remembers the choice.
+fn toggle_language() {
+    let lang = if i18n::en() { "ru" } else { "en" };
+    {
+        let mut cfg = config();
+        cfg.language = Some(lang.into());
+        cfg.save();
+    }
+    i18n::set(Some(lang));
+    unsafe { update_tray(HWND_MAIN.load(Ordering::Relaxed) as HWND, NIM_MODIFY) };
+    ui::refresh();
+    editor::refresh();
 }
 
 unsafe fn pick_color(owner: HWND, initial: Rgb) -> Option<Rgb> {
@@ -730,11 +749,11 @@ unsafe fn update_tray(hwnd: HWND, action: u32) {
         let no_link = NO_LINK.lock().unwrap();
         // The icon follows the first connected device.
         let dc = ids.iter().find(|id| present.contains(id)).map(|id| cfg.device(id).visible()).unwrap_or_default();
-        let mut tip = String::from("Подсветка");
+        let mut tip = String::from(tr!("Подсветка", "Lighting"));
         for id in &ids {
             let name = cfg.display_name(id);
             if no_link.contains(id) {
-                tip.push_str(&format!("\n{name}: нет связи"));
+                tip.push_str(&format!("\n{name}: {}", tr!("нет связи", "no link")));
                 continue;
             }
             tip.push_str(&format!("\n{}: {}", name, cfg.device(id).visible().effect.label().to_lowercase()));
@@ -882,6 +901,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 fn main() {
     // `--snapshot <file.png> [dark|light]`: detect devices, render the panel to a PNG and exit.
     let args: Vec<String> = std::env::args().collect();
+    i18n::set(config().language.as_deref());
     // `--diagnose [file.txt]`: device report for adding support for new devices.
     if let Some(i) = args.iter().position(|a| a == "--diagnose") {
         diagnose(args.get(i + 1).map(std::path::PathBuf::from));

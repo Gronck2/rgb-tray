@@ -3,6 +3,7 @@ pub mod logitech;
 pub mod macropad;
 pub mod razer;
 
+use crate::i18n::Text;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -19,10 +20,10 @@ impl Effect {
 
     pub fn label(self) -> &'static str {
         match self {
-            Effect::Static => "Статичный",
-            Effect::Breathe => "Дыхание",
-            Effect::Cycle => "Смена цветов",
-            Effect::Off => "Выключено",
+            Effect::Static => tr!("Статичный", "Static"),
+            Effect::Breathe => tr!("Дыхание", "Breathing"),
+            Effect::Cycle => tr!("Смена цветов", "Color cycle"),
+            Effect::Off => tr!("Выключено", "Off"),
         }
     }
 }
@@ -43,7 +44,7 @@ pub trait Device {
 
     /// Per-key colors (zone id, color); only keyboards with per-key lighting support it.
     fn apply_keys(&self, _keys: &[(u8, Rgb)], _brightness: u8) -> Result<(), String> {
-        Err("цвета отдельных клавиш не поддерживаются".into())
+        Err("per-key colors are not supported".into())
     }
 
     /// The effect with a separate color per lighting zone (LED id, color).
@@ -67,9 +68,9 @@ pub struct Battery {
 impl Battery {
     pub fn label(&self) -> String {
         if self.charging {
-            format!("заряжается {}%", self.percent)
+            format!("{} {}%", tr!("заряжается", "charging"), self.percent)
         } else {
-            format!("батарея {}%", self.percent)
+            format!("{} {}%", tr!("батарея", "battery"), self.percent)
         }
     }
 
@@ -110,11 +111,12 @@ pub fn answering() -> Vec<String> {
 pub struct Kind {
     /// Prefix of device ids and the config key of old (single-device) versions.
     pub key: &'static str,
-    pub name: &'static str,
+    /// Default name (Russian, English); see `name()`.
+    pub names: Text,
     /// Segoe Fluent Icons glyph.
     pub icon: &'static str,
     /// Independently lit zones: (LED id, name); empty = one color only.
-    pub zones: &'static [(u8, &'static str)],
+    pub zones: &'static [(u8, Text)],
     /// Keyboard with per-key colors (the key editor).
     pub per_key: bool,
     /// The firmware has no serial number: the id comes from the USB port, so a device moved
@@ -122,17 +124,24 @@ pub struct Kind {
     pub port_id: bool,
 }
 
+impl Kind {
+    /// Default name of the model in the interface language.
+    pub fn name(&self) -> &'static str {
+        crate::i18n::pick(self.names)
+    }
+}
+
 /// Every supported model, in panel order.
 pub const KINDS: [Kind; 5] = [
-    Kind { key: "logitech", name: "Logitech G915 TKL", icon: "\u{E765}", zones: &[], per_key: true, port_id: false },
-    Kind { key: "naga", name: "Razer Naga V2 Pro", icon: "\u{E962}", zones: &NAGA_ZONES, per_key: false, port_id: false },
-    Kind { key: "dock", name: "Razer Mouse Dock Pro", icon: "\u{E772}", zones: &[], per_key: false, port_id: false },
-    Kind { key: "asus", name: "Клавиатура ASUS", icon: "\u{E7F8}", zones: &[], per_key: false, port_id: false },
-    Kind { key: "macropad", name: "Geekboard MacroPad", icon: "\u{E92E}", zones: &[], per_key: false, port_id: true },
+    Kind { key: "logitech", names: ("Logitech G915 TKL", "Logitech G915 TKL"), icon: "\u{E765}", zones: &[], per_key: true, port_id: false },
+    Kind { key: "naga", names: ("Razer Naga V2 Pro", "Razer Naga V2 Pro"), icon: "\u{E962}", zones: &NAGA_ZONES, per_key: false, port_id: false },
+    Kind { key: "dock", names: ("Razer Mouse Dock Pro", "Razer Mouse Dock Pro"), icon: "\u{E772}", zones: &[], per_key: false, port_id: false },
+    Kind { key: "asus", names: ("Клавиатура ASUS", "ASUS keyboard"), icon: "\u{E7F8}", zones: &[], per_key: false, port_id: false },
+    Kind { key: "macropad", names: ("Geekboard MacroPad", "Geekboard MacroPad"), icon: "\u{E92E}", zones: &[], per_key: false, port_id: true },
 ];
 
 /// Independently lit zones of the Naga V2 Pro: (LED id, name).
-pub const NAGA_ZONES: [(u8, &str); 2] = [(0x04, "Логотип"), (0x05, "Боковая панель")];
+pub const NAGA_ZONES: [(u8, Text); 2] = [(0x04, ("Логотип", "Logo")), (0x05, ("Боковая панель", "Side panel"))];
 
 /// The model of a device id ("naga-123456…" → Naga); unknown ids get the first model.
 pub fn kind_of(id: &str) -> &'static Kind {
@@ -152,7 +161,7 @@ pub fn path_hash(path: &[u16]) -> String {
 
 /// Error of a device that is plugged in (its receiver or dock is) but doesn't answer:
 /// switched off, asleep or out of range.
-pub const NO_LINK: &str = "нет связи с устройством";
+pub const NO_LINK: &str = "no link to the device";
 
 /// A connected device ready to be driven.
 pub struct Found {

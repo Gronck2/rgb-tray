@@ -1,6 +1,6 @@
 [package]
 name = "rgbtray"
-version = "0.5.14"
+version = "0.6.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Tiny tray app controlling Logitech G915, Razer and ASUS Aura lighting directly over HID"
@@ -33,6 +33,7 @@ features = [
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
     "Win32_System_Services",
+    "Win32_Globalization",
     "Win32_System_Threading",
     "Win32_System_LibraryLoader",
     "Win32_System_Registry",

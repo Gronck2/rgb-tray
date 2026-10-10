@@ -46,7 +46,7 @@ impl Asus {
     fn send(hid: &Hid, bytes: &[u8]) -> Result<(), String> {
         let mut buf = [0u8; 64];
         buf[..bytes.len()].copy_from_slice(bytes);
-        if hid.set_feature(&buf) { Ok(()) } else { Err("ASUS: ошибка отправки".into()) }
+        if hid.set_feature(&buf) { Ok(()) } else { Err("ASUS: send failed".into()) }
     }
 }
 

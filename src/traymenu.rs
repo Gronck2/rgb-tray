@@ -32,6 +32,7 @@ enum Item {
     Keys,
     Reapply,
     Autostart,
+    Language,
     Export,
     Import,
     Diagnose,
@@ -46,11 +47,12 @@ enum Row {
     Version,
 }
 
-const ROWS: [Row; 11] = [
+const ROWS: [Row; 12] = [
     Row::Item(Item::Open),
     Row::Item(Item::Keys),
     Row::Item(Item::Reapply),
     Row::Item(Item::Autostart),
+    Row::Item(Item::Language),
     Row::Divider,
     Row::Item(Item::Export),
     Row::Item(Item::Import),
@@ -99,7 +101,7 @@ struct Menu {
     theme: Theme,
     hover: Option<Item>,
     tracking: bool,
-    /// Keyboard whose key editor "Цвета клавиш…" opens (None: no such keyboard connected).
+    /// Keyboard whose key editor "Key colors…" opens (None: no such keyboard connected).
     keyboard: Option<String>,
     autostart: bool,
 }
@@ -272,14 +274,16 @@ impl Menu {
                         fg.a *= 0.6;
                     }
                     let (icon, label) = match item {
-                        Item::Open => ("\u{E790}", "Открыть панель"),
-                        Item::Keys => ("\u{E765}", "Цвета клавиш…"),
-                        Item::Reapply => ("\u{E72C}", "Применить заново"),
-                        Item::Autostart => ("\u{E823}", "Запускать с Windows"),
-                        Item::Export => ("\u{E74E}", "Сохранить настройки в файл…"),
-                        Item::Import => ("\u{E8E5}", "Загрузить настройки из файла…"),
-                        Item::Diagnose => ("\u{E9D9}", "Отчёт об устройствах…"),
-                        Item::Exit => ("\u{E7E8}", "Выход"),
+                        Item::Open => ("\u{E790}", tr!("Открыть панель", "Open panel")),
+                        Item::Keys => ("\u{E765}", tr!("Цвета клавиш…", "Key colors…")),
+                        Item::Reapply => ("\u{E72C}", tr!("Применить заново", "Apply again")),
+                        Item::Autostart => ("\u{E823}", tr!("Запускать с Windows", "Start with Windows")),
+                        // Names the other language: that is what a click switches to.
+                        Item::Language => ("\u{E774}", tr!("Switch to English", "Переключить на русский")),
+                        Item::Export => ("\u{E74E}", tr!("Сохранить настройки в файл…", "Save settings to a file…")),
+                        Item::Import => ("\u{E8E5}", tr!("Загрузить настройки из файла…", "Load settings from a file…")),
+                        Item::Diagnose => ("\u{E9D9}", tr!("Отчёт об устройствах…", "Device report…")),
+                        Item::Exit => ("\u{E7E8}", tr!("Выход", "Exit")),
                     };
                     self.text(rt, icon, &self.fmt.icon, R { x: r.x + 6.0, y: r.y, w: 28.0, h: r.h }, fg);
                     // Only the autostart row needs room for its switch.
@@ -322,6 +326,7 @@ fn run(item: Item, keyboard: Option<String>) {
         }
         Item::Reapply => crate::apply_all(),
         Item::Autostart => crate::set_autostart(!crate::autostart_enabled()),
+        Item::Language => crate::toggle_language(),
         Item::Export => crate::export_settings(),
         Item::Import => crate::import_settings(),
         // Searching devices takes a moment; the report opens in Notepad when ready.

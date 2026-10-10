@@ -38,7 +38,7 @@ impl MacroPad {
         let mut buf = [0u8; 33];
         buf[1..1 + bytes.len()].copy_from_slice(bytes);
         if !self.hid.write(&buf) {
-            return Err("MacroPad: ошибка отправки".into());
+            return Err("MacroPad: send failed".into());
         }
         let mut resp = [0u8; 33];
         for _ in 0..4 {
@@ -48,7 +48,7 @@ impl MacroPad {
                 _ => break,
             }
         }
-        Err("MacroPad: нет ответа".into())
+        Err("MacroPad: no response".into())
     }
 }
 

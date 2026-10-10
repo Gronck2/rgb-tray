@@ -9,7 +9,6 @@ A tiny Windows tray app that controls RGB lighting of keyboards and mice directl
   <img src="docs/screenshots/editor-dark.png" width="520" alt="Per-key editor">
 </p>
 
-> The interface is in Russian for now; an English UI is planned (see [ROADMAP.md](ROADMAP.md)).
 
 ## Supported devices
 
@@ -37,6 +36,7 @@ Other models that speak the same protocols may work but are untested. To ask for
 - The tray icon shows the current color.
 - Pinned mode: the panel stays open on top and can be dragged by its header.
 - Export and import of all settings to a file.
+- English and Russian interface: Russian when Windows or one of its keyboard layouts is Russian, English otherwise; switchable in the tray menu.
 - Light and dark theme following Windows.
 
 ## Install

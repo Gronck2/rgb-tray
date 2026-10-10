@@ -211,6 +211,9 @@ pub struct Config {
     pub iso_layout: bool,
     /// The panel is pinned: it stays open and on top when it loses focus.
     pub pinned: bool,
+    /// Interface language "ru" or "en"; not set = follow Windows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
     /// Top-left corner (screen pixels) of the pinned panel after the user dragged it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub panel_pos: Option<(i32, i32)>,
@@ -232,6 +235,7 @@ impl Default for Config {
             schemes: Vec::new(),
             iso_layout: false,
             pinned: false,
+            language: None,
             panel_pos: None,
             presets: Vec::new(),
             per_key: false,
@@ -292,7 +296,7 @@ impl Config {
     pub fn display_name(&self, id: &str) -> String {
         match self.devices.get(id) {
             Some(d) if !d.name.is_empty() => d.name.clone(),
-            _ => kind_of(id).name.to_string(),
+            _ => kind_of(id).name().to_string(),
         }
     }
 
@@ -325,7 +329,7 @@ impl Config {
                         let mut d = self.inherited();
                         let same_model = self.devices.keys().filter(|k| kind_of(k).key == kind.key).count();
                         if same_model > 0 {
-                            d.name = format!("{} {}", kind.name, same_model + 1);
+                            d.name = format!("{} {}", kind.name(), same_model + 1);
                         }
                         d
                     }

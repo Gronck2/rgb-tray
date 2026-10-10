@@ -174,7 +174,7 @@ impl Logitech {
 
     fn req_keys(&self, func: u8, args: &[u8]) -> Result<[u8; 20], String> {
         if self.feat_keys == 0 {
-            return Err("клавиатура не поддерживает цвета отдельных клавиш".into());
+            return Err("the keyboard has no per-key colors".into());
         }
         request(&self.hid, self.dev, self.sw, self.feat_keys, func, args)
     }
@@ -341,7 +341,7 @@ fn drain(hid: &Hid, wait: Duration) {
     }
 }
 
-const NO_RESPONSE: &str = "HID++: нет ответа";
+const NO_RESPONSE: &str = "HID++: no response";
 
 /// Sends one request and waits for its response, skipping traffic of other apps.
 fn request_once(hid: &Hid, dev: u8, sw: u8, feat: u8, func: u8, args: &[u8]) -> Result<[u8; 20], String> {
@@ -355,13 +355,13 @@ fn request_once(hid: &Hid, dev: u8, sw: u8, feat: u8, func: u8, args: &[u8]) -> 
         crate::log(&format!("hid++ > {:02X?}", &msg[..4 + args.len()]));
     }
     if !hid.write(&msg) {
-        return Err(format!("HID++: ошибка записи ({})", std::io::Error::last_os_error()));
+        return Err(format!("HID++: write failed ({})", std::io::Error::last_os_error()));
     }
     let deadline = Instant::now() + Duration::from_millis(500);
     let mut r = [0u8; 20];
     while let Some(left) = deadline.checked_duration_since(Instant::now()) {
         match hid.read(&mut r, left.as_millis() as u32) {
-            Err(()) => return Err("HID++: устройство отключено".into()),
+            Err(()) => return Err("HID++: device disconnected".into()),
             Ok(None) => break,
             Ok(Some(_)) => {}
         }
@@ -369,7 +369,7 @@ fn request_once(hid: &Hid, dev: u8, sw: u8, feat: u8, func: u8, args: &[u8]) -> 
             continue;
         }
         if r[2] == 0xFF && r[3] == feat && r[4] == msg[3] {
-            return Err(format!("HID++: ошибка {:#04x} (feat {feat:#04x} fn {func})", r[5]));
+            return Err(format!("HID++: error {:#04x} (feat {feat:#04x} fn {func})", r[5]));
         }
         if r[2] == feat && r[3] == msg[3] {
             return Ok(r);

@@ -42,7 +42,7 @@ const LABEL_W: f32 = 84.0;
 const BOTTOM_Y: f32 = ROW_Y + ROW_STEP * 4.0 + 8.0;
 const H: f32 = BOTTOM_Y + 36.0 + MARGIN;
 
-const PRESETS: [&str; 4] = ["Радуга", "Градиент", "WASD", "Только буквы"];
+const PRESETS: [crate::i18n::Text; 4] = [("Радуга", "Rainbow"), ("Градиент", "Gradient"), ("WASD", "WASD"), ("Только буквы", "Letters only")];
 const OFF: Rgb = Rgb(0, 0, 0);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -285,11 +285,11 @@ fn apply_preset(i: usize, colors: [Rgb; 2]) {
             }
         }
 
-        // Letters (Latin and Cyrillic legends) in one color, everything else in the other.
+        // Letters (Latin, and Cyrillic legends in Russian) in one color, everything else in the other.
         _ => {
             for kd in keys.iter().filter(|k| k.code != 0) {
                 let letter = kd.y > 0.0 && kd.label.len() == 1 && kd.label.chars().all(|c| c.is_ascii_alphabetic());
-                set_tracked(&mut cfg, kd.code, if letter || !kd.ru.is_empty() && kd.label.len() == 1 { colors[0] } else { colors[1] });
+                set_tracked(&mut cfg, kd.code, if letter || !crate::i18n::en() && !kd.ru.is_empty() && kd.label.len() == 1 { colors[0] } else { colors[1] });
             }
         }
     }
@@ -451,10 +451,20 @@ pub fn open(id: &str) {
     }
 }
 
+/// Redraws an open editor, e.g. after the interface language changed.
+pub fn refresh() {
+    if let Some(h) = with_editor(|e| e.hwnd) {
+        unsafe {
+            set_title(h);
+            InvalidateRect(h, null(), 0);
+        }
+    }
+}
+
 /// "Цвета клавиш — <keyboard name>".
 unsafe fn set_title(hwnd: HWND) {
     let name = crate::config().display_name(&target());
-    let title: Vec<u16> = format!("Цвета клавиш — {name}\0").encode_utf16().collect();
+    let title: Vec<u16> = format!("{} — {name}\0", tr!("Цвета клавиш", "Key colors")).encode_utf16().collect();
     SetWindowTextW(hwnd, title.as_ptr());
 }
 
@@ -485,7 +495,7 @@ unsafe fn create_window() -> windows::core::Result<()> {
     let x = work.left + ((work.right - work.left) - w).max(0) / 2;
     let y = work.top + ((work.bottom - work.top) - h).max(0) / 2;
 
-    let title: Vec<u16> = "Цвета клавиш\0".encode_utf16().collect();
+    let title: Vec<u16> = tr!("Цвета клавиш\0", "Key colors\0").encode_utf16().collect();
     let hwnd = CreateWindowExW(0, class.as_ptr(), title.as_ptr(), style, x, y, w, h, null_mut(), null_mut(), hinst, null());
     set_title(hwnd);
     let theme = theme();
@@ -567,7 +577,7 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Re
             brush_color: PALETTE[0],
         preset_colors: default_colors(),
         slot: None,
-            word: "ПРИВЕТ".into(),
+            word: tr!("ПРИВЕТ", "HELLO").into(),
             word_focus: true,
         };
         ed.draw(rt);
@@ -685,7 +695,7 @@ impl Editor {
     /// A two-color preset: its label plus its two color dots; returns its right edge.
     unsafe fn two_color_chip(&mut self, rt: &ID2D1RenderTarget, x: f32, y: f32, i: usize) -> f32 {
         let t = self.theme;
-        let label = PRESETS[i];
+        let label = crate::i18n::pick(PRESETS[i]);
         let label_w = self.text_width(label, &self.fmt.chip) + 24.0;
         let r = R { x, y, w: label_w + 2.0 * 26.0 + 6.0, h: ROW_H };
         self.fill(rt, r, 4.0, if self.hover == Some(Hit::Preset(i)) { t.card_hover } else { t.card });
@@ -724,10 +734,10 @@ impl Editor {
         rt.Clear(Some(&self.theme.bg));
 
         // Header.
-        self.text(rt, "Цвета клавиш", &self.fmt.title, R { x: MARGIN, y: 18.0, w: 300.0, h: 32.0 }, self.theme.text);
+        self.text(rt, tr!("Цвета клавиш", "Key colors"), &self.fmt.title, R { x: MARGIN, y: 18.0, w: 300.0, h: 32.0 }, self.theme.text);
         self.text(
             rt,
-            "ЛКМ — покрасить · ПКМ — откатить цвет · Ctrl+ЛКМ — пипетка",
+            tr!("ЛКМ — покрасить · ПКМ — откатить цвет · Ctrl+ЛКМ — пипетка", "Left click — paint · Right click — undo · Ctrl+click — eyedropper"),
             &self.fmt.hint_right,
             R { x: W - MARGIN - 460.0, y: 18.0, w: 460.0, h: 32.0 },
             self.theme.text2,
@@ -757,7 +767,7 @@ impl Editor {
             }
             if kd.icon {
                 self.text(rt, kd.label, &self.fmt.key_icon, r, fg);
-            } else if !kd.ru.is_empty() {
+            } else if !kd.ru.is_empty() && !crate::i18n::en() {
                 self.text(rt, kd.label, &self.fmt.key_lead, r.inset(5.0), fg);
                 self.text(rt, kd.ru, &self.fmt.key_ru, r.inset(5.0), fg);
             } else {
@@ -775,7 +785,7 @@ impl Editor {
         // Row 1: brush.
         let x0 = MARGIN + LABEL_W;
         let mut y = ROW_Y;
-        self.text(rt, "Кисть", &self.fmt.label, R { x: MARGIN, y, w: LABEL_W, h: ROW_H }, self.theme.text);
+        self.text(rt, tr!("Кисть", "Brush"), &self.fmt.label, R { x: MARGIN, y, w: LABEL_W, h: ROW_H }, self.theme.text);
         let mut x = x0;
         // With a gradient dot selected, the palette marks (and sets) that dot's color.
         let brush = self.slot.map_or(self.brush_color, |(i, k)| self.preset_colors[i][k]);
@@ -816,29 +826,30 @@ impl Editor {
             self.hits.push((r, hit));
             x += 36.0;
         }
-        let clear_w = self.text_width("Очистить", &self.fmt.chip) + 28.0;
-        let fill_w = self.text_width("Залить всё", &self.fmt.chip) + 28.0;
+        let (clear, fill) = (tr!("Очистить", "Clear"), tr!("Залить всё", "Fill all"));
+        let clear_w = self.text_width(clear, &self.fmt.chip) + 28.0;
+        let fill_w = self.text_width(fill, &self.fmt.chip) + 28.0;
         let right = W - MARGIN;
-        self.chip(rt, right - clear_w - 8.0 - fill_w, y, "Залить всё", Hit::Fill, false);
-        self.chip(rt, right - clear_w, y, "Очистить", Hit::Clear, false);
+        self.chip(rt, right - clear_w - 8.0 - fill_w, y, fill, Hit::Fill, false);
+        self.chip(rt, right - clear_w, y, clear, Hit::Clear, false);
 
         // Row 2: presets.
         y += ROW_STEP;
-        self.text(rt, "Пресеты", &self.fmt.label, R { x: MARGIN, y, w: LABEL_W, h: ROW_H }, self.theme.text);
+        self.text(rt, tr!("Пресеты", "Presets"), &self.fmt.label, R { x: MARGIN, y, w: LABEL_W, h: ROW_H }, self.theme.text);
         let mut x = x0;
         for (i, name) in PRESETS.iter().enumerate() {
-            x = if two_color(i) { self.two_color_chip(rt, x, y, i) } else { self.chip(rt, x, y, name, Hit::Preset(i), false) } + 8.0;
+            x = if two_color(i) { self.two_color_chip(rt, x, y, i) } else { self.chip(rt, x, y, crate::i18n::pick(*name), Hit::Preset(i), false) } + 8.0;
         }
 
         // Row 3: word + layout switch.
         y += ROW_STEP;
-        self.text(rt, "Слово", &self.fmt.label, R { x: MARGIN, y, w: LABEL_W, h: ROW_H }, self.theme.text);
+        self.text(rt, tr!("Слово", "Word"), &self.fmt.label, R { x: MARGIN, y, w: LABEL_W, h: ROW_H }, self.theme.text);
         let tb = R { x: x0, y, w: 260.0, h: ROW_H };
         self.fill(rt, tb, 4.0, self.theme.card);
         self.stroke(rt, tb, 4.0, if self.word_focus { self.theme.accent } else { self.theme.stroke }, if self.word_focus { 2.0 } else { 1.0 });
         let inner = R { x: tb.x + 10.0, y: tb.y, w: tb.w - 20.0, h: tb.h };
         if self.word.is_empty() && !self.word_focus {
-            self.text(rt, "Например: ПРИВЕТ", &self.fmt.body, inner, self.theme.text2);
+            self.text(rt, tr!("Например: ПРИВЕТ", "For example: HELLO"), &self.fmt.body, inner, self.theme.text2);
         } else {
             self.text(rt, &self.word, &self.fmt.body, inner, self.theme.text);
         }
@@ -847,7 +858,7 @@ impl Editor {
             self.fill(rt, R { x: cx, y: tb.y + 8.0, w: 1.5, h: tb.h - 16.0 }, 0.0, self.theme.text);
         }
         self.hits.push((tb, Hit::WordBox));
-        self.chip(rt, tb.x + tb.w + 8.0, y, "Подсветить", Hit::WordApply, false);
+        self.chip(rt, tb.x + tb.w + 8.0, y, tr!("Подсветить", "Light up"), Hit::WordApply, false);
 
         // ANSI / ISO segmented switch.
         let seg_w = 64.0;
@@ -865,12 +876,12 @@ impl Editor {
             self.text(rt, name, &self.fmt.chip, r, if on { self.theme.on_accent } else { self.theme.text });
             self.hits.push((r, Hit::Layout(value)));
         }
-        self.text(rt, "Раскладка", &self.fmt.hint_right, R { x: seg.x - 110.0, y, w: 100.0, h: ROW_H }, self.theme.text2);
+        self.text(rt, tr!("Раскладка", "Layout"), &self.fmt.hint_right, R { x: seg.x - 110.0, y, w: 100.0, h: ROW_H }, self.theme.text2);
 
         // Row 4: saved schemes.
         y += ROW_STEP;
-        self.text(rt, "Схемы", &self.fmt.label, R { x: MARGIN, y, w: LABEL_W, h: ROW_H }, self.theme.text);
-        let mut x = self.chip(rt, x0, y, "+ Сохранить текущую", Hit::SaveScheme, false) + 8.0;
+        self.text(rt, tr!("Схемы", "Schemes"), &self.fmt.label, R { x: MARGIN, y, w: LABEL_W, h: ROW_H }, self.theme.text);
+        let mut x = self.chip(rt, x0, y, tr!("+ Сохранить текущую", "+ Save current"), Hit::SaveScheme, false) + 8.0;
         for (i, name) in schemes.iter().enumerate() {
             let w = self.text_width(name, &self.fmt.chip) + 28.0;
             if x + w > right {
@@ -879,23 +890,24 @@ impl Editor {
             x = self.chip(rt, x, y, name, Hit::Scheme(i), false) + 8.0;
         }
         if schemes.is_empty() {
-            self.text(rt, "Сохранённых схем пока нет", &self.fmt.body, R { x, y, w: 300.0, h: ROW_H }, self.theme.text2);
+            self.text(rt, tr!("Сохранённых схем пока нет", "No saved schemes yet"), &self.fmt.body, R { x, y, w: 300.0, h: ROW_H }, self.theme.text2);
         }
 
         // Bottom.
         self.fill(rt, R { x: 0.0, y: BOTTOM_Y - 12.0, w: W, h: 1.0 }, 0.0, self.theme.stroke);
         self.text(
             rt,
-            "Можно вести мышью с зажатой кнопкой. Изменения сразу на клавиатуре. ПКМ по схеме — удалить.",
+            tr!("Можно вести мышью с зажатой кнопкой. Изменения сразу на клавиатуре. ПКМ по схеме — удалить.", "Drag to paint many keys. Changes apply instantly. Right-click a scheme to delete."),
             &self.fmt.body,
             R { x: MARGIN, y: BOTTOM_Y, w: 560.0, h: 36.0 },
             self.theme.text2,
         );
-        let done_w = self.text_width("Готово", &self.fmt.chip) + 48.0;
+        let done = tr!("Готово", "Done");
+        let done_w = self.text_width(done, &self.fmt.chip) + 48.0;
         let r = R { x: right - done_w, y: BOTTOM_Y + 2.0, w: done_w, h: ROW_H };
         let hovered = self.hover == Some(Hit::Done);
         self.fill(rt, r, 4.0, if hovered { D2D1_COLOR_F { a: 0.85, ..self.theme.accent } } else { self.theme.accent });
-        self.text(rt, "Готово", &self.fmt.chip, r, self.theme.on_accent);
+        self.text(rt, done, &self.fmt.chip, r, self.theme.on_accent);
         self.hits.push((r, Hit::Done));
     }
 
@@ -964,7 +976,7 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
         Hit::SaveScheme => {
             let word = with_editor(|e| e.word.trim().to_string()).unwrap_or_default();
             let mut cfg = crate::config();
-            let name = if word.is_empty() { format!("Схема {}", cfg.schemes.len() + 1) } else { word };
+            let name = if word.is_empty() { format!("{} {}", tr!("Схема", "Scheme"), cfg.schemes.len() + 1) } else { word };
             let keys = keyboard(&mut cfg).keys.clone();
             cfg.schemes.push(Scheme { name, keys });
             cfg.save();

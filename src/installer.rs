@@ -208,7 +208,7 @@ fn create_shortcut(link: &Path, target: &Path, icon: &Path) -> windows::core::Re
         let t = wide(&target.display().to_string());
         let dir = wide(&target.parent().unwrap_or(Path::new(".")).display().to_string());
         let ic = wide(&icon.display().to_string());
-        let desc = wide("Подсветка клавиатуры, мыши и ноутбука");
+        let desc = wide(tr!("Подсветка клавиатуры, мыши и ноутбука", "Keyboard, mouse and laptop lighting"));
         sl.SetPath(PCWSTR(t.as_ptr()))?;
         sl.SetWorkingDirectory(PCWSTR(dir.as_ptr()))?;
         sl.SetIconLocation(PCWSTR(ic.as_ptr()), 0)?;
@@ -230,10 +230,10 @@ fn install(opts: &Options) -> Result<(), String> {
     let me = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = install_dir();
     let exe = installed_exe();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Не удалось создать папку: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{} {e}", tr!("Не удалось создать папку:", "Could not create the folder:")))?;
     stop_running_instance();
     if me != exe {
-        copy_with_retry(&me, &exe).map_err(|e| format!("Не удалось скопировать файл (приложение ещё запущено?): {e}"))?;
+        copy_with_retry(&me, &exe).map_err(|e| format!("{} {e}", tr!("Не удалось скопировать файл (приложение ещё запущено?):", "Could not copy the file (is the app still running?):")))?;
     }
     let icon = dir.join("rgbtray.ico");
     let _ = write_icon(&icon);
@@ -267,14 +267,17 @@ fn install(opts: &Options) -> Result<(), String> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .map_err(|e| format!("Не удалось запустить: {e}"))?;
+        .map_err(|e| format!("{} {e}", tr!("Не удалось запустить:", "Could not start:")))?;
     Ok(())
 }
 
 /// `--uninstall`: removes the app (settings in %APPDATA%\rgbtray are kept).
 pub fn uninstall() {
     unsafe {
-        let text = wide("Удалить RGB Tray?\n\nНастройки и пресеты останутся в %APPDATA%\\rgbtray и вернутся при повторной установке.");
+        let text = wide(tr!(
+            "Удалить RGB Tray?\n\nНастройки и пресеты останутся в %APPDATA%\\rgbtray и вернутся при повторной установке.",
+            "Uninstall RGB Tray?\n\nSettings and presets stay in %APPDATA%\\rgbtray and come back if you install it again."
+        ));
         let caption = wide(DISPLAY_NAME);
         if MessageBoxW(null_mut(), text.as_ptr(), caption.as_ptr(), MB_YESNO | MB_ICONQUESTION) != IDYES {
             return;
@@ -408,7 +411,7 @@ unsafe fn open(opts: Options, previous: Option<String>) -> windows::core::Result
     let work = mi.rcWork;
     let x = work.left + ((work.right - work.left) - w) / 2;
     let y = work.top + ((work.bottom - work.top) - h) / 2;
-    let title = wide(&format!("Установка {DISPLAY_NAME} {VERSION}"));
+    let title = wide(&format!("{} {DISPLAY_NAME} {VERSION}", tr!("Установка", "Setup")));
     let hwnd = CreateWindowExW(0, class.as_ptr(), title.as_ptr(), style, x, y, w, h, null_mut(), null_mut(), hinst, null());
 
     let theme = theme();
@@ -525,9 +528,9 @@ impl Setup {
         self.logo(rt, PAD + 24.0, PAD + 24.0, 24.0);
         self.text(rt, &format!("{DISPLAY_NAME} {VERSION}"), &self.title, R { x: PAD + 64.0, y: PAD, w: 300.0, h: 28.0 }, t.text);
         let subtitle = match &self.previous {
-            Some(v) if v == VERSION => "Переустановка той же версии".to_string(),
-            Some(v) => format!("Обновление с версии {v}"),
-            None => "Подсветка клавиатуры, мыши и ноутбука".to_string(),
+            Some(v) if v == VERSION => tr!("Переустановка той же версии", "Reinstalling the same version").to_string(),
+            Some(v) => format!("{} {v}", tr!("Обновление с версии", "Updating from version")),
+            None => tr!("Подсветка клавиатуры, мыши и ноутбука", "Keyboard, mouse and laptop lighting").to_string(),
         };
         self.text(rt, &subtitle, &self.body, R { x: PAD + 64.0, y: PAD + 28.0, w: 320.0, h: 20.0 }, t.text2);
 
@@ -535,20 +538,20 @@ impl Setup {
         match &self.stage {
             Stage::Ready => {
                 let text = if self.previous.is_some() {
-                    "Работающая версия будет закрыта и заменена. Настройки, пресеты и цвета клавиш сохранятся.".to_string()
+                    tr!("Работающая версия будет закрыта и заменена. Настройки, пресеты и цвета клавиш сохранятся.", "The running version will be closed and replaced. Settings, presets and key colors are kept.").to_string()
                 } else {
-                    format!("Будет установлено в {}", install_dir().display())
+                    format!("{} {}", tr!("Будет установлено в", "Installs to"), install_dir().display())
                 };
                 self.text(rt, &text, &self.body, info, t.text2);
                 let hs = hits(&self.stage);
-                self.checkbox(rt, hs[0].0, self.opts.autostart, "Запускать вместе с Windows", self.hover == Some(Hit::Autostart));
-                self.checkbox(rt, hs[1].0, self.opts.shortcut, "Ярлык в меню «Пуск»", self.hover == Some(Hit::Shortcut));
+                self.checkbox(rt, hs[0].0, self.opts.autostart, tr!("Запускать вместе с Windows", "Start with Windows"), self.hover == Some(Hit::Autostart));
+                self.checkbox(rt, hs[1].0, self.opts.shortcut, tr!("Ярлык в меню «Пуск»", "Start menu shortcut"), self.hover == Some(Hit::Shortcut));
             }
             Stage::Done => {
-                self.text(rt, "Готово! Приложение запущено — значок уже в трее.", &self.body, info, t.text);
+                self.text(rt, tr!("Готово! Приложение запущено — значок уже в трее.", "Done! The app is running — its icon is in the tray."), &self.body, info, t.text);
             }
             Stage::Failed(e) => {
-                self.text(rt, &format!("Не получилось: {e}"), &self.body, R { h: 90.0, ..info }, t.text);
+                self.text(rt, &format!("{} {e}", tr!("Не получилось:", "Failed:")), &self.body, R { h: 90.0, ..info }, t.text);
             }
         }
 
@@ -556,18 +559,18 @@ impl Setup {
             let hovered = self.hover == Some(hit);
             match (hit, &self.stage) {
                 (Hit::Install, _) => {
-                    let label = if self.previous.is_some() { "Обновить" } else { "Установить" };
+                    let label = if self.previous.is_some() { tr!("Обновить", "Update") } else { tr!("Установить", "Install") };
                     self.fill(rt, r, 4.0, if hovered { D2D1_COLOR_F { a: 0.85, ..t.accent } } else { t.accent });
                     self.text(rt, label, &self.button, r, t.on_accent);
                 }
                 (Hit::Cancel, Stage::Ready) => {
                     self.fill(rt, r, 4.0, if hovered { t.card_hover } else { t.card });
                     self.stroke(rt, r, 4.0, t.stroke);
-                    self.text(rt, "Отмена", &self.button, r, t.text);
+                    self.text(rt, tr!("Отмена", "Cancel"), &self.button, r, t.text);
                 }
                 (Hit::Cancel, _) => {
                     self.fill(rt, r, 4.0, if hovered { D2D1_COLOR_F { a: 0.85, ..t.accent } } else { t.accent });
-                    self.text(rt, "Закрыть", &self.button, r, t.on_accent);
+                    self.text(rt, tr!("Закрыть", "Close"), &self.button, r, t.on_accent);
                 }
                 _ => {}
             }

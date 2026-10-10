@@ -69,23 +69,23 @@ impl Razer {
         buf[9..9 + args.len()].copy_from_slice(args);
         buf[89] = buf[3..89].iter().fold(0, |a, b| a ^ b);
         if !self.hid.set_feature(&buf) {
-            return Err("Razer: ошибка отправки".into());
+            return Err("Razer: send failed".into());
         }
         for _ in 0..15 {
             std::thread::sleep(Duration::from_millis(20));
             let mut r = [0u8; 91];
             if !self.hid.get_feature(&mut r) {
-                return Err("Razer: ошибка чтения".into());
+                return Err("Razer: read failed".into());
             }
             match r[1] {
                 0x01 => continue, // busy
                 0x02 => return Ok(r),
                 0x04 => return Err(super::NO_LINK.into()),
-                0x05 => return Err("Razer: команда не поддерживается".into()),
-                s => return Err(format!("Razer: статус {s:#04x}")),
+                0x05 => return Err("Razer: command not supported".into()),
+                s => return Err(format!("Razer: status {s:#04x}")),
             }
         }
-        Err("Razer: устройство занято".into())
+        Err("Razer: device busy".into())
     }
 }
 
