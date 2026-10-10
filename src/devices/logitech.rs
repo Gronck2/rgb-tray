@@ -53,6 +53,29 @@ const KEYS_SET_INDIVIDUAL: u8 = 1; // up to 4 × [zone, r, g, b]
 const KEYS_SET_SAME_COLOR: u8 = 6; // [r, g, b] + up to 13 zones
 const KEYS_FRAME_END: u8 = 7;
 
+/// When the keyboard last woke up (it answered only a retried request, or the receiver
+/// reported it connected).
+static WOKE_AT: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// How long lighting commands wait after the keyboard wakes. Right after waking the G915
+/// restores its own lighting, and effects sent meanwhile seem to make it ignore every later
+/// effect until it is switched off and on (both hangs of 11.10.2026 came ~1 s after a wake).
+const WAKE_SETTLE: Duration = Duration::from_secs(3);
+
+fn woke() {
+    crate::log("logitech: keyboard woke up");
+    *WOKE_AT.lock().unwrap() = Some(Instant::now());
+}
+
+/// Waits until a keyboard that just woke up has settled.
+fn settle() {
+    let Some(at) = *WOKE_AT.lock().unwrap() else { return };
+    if let Some(left) = WAKE_SETTLE.checked_sub(at.elapsed()) {
+        crate::log(&format!("logitech: waiting {} ms after wake-up", left.as_millis()));
+        std::thread::sleep(left);
+    }
+}
+
 /// Interfaces (receiver or cable) where keyboards were found: (HID path, device id).
 static SEEN: Mutex<Vec<(Vec<u16>, String)>> = Mutex::new(Vec::new());
 /// At the last search a receiver's keyboard slot didn't answer (a sleeping or switched-off
@@ -185,6 +208,7 @@ impl Logitech {
         // The G915 sometimes stops taking effects until it is switched off and on; the
         // sequence of commands before that shows in the log.
         crate::log(&format!("{}: per-key colors, {} keys, brightness {brightness}", self.id, keys.len()));
+        settle();
         self.req(5, &[0x01, 0x01])?;
         // Firmware effects must be disabled, otherwise they paint over the keys.
         for (zone, ids) in self.zones.iter().enumerate() {
@@ -231,6 +255,7 @@ impl Logitech {
 impl Device for Logitech {
     fn apply(&self, effect: Effect, color: Rgb, brightness: u8) -> Result<(), String> {
         crate::log(&format!("{}: {effect:?} {color:?} brightness {brightness}", self.id));
+        settle();
         // Take lighting control from the onboard mode.
         self.req(5, &[0x01, 0x01])?;
         let Rgb(r, g, b) = color.scaled(brightness);
@@ -319,6 +344,7 @@ fn request(hid: &Hid, dev: u8, sw: u8, feat: u8, func: u8, args: &[u8]) -> Resul
         }
     }
     if retried && result.is_ok() {
+        woke();
         drain(hid, Duration::from_millis(600));
     }
     result
@@ -368,6 +394,9 @@ fn request_once(hid: &Hid, dev: u8, sw: u8, feat: u8, func: u8, args: &[u8]) -> 
             return Err(format!("HID++: error {:#04x} (feat {feat:#04x} fn {func})", r[5]));
         }
         if r[2] == feat && r[3] == msg[3] {
+            if crate::trace_enabled() {
+                crate::log(&format!("hid++ < {:02X?}", &r[..8]));
+            }
             return Ok(r);
         }
     }
@@ -398,6 +427,11 @@ pub fn spawn_watcher(on_change: impl Fn() + Send + Sync + 'static) {
                         // 0x41: device connection notification (bit 6 of byte 4 set = link lost).
                         Ok(Some(_)) => {
                             if buf[0] == 0x10 && buf[2] == 0x41 {
+                                let lost = buf[4] & 0x40 != 0;
+                                crate::log(&format!("logitech receiver: device {} {}", buf[1], if lost { "link lost" } else { "connected" }));
+                                if !lost {
+                                    woke();
+                                }
                                 on_change();
                             }
                         }
