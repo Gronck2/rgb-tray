@@ -53,8 +53,8 @@
 
 - [x] `git init`, `.gitignore` (target, dist), первый коммит (v0.5.1).
 - [x] Файлы лицензии LICENSE-MIT и LICENSE-APACHE, `license` в Cargo.toml.
-- [ ] README на английском и русском: что умеет, поддерживаемые устройства, установка, скриншоты.
-- [ ] Благодарности в README: OpenRGB, OpenRazer, Solaar (источники сведений о протоколах).
+- [x] README на английском и русском: что умеет, поддерживаемые устройства, установка, скриншоты (README.md, README.ru.md).
+- [x] Благодарности в README: OpenRGB, OpenRazer, Solaar, QMK/VIA.
 - [ ] Публикация репозитория на GitHub (делает владелец).
 
 ## Этап 2. Устройства как дополнения
