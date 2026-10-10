@@ -42,7 +42,7 @@ const LABEL_W: f32 = 84.0;
 const BOTTOM_Y: f32 = ROW_Y + ROW_STEP * 4.0 + 8.0;
 const H: f32 = BOTTOM_Y + 36.0 + MARGIN;
 
-const PRESETS: [&str; 5] = ["Радуга", "Градиент", "WASD", "Смайл", "Только буквы"];
+const PRESETS: [&str; 4] = ["Радуга", "Градиент", "WASD", "Только буквы"];
 const OFF: Rgb = Rgb(0, 0, 0);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -229,10 +229,9 @@ fn rollback_key(code: u8) -> Option<Rgb> {
 /// Presets in PRESETS that use two chosen colors (shown as dots on their buttons).
 const GRADIENT: usize = 1;
 const WASD: usize = 2;
-const SMILEY: usize = 3;
 
 fn two_color(i: usize) -> bool {
-    matches!(i, GRADIENT | WASD | SMILEY)
+    matches!(i, GRADIENT | WASD)
 }
 
 /// Starting colors of the two-color presets.
@@ -243,8 +242,7 @@ fn default_colors() -> [[Rgb; 2]; PRESETS.len()] {
     // Gradient: the start color into a shifted hue. WASD: bright keys on a dim keyboard.
     c[GRADIENT] = [start, hsv(h + 150.0, s.max(0.6), v.max(0.8))];
     c[WASD] = [start, mix(OFF, start, 0.12)];
-    // Smiley: the face on an unlit keyboard.
-    c[SMILEY] = [start, OFF];
+
     c
 }
 
@@ -286,18 +284,7 @@ fn apply_preset(i: usize, brush: Rgb, colors: [Rgb; 2]) {
                 set_tracked(&mut cfg, kd.code, if on { colors[0] } else { colors[1] });
             }
         }
-        // A smiley drawn with letter keys, on a background of the second color.
-        SMILEY => {
-            for kd in keys.iter().filter(|k| k.code != 0) {
-                set_tracked(&mut cfg, kd.code, colors[1]);
-            }
-            for label in ["R", "U", "D", "K", "C", "V", "B", "N", "M"] {
-                if let Some(code) = keymap::code_by_label(label) {
-                    set_tracked(&mut cfg, code, colors[0]);
-                }
-            }
-            set_tracked(&mut cfg, keymap::LOGO, colors[0]);
-        }
+
         // Only letters lit.
         _ => {
             for kd in keys.iter().filter(|k| k.code != 0) {

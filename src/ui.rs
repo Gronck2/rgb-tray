@@ -72,6 +72,8 @@ const ICON_CHEVRON_DOWN: &str = "\u{E70D}";
 const ICON_CHEVRON_UP: &str = "\u{E70E}";
 const ICON_WARNING: &str = "\u{E7BA}";
 const ICON_REFRESH: &str = "\u{E72C}";
+const ICON_PIN: &str = "\u{E718}";
+const ICON_PINNED: &str = "\u{E841}";
 const ICON_ADD: &str = "\u{E710}";
 const ICON_POWER: &str = "\u{E7E8}";
 const ICON_BRIGHTNESS: &str = "\u{E706}";
@@ -114,6 +116,8 @@ enum Hit {
     RenameDevice(usize),
     /// "Отключить" on the warning about the Logitech LampArray service.
     DisableService,
+    /// Keeps the panel open when it loses focus.
+    Pin,
 }
 
 /// A row of the device list.
@@ -232,6 +236,11 @@ fn slider_rect() -> R {
     R { x: PAD, y: SLIDER_Y, w: W - 2.0 * PAD, h: SLIDER_H }
 }
 
+/// The pin button left of the refresh button in the header.
+fn pin_rect() -> R {
+    R { x: W - PAD - 32.0 - 36.0, y: 12.0, w: 32.0, h: 32.0 }
+}
+
 /// The "Клавиши" button of a keyboard card, on the line of the device name.
 fn keys_button_rect(card: R) -> R {
     R { x: card.x + card.w - 44.0 - 82.0, y: card.y + 5.0, w: 82.0, h: 22.0 }
@@ -300,7 +309,7 @@ fn text_width(s: &str, fmt: &IDWriteTextFormat) -> f32 {
 
 /// Clickable parts of the header and the device list (panel coordinates).
 fn card_layout(rows: &[(R, Row)]) -> Vec<(R, Hit)> {
-    let mut v = vec![(R { x: W - PAD - 32.0, y: 12.0, w: 32.0, h: 32.0 }, Hit::Reapply)];
+    let mut v = vec![(R { x: W - PAD - 32.0, y: 12.0, w: 32.0, h: 32.0 }, Hit::Reapply), (pin_rect(), Hit::Pin)];
     for (i, (r, row)) in rows.iter().enumerate() {
         // Buttons on a card come first, so hit-testing finds them before the card.
         match row {
@@ -767,7 +776,7 @@ fn zone_rects() -> Vec<R> {
         .collect()
 }
 static PICKING: AtomicBool = AtomicBool::new(false);
-/// Keeps the panel open when it loses focus (`--show`, for screenshots).
+/// Keeps the panel open when it loses focus: the pin button (stays on for later opens) or `--show`.
 pub static PINNED: AtomicBool = AtomicBool::new(false);
 static LAST_CLOSE: AtomicU64 = AtomicU64::new(0);
 
@@ -1210,6 +1219,15 @@ impl Flyout {
             self.fill(rt, refresh, 4.0, t.card_hover);
         }
         self.text(rt, ICON_REFRESH, &f.icon_small, refresh, t.text);
+        // Pinned: the panel stays open and on top while working elsewhere.
+        let pin = pin_rect();
+        let pinned = PINNED.load(Ordering::Relaxed);
+        if pinned {
+            self.fill(rt, pin, 4.0, D2D1_COLOR_F { a: 0.2, ..t.accent });
+        } else if hover(Hit::Pin) {
+            self.fill(rt, pin, 4.0, t.card_hover);
+        }
+        self.text(rt, if pinned { ICON_PINNED } else { ICON_PIN }, &f.icon_small, pin, if pinned { t.accent } else { t.text });
 
         // Device list.
         for (i, (r, row)) in v.rows.iter().enumerate() {
@@ -1899,6 +1917,9 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
             with_flyout(|f| f.autostart = on);
         }
         Hit::Reapply => crate::apply_all(),
+        Hit::Pin => {
+            PINNED.fetch_xor(true, Ordering::Relaxed);
+        }
         Hit::Exit => {
             DestroyWindow(hwnd);
             crate::quit();
