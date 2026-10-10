@@ -55,6 +55,7 @@
 - [x] Файлы лицензии LICENSE-MIT и LICENSE-APACHE, `license` в Cargo.toml.
 - [x] README на английском и русском: что умеет, поддерживаемые устройства, установка, скриншоты (README.md, README.ru.md).
 - [x] Благодарности в README: OpenRGB, OpenRazer, Solaar, QMK/VIA.
+- [x] Первый релиз v0.6.0 с установщиком: https://github.com/Gronck2/rgb-tray/releases/tag/v0.6.0 (10.10.2026, пока в приватном репозитории).
 - [ ] Публикация репозитория на GitHub (делает владелец).
 
 ## Этап 2. Устройства как дополнения
