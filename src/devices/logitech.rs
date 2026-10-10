@@ -410,3 +410,29 @@ pub fn spawn_watcher(on_change: impl Fn() + Send + Sync + 'static) {
         std::thread::sleep(Duration::from_secs(5));
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn battery_percent_from_voltage() {
+        assert_eq!(percent_from_millivolts(4300), 100);
+        assert_eq!(percent_from_millivolts(4186), 100);
+        assert_eq!(percent_from_millivolts(3811), 50);
+        assert_eq!(percent_from_millivolts(3835), 55);
+        assert_eq!(percent_from_millivolts(3671), 10);
+        assert_eq!(percent_from_millivolts(3500), 0);
+        assert_eq!(percent_from_millivolts(3000), 0);
+    }
+
+    #[test]
+    fn battery_percent_never_rises_as_voltage_drops() {
+        let mut last = 100;
+        for mv in (3000..4300).rev() {
+            let p = percent_from_millivolts(mv);
+            assert!(p <= last, "{mv} mV: {p}% after {last}%");
+            last = p;
+        }
+    }
+}

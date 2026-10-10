@@ -203,3 +203,53 @@ pub fn code_for_char(c: char) -> Option<u8> {
 pub fn code_by_label(label: &str) -> Option<u8> {
     COMMON.iter().find(|kd| kd.y > 0.0 && kd.label == label).map(|kd| kd.code)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codes_are_sorted_unique_and_non_zero() {
+        let codes = all_codes();
+        assert!(codes.windows(2).all(|w| w[0] < w[1]));
+        assert!(!codes.contains(&0));
+        // G915 TKL, ANSI and ISO together (the log shows "per-key colors, 95 keys").
+        assert_eq!(codes.len(), 95);
+        for iso in [false, true] {
+            assert!(layout(iso).iter().filter(|k| k.code != 0).all(|k| codes.contains(&k.code)));
+        }
+    }
+
+    #[test]
+    fn layouts_have_no_duplicate_keys() {
+        for iso in [false, true] {
+            let mut codes: Vec<u8> = layout(iso).iter().map(|k| k.code).filter(|&c| c != 0).collect();
+            let n = codes.len();
+            codes.sort_unstable();
+            codes.dedup();
+            assert_eq!(codes.len(), n, "iso = {iso}");
+        }
+    }
+
+    #[test]
+    fn hid_usages() {
+        assert_eq!(usage_of(k(0x04)), Some(0x04)); // A
+        assert_eq!(usage_of(k(0x2C)), Some(0x2C)); // Space
+        assert_eq!(usage_of(m(0xE0)), Some(0xE0)); // Left Ctrl
+        assert_eq!(usage_of(m(0xE7)), Some(0xE7)); // Right Win
+        assert_eq!(usage_of(LOGO), None);
+        assert_eq!(usage_of(MEDIA_PLAY), None);
+    }
+
+    #[test]
+    fn characters_to_keys() {
+        assert_eq!(code_for_char('a'), Some(k(0x04)));
+        assert_eq!(code_for_char('A'), Some(k(0x04)));
+        assert_eq!(code_for_char('ф'), Some(k(0x04)));
+        assert_eq!(code_for_char('1'), Some(k(0x1E)));
+        assert_eq!(code_for_char(' '), Some(k(0x2C)));
+        // "G" is also printed on the logo in the top strip; the letter key is meant.
+        assert_eq!(code_for_char('g'), Some(k(0x0A)));
+        assert_eq!(code_for_char('€'), None);
+    }
+}

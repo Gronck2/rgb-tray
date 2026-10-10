@@ -246,3 +246,26 @@ impl Device for Via {
         self.set(Value::Brightness, &[value_of(color, brightness)])
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qmk_hue_and_saturation() {
+        assert_eq!(hue_sat(Rgb(255, 0, 0)), (0, 255));
+        assert_eq!(hue_sat(Rgb(0, 255, 0)), (85, 255));
+        assert_eq!(hue_sat(Rgb(0, 0, 255)), (170, 255));
+        assert_eq!(hue_sat(Rgb(255, 128, 128)), (0, 127));
+        assert_eq!(hue_sat(Rgb(128, 128, 128)), (0, 0));
+        assert_eq!(hue_sat(Rgb(0, 0, 0)), (0, 0));
+    }
+
+    #[test]
+    fn qmk_value() {
+        assert_eq!(value_of(Rgb(255, 0, 0), 100), 255);
+        assert_eq!(value_of(Rgb(255, 0, 0), 50), 127);
+        assert_eq!(value_of(Rgb(100, 20, 0), 100), 100);
+        assert_eq!(value_of(Rgb(255, 0, 0), 200), 255);
+    }
+}

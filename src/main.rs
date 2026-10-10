@@ -1230,3 +1230,15 @@ fn main() {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn short_ids() {
+        assert_eq!(short_id("naga-123456H78900012"), "naga-…0012");
+        assert_eq!(short_id("dock-AB12"), "dock-AB12");
+        assert_eq!(short_id("asus"), "asus");
+    }
+}

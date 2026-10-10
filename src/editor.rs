@@ -1208,3 +1208,34 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hsv_colors() {
+        assert_eq!(hsv(0.0, 1.0, 1.0), Rgb(255, 0, 0));
+        assert_eq!(hsv(120.0, 1.0, 1.0), Rgb(0, 255, 0));
+        assert_eq!(hsv(240.0, 1.0, 1.0), Rgb(0, 0, 255));
+        assert_eq!(hsv(360.0, 1.0, 1.0), Rgb(255, 0, 0));
+        assert_eq!(hsv(-120.0, 1.0, 1.0), Rgb(0, 0, 255));
+        assert_eq!(hsv(77.0, 0.0, 0.5), Rgb(128, 128, 128));
+    }
+
+    #[test]
+    fn hsv_round_trip() {
+        for c in [Rgb(255, 0, 0), Rgb(10, 227, 239), Rgb(200, 100, 50), Rgb(17, 17, 17), Rgb(0, 0, 0), Rgb(255, 255, 255)] {
+            let (h, s, v) = to_hsv(c);
+            assert_eq!(hsv(h, s, v), c);
+        }
+    }
+
+    #[test]
+    fn mixing() {
+        assert_eq!(mix(Rgb(0, 0, 0), Rgb(255, 255, 255), 0.5), Rgb(128, 128, 128));
+        assert_eq!(mix(Rgb(10, 20, 30), Rgb(200, 0, 0), 0.0), Rgb(10, 20, 30));
+        assert_eq!(mix(Rgb(10, 20, 30), Rgb(200, 0, 0), 1.0), Rgb(200, 0, 0));
+        assert!((luminance(Rgb(255, 255, 255)) - 1.0).abs() < 1e-6);
+    }
+}

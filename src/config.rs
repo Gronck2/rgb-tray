@@ -410,3 +410,194 @@ impl Config {
         self.devices.entry(id.to_string()).or_insert(inherited)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn device(effect: Effect, color: &str) -> DeviceConfig {
+        DeviceConfig { effect, color: color.into(), ..DeviceConfig::default() }
+    }
+
+    fn ids(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn hex_round_trip() {
+        assert_eq!(parse_hex("#0AE3EF"), Rgb(0x0A, 0xE3, 0xEF));
+        assert_eq!(parse_hex("0ae3ef"), Rgb(0x0A, 0xE3, 0xEF));
+        assert_eq!(to_hex(Rgb(0x0A, 0xE3, 0xEF)), "#0AE3EF");
+        // Broken values read as black instead of failing the whole config.
+        assert_eq!(parse_hex("#zzzzzz"), Rgb(0, 0, 0));
+    }
+
+    #[test]
+    fn setting_one_zone_keeps_the_others() {
+        let mut d = device(Effect::Static, "#FF0000");
+        d.set_zone(5, Rgb(0, 0, 255), &[4, 5]);
+        assert_eq!(d.zone_rgb(4), Rgb(255, 0, 0));
+        assert_eq!(d.zone_rgb(5), Rgb(0, 0, 255));
+        // Changing the main color later doesn't repaint a zone that was set.
+        d.set_rgb(Rgb(0, 255, 0));
+        assert_eq!(d.zone_rgb(4), Rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn uniform_key_colors_look_like_a_steady_color() {
+        let mut d = DeviceConfig { per_key: true, ..DeviceConfig::default() };
+        for c in crate::keymap::all_codes() {
+            d.set_key(c, Rgb(0, 255, 0));
+        }
+        let v = d.visible();
+        assert!(!v.per_key && v.effect == Effect::Static && v.rgb() == Rgb(0, 255, 0));
+
+        for c in crate::keymap::all_codes() {
+            d.set_key(c, Rgb(0, 0, 0));
+        }
+        assert!(d.visible().effect == Effect::Off);
+
+        // One key different: still per-key.
+        d.set_key(crate::keymap::all_codes()[0], Rgb(1, 2, 3));
+        assert!(d.visible().per_key);
+    }
+
+    #[test]
+    fn preset_round_trip() {
+        let mut cfg = Config::default();
+        cfg.devices.insert("naga-A".into(), DeviceConfig { name: "Mouse".into(), ..device(Effect::Breathe, "#112233") });
+        cfg.brightness = 70;
+        let p = cfg.snapshot("Evening".into());
+        assert!(cfg.matches(&p));
+        // The preset stores lighting only, not the user's name for the device.
+        assert!(p.devices["naga-A"].name.is_empty());
+
+        cfg.devices.get_mut("naga-A").unwrap().set_rgb(Rgb(9, 9, 9));
+        assert!(!cfg.matches(&p));
+        cfg.brightness = 20;
+        cfg.load_preset(&p);
+        assert!(cfg.matches(&p));
+        assert_eq!(cfg.brightness, 70);
+        assert_eq!(cfg.devices["naga-A"].name, "Mouse");
+    }
+
+    #[test]
+    fn preset_ignores_devices_it_does_not_know() {
+        let mut cfg = Config::default();
+        cfg.devices.insert("naga-A".into(), device(Effect::Static, "#FF0000"));
+        let p = cfg.snapshot("P".into());
+        cfg.devices.insert("dock-B".into(), device(Effect::Cycle, "#00FF00"));
+        assert!(cfg.matches(&p));
+        cfg.load_preset(&p);
+        assert!(cfg.devices["dock-B"].effect == Effect::Cycle);
+    }
+
+    #[test]
+    fn uniform_color() {
+        let mut cfg = Config::default();
+        cfg.devices.insert("naga-A".into(), device(Effect::Static, "#FF0000"));
+        cfg.devices.insert("dock-B".into(), device(Effect::Breathe, "#FF0000"));
+        assert_eq!(cfg.uniform_color(&ids(&["naga-A", "dock-B"])), Some(Rgb(255, 0, 0)));
+        cfg.devices.get_mut("dock-B").unwrap().effect = Effect::Cycle;
+        assert_eq!(cfg.uniform_color(&ids(&["naga-A", "dock-B"])), None);
+    }
+
+    #[test]
+    fn effective_brightness_never_reaches_zero() {
+        let mut cfg = Config::default();
+        cfg.devices.insert("naga-A".into(), DeviceConfig { brightness: 50, ..DeviceConfig::default() });
+        cfg.brightness = 80;
+        assert_eq!(cfg.effective_brightness("naga-A"), 40);
+        cfg.brightness = 1;
+        assert_eq!(cfg.effective_brightness("naga-A"), 1);
+    }
+
+    #[test]
+    fn register_moves_single_device_settings_of_old_versions() {
+        let mut cfg = Config::default();
+        cfg.devices.insert("logitech".into(), device(Effect::Breathe, "#FF0000"));
+        let mut p = cfg.snapshot("P".into());
+        p.devices.insert("logitech".into(), device(Effect::Static, "#0000FF"));
+        cfg.presets.push(p);
+        cfg.per_key = true;
+        cfg.keys.insert("4".into(), "#00FF00".into());
+
+        assert!(cfg.register(&ids(&["logitech-1A2B3C4D"])));
+        assert!(!cfg.devices.contains_key("logitech"));
+        let d = &cfg.devices["logitech-1A2B3C4D"];
+        assert!(d.effect == Effect::Breathe && d.color == "#FF0000");
+        assert!(d.per_key && d.key_color(4) == Rgb(0, 255, 0));
+        assert!(!cfg.per_key && cfg.keys.is_empty());
+        assert_eq!(cfg.presets[0].devices["logitech-1A2B3C4D"].color, "#0000FF");
+        assert!(!cfg.presets[0].devices.contains_key("logitech"));
+    }
+
+    #[test]
+    fn register_names_a_second_identical_device() {
+        let mut cfg = Config::default();
+        cfg.devices.insert("naga-A".into(), device(Effect::Static, "#123456"));
+        cfg.register(&ids(&["naga-A", "naga-B"]));
+        let b = &cfg.devices["naga-B"];
+        assert_eq!(b.name, format!("{} 2", kind_of("naga-B").name()));
+        // A new device starts with the look of the others.
+        assert_eq!(b.color, "#123456");
+        assert_eq!(cfg.display_name("naga-A"), kind_of("naga-A").name());
+    }
+
+    #[test]
+    fn register_by_port_takes_over_an_absent_device_of_its_model() {
+        let mut cfg = Config::default();
+        cfg.devices.insert("macropad-OLD".into(), device(Effect::Cycle, "#ABCDEF"));
+        cfg.register(&ids(&["macropad-NEW"]));
+        assert!(!cfg.devices.contains_key("macropad-OLD"));
+        assert!(cfg.devices["macropad-NEW"].effect == Effect::Cycle);
+
+        // Both connected: nothing to take over.
+        let mut cfg = Config::default();
+        cfg.devices.insert("macropad-OLD".into(), device(Effect::Cycle, "#ABCDEF"));
+        cfg.register(&ids(&["macropad-OLD", "macropad-NEW"]));
+        assert!(cfg.devices.contains_key("macropad-OLD") && cfg.devices.contains_key("macropad-NEW"));
+    }
+
+    #[test]
+    fn forget_removes_the_device_from_presets() {
+        let mut cfg = Config::default();
+        cfg.devices.insert("naga-A".into(), DeviceConfig::default());
+        cfg.presets.push(cfg.snapshot("P".into()));
+        cfg.forget("naga-A");
+        assert!(cfg.devices.is_empty() && cfg.presets[0].devices.is_empty());
+    }
+
+    #[test]
+    fn toml_round_trip_and_old_files() {
+        let mut cfg = Config::default();
+        cfg.devices.insert("naga-A".into(), DeviceConfig { brightness: 40, ..device(Effect::Breathe, "#010203") });
+        cfg.presets.push(Preset { hotkey: Some(Hotkey { mods: 2, vk: 0x7C }), ..cfg.snapshot("P".into()) });
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        let back: Config = toml::from_str(&text).unwrap();
+        assert!(back.devices == cfg.devices);
+        assert!(back.presets[0].hotkey == Some(Hotkey { mods: 2, vk: 0x7C }));
+
+        // A minimal file of an old version: everything missing gets its default.
+        let old: Config = toml::from_str("brightness = 50\n[devices.naga]\neffect = \"static\"\ncolor = \"#112233\"\n").unwrap();
+        assert_eq!(old.brightness, 50);
+        assert_eq!(old.devices["naga"].brightness, 100);
+        assert_eq!(old.custom_colors.len(), 16);
+    }
+
+    #[test]
+    fn sorted_by_model_then_name() {
+        let mut cfg = Config::default();
+        cfg.devices.insert("naga-B".into(), DeviceConfig { name: "b".into(), ..DeviceConfig::default() });
+        cfg.devices.insert("naga-A".into(), DeviceConfig { name: "a".into(), ..DeviceConfig::default() });
+        let v = cfg.sorted(ids(&["asus", "naga-B", "logitech-X", "naga-A"]));
+        assert_eq!(v, ids(&["logitech-X", "naga-A", "naga-B", "asus"]));
+    }
+
+    #[test]
+    fn hotkey_labels() {
+        assert_eq!(Hotkey { mods: 0x2 | 0x4, vk: 0x7C }.label(), "Ctrl+Shift+F13");
+        assert_eq!(Hotkey { mods: 0x1, vk: 0x41 }.label(), "Alt+A");
+        assert_eq!(Hotkey { mods: 0x8, vk: 0x61 }.label(), "Win+Num1");
+    }
+}

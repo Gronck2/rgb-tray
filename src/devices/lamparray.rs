@@ -432,7 +432,6 @@ fn by_position(group: &[&Lamp]) -> Option<Vec<ZoneDraft>> {
     }
     Some(out)
 }
-/// Zones of the devices found, by device id; and by HID path, so lamps are read only once.
 /// What is known about a device's lamps: its zones and which lamps light which key.
 struct Layout {
     id: String,
@@ -689,5 +688,75 @@ pub fn describe(info: &HidInfo) -> String {
             )
         }
         Err(e) => e,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lamp(id: u16, x: u32, y: u32, purposes: u32, key: u32) -> Lamp {
+        Lamp { id, pos: (x, y, 0), purposes, levels: (255, 255, 255, 1), programmable: true, key }
+    }
+
+    fn names(zones: &[Zone]) -> Vec<&str> {
+        zones.iter().map(|z| z.names.1.as_str()).collect()
+    }
+
+    #[test]
+    fn asus_laptop_keyboard() {
+        // As the ASUS 0B05:19B6 reports it: 4 unbound key lamps (listed out of order) and
+        // 4 accent lamps at the corners of the body.
+        let lamps = [
+            lamp(0, 300, 50, 1, 0),
+            lamp(1, 100, 50, 1, 0),
+            lamp(2, 400, 50, 1, 0),
+            lamp(3, 200, 50, 1, 0),
+            lamp(4, 0, 0, 2, 0),
+            lamp(5, 500, 0, 2, 0),
+            lamp(6, 0, 90, 2, 0),
+            lamp(7, 500, 90, 2, 0),
+        ];
+        let zones = zones_from(&lamps);
+        assert_eq!(names(&zones), ["1", "2", "3", "4", "↖", "↗", "↙", "↘"]);
+        let lamps_of: Vec<&[u16]> = zones.iter().map(|z| z.lamps.as_slice()).collect();
+        assert_eq!(lamps_of, [&[1][..], &[3], &[0], &[2], &[4], &[5], &[6], &[7]]);
+        assert_eq!(zones.iter().map(|z| z.led).collect::<Vec<_>>(), (1..=8).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn one_group_has_no_zones() {
+        let lamps: Vec<Lamp> = (0..10).map(|i| lamp(i, i as u32, 0, 2, 0)).collect();
+        assert!(zones_from(&lamps).is_empty());
+    }
+
+    #[test]
+    fn keys_bound_to_usages_are_one_zone() {
+        let mut lamps: Vec<Lamp> = (0..20).map(|i| lamp(i, i as u32 * 10, 0, 1, 4 + i as u32)).collect();
+        lamps.push(lamp(20, 0, 0, 4, 0));
+        let zones = zones_from(&lamps);
+        assert_eq!(names(&zones), ["Keys", "Logo"]);
+        assert_eq!(zones[0].lamps.len(), 20);
+    }
+
+    #[test]
+    fn too_many_unbound_key_lamps_merge() {
+        let mut lamps: Vec<Lamp> = (0..12).map(|i| lamp(i, i as u32 * 10, 0, 1, 0)).collect();
+        lamps.push(lamp(12, 0, 0, 2, 0));
+        let zones = zones_from(&lamps);
+        assert_eq!(names(&zones), ["Keys", "Body"]);
+        assert_eq!(zones[0].lamps.len(), 12);
+    }
+
+    #[test]
+    fn lamps_in_one_row_are_left_and_right() {
+        let lamps = [lamp(0, 0, 0, 2, 0), lamp(1, 100, 0, 2, 0), lamp(2, 50, 0, 4, 0)];
+        assert_eq!(names(&zones_from(&lamps)), ["←", "→", "Logo"]);
+    }
+
+    #[test]
+    fn lamps_at_the_same_place_stay_one_zone() {
+        let lamps = [lamp(0, 0, 0, 2, 0), lamp(1, 0, 0, 2, 0), lamp(2, 50, 0, 4, 0)];
+        assert_eq!(names(&zones_from(&lamps)), ["Body", "Logo"]);
     }
 }

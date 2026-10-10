@@ -58,3 +58,26 @@ fn run() {
         std::thread::sleep(FRAME);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn breathing_keeps_its_floor() {
+        assert!((breathe(0.0) - BREATHE_FLOOR).abs() < 1e-6);
+        assert!((breathe(BREATHE_PERIOD / 2.0) - 1.0).abs() < 1e-6);
+        assert!((breathe(BREATHE_PERIOD) - BREATHE_FLOOR).abs() < 1e-5);
+        for i in 0..1000 {
+            let b = breathe(i as f32 * 0.01);
+            assert!((BREATHE_FLOOR - 1e-6..=1.0 + 1e-6).contains(&b));
+        }
+    }
+
+    #[test]
+    fn spectrum_turns_once_per_period() {
+        assert_eq!(cycle_hue(0.0), 0.0);
+        assert_eq!(cycle_hue(CYCLE_PERIOD / 2.0), 180.0);
+        assert_eq!(cycle_hue(CYCLE_PERIOD), 360.0);
+    }
+}

@@ -340,3 +340,48 @@ pub fn discover() -> Discovery {
     });
     Discovery { found, no_link, no_link_kinds }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scaled_color() {
+        assert_eq!(Rgb(255, 100, 0).scaled(50), Rgb(127, 50, 0));
+        assert_eq!(Rgb(255, 100, 0).scaled(100), Rgb(255, 100, 0));
+        assert_eq!(Rgb(255, 100, 0).scaled(250), Rgb(255, 100, 0));
+        assert_eq!(Rgb(255, 100, 0).scaled(0), Rgb(0, 0, 0));
+    }
+
+    #[test]
+    fn kind_from_id() {
+        assert_eq!(kind_of("naga-123456H78900012").key, "naga");
+        assert_eq!(kind_of("asus").key, "asus");
+        assert_eq!(kind_of("lamparray-1A2B3C4D").key, "lamparray");
+        // Unknown ids fall back to the first model.
+        assert_eq!(kind_of("toaster-1").key, KINDS[0].key);
+    }
+
+    #[test]
+    fn kind_keys_are_unique_and_have_no_dash() {
+        for (i, k) in KINDS.iter().enumerate() {
+            assert!(!k.key.contains('-'), "{}", k.key);
+            assert!(KINDS[i + 1..].iter().all(|o| o.key != k.key), "{}", k.key);
+        }
+    }
+
+    #[test]
+    fn path_hash_ignores_case_and_what_follows_nul() {
+        let w = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+        assert_eq!(path_hash(&w("\\\\?\\HID#VID_0483")), path_hash(&w("\\\\?\\hid#vid_0483\0junk")));
+        assert_ne!(path_hash(&w("a")), path_hash(&w("b")));
+        assert_eq!(path_hash(&w("a")).len(), 8);
+    }
+
+    #[test]
+    fn low_battery() {
+        assert!(Battery { percent: LOW_BATTERY, charging: false }.is_low());
+        assert!(!Battery { percent: LOW_BATTERY, charging: true }.is_low());
+        assert!(!Battery { percent: LOW_BATTERY + 1, charging: false }.is_low());
+    }
+}
