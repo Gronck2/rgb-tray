@@ -111,8 +111,26 @@ impl DeviceConfig {
         *self = DeviceConfig { name: std::mem::take(&mut self.name), last_seen: self.last_seen, ..from.lighting() };
     }
 
+    /// Per-key colors that are all the same look exactly like that color shown steadily
+    /// (e.g. right after opening the key editor), so they compare as such.
+    fn visible(&self) -> DeviceConfig {
+        let keys = self.all_keys();
+        match keys.first() {
+            Some(&(_, c)) if self.per_key && keys.iter().all(|&(_, k)| k == c) => {
+                let mut d = DeviceConfig { per_key: false, keys: KeyColors::new(), effect: Effect::Static, ..self.lighting() };
+                if c == Rgb(0, 0, 0) {
+                    d.effect = Effect::Off;
+                } else {
+                    d.set_rgb(c);
+                }
+                d
+            }
+            _ => self.lighting(),
+        }
+    }
+
     fn same_lighting(&self, other: &DeviceConfig) -> bool {
-        let (a, b) = (self.lighting(), other.lighting());
+        let (a, b) = (self.visible(), other.visible());
         // Per-key colors matter only while they are shown; compared key by key, since an off
         // key may be stored as black or (older versions) left out.
         let keys_equal = !a.per_key && !b.per_key || a.all_keys() == b.all_keys();
