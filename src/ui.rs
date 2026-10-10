@@ -71,6 +71,7 @@ const ICON_ALL: &str = "\u{E82F}";
 const ICON_CHEVRON_DOWN: &str = "\u{E70D}";
 const ICON_CHEVRON_UP: &str = "\u{E70E}";
 const ICON_WARNING: &str = "\u{E7BA}";
+const ICON_SETTINGS: &str = "\u{E713}";
 const ICON_REFRESH: &str = "\u{E72C}";
 const ICON_PIN: &str = "\u{E718}";
 const ICON_PINNED: &str = "\u{E841}";
@@ -296,11 +297,13 @@ fn pencil_rect(card: R, row: &Row, name: &str) -> R {
     R { x: n.x + name_width(name).min(n.w) + 4.0, y: n.y, w: 20.0, h: 20.0 }
 }
 
-/// The button of a warning card ("Отключить", "Параметры").
-fn disable_button_rect(card: R) -> R {
-    R { x: card.x + card.w - 12.0 - 96.0, y: card.y + (card.h - 28.0) / 2.0, w: 96.0, h: 28.0 }
+/// The button of a warning card: "Отключить" for the service, a gear (Settings) for
+/// Dynamic Lighting.
+fn warning_button_rect(card: R, row: &Row) -> R {
+    let w = if *row == Row::LightingWarning { 36.0 } else { 96.0 };
+    let h = if *row == Row::LightingWarning { 32.0 } else { 28.0 };
+    R { x: card.x + card.w - 12.0 - w, y: card.y + (card.h - h) / 2.0, w, h }
 }
-
 /// The "forget" button of a disconnected device's card, left of its color dot.
 fn forget_button_rect(card: R) -> R {
     R { x: card.x + card.w - 44.0 - 82.0, y: card.y + 5.0, w: 82.0, h: 22.0 }
@@ -327,8 +330,8 @@ fn card_layout(rows: &[(R, Row)]) -> Vec<(R, Hit)> {
         match row {
             Row::Device(id) if kind_of(id).per_key => v.push((keys_button_rect(*r), Hit::Keys(i))),
             Row::Archived(_) => v.push((forget_button_rect(*r), Hit::Forget(i))),
-            Row::ServiceWarning => v.push((disable_button_rect(*r), Hit::DisableService)),
-            Row::LightingWarning => v.push((disable_button_rect(*r), Hit::LightingSettings)),
+            Row::ServiceWarning => v.push((warning_button_rect(*r, row), Hit::DisableService)),
+            Row::LightingWarning => v.push((warning_button_rect(*r, row), Hit::LightingSettings)),
             _ => {}
         }
         if let Row::Device(id) | Row::Archived(id) = row {
@@ -1526,30 +1529,30 @@ impl Flyout {
                 tr!("Мешает служба Logitech", "A Logitech service interferes"),
                 tr!("Из-за неё G915 зависает", "It makes the G915 hang"),
                 tr!("и не слушает эффекты", "and ignore effects"),
-                tr!("Отключить", "Disable"),
+                (tr!("Отключить", "Disable"), false),
                 Hit::DisableService,
             )),
             Row::LightingWarning => Some((
                 tr!("Динамическое освещение", "Dynamic Lighting is on"),
-                tr!("Windows сама управляет", "Windows drives the lighting"),
-                tr!("подсветкой — выключите", "itself — turn it off"),
-                tr!("Параметры", "Settings"),
+                tr!("Windows сама управляет подсветкой", "Windows drives the lighting itself"),
+                tr!("и спорит с приложением", "and overrides this app"),
+                (ICON_SETTINGS, true),
                 Hit::LightingSettings,
             )),
             _ => None,
         };
-        if let Some((title, line1, line2, button, hit)) = warning {
+        if let Some((title, line1, line2, (button, icon), hit)) = warning {
             self.fill(rt, r, 6.0, t.card);
             self.fill(rt, r, 6.0, D2D1_COLOR_F { a: 0.14, ..t.accent });
             self.stroke(rt, r, 6.0, t.accent, 1.0);
             self.text(rt, ICON_WARNING, &f.icon, R { x: r.x + 10.0, y: r.y, w: 32.0, h: r.h }, t.accent);
-            let text_w = disable_button_rect(r).x - r.x - 58.0;
+            let b = warning_button_rect(r, row);
+            let text_w = b.x - r.x - 58.0;
             self.text(rt, title, &f.name, R { x: r.x + 50.0, y: r.y + 10.0, w: text_w, h: 20.0 }, t.text);
             self.text(rt, line1, &f.sub, R { x: r.x + 50.0, y: r.y + 30.0, w: text_w, h: 16.0 }, t.text2);
             self.text(rt, line2, &f.sub, R { x: r.x + 50.0, y: r.y + 44.0, w: text_w, h: 16.0 }, t.text2);
-            let b = disable_button_rect(r);
             self.fill(rt, b, 4.0, if hover(hit) { D2D1_COLOR_F { a: 0.85, ..t.accent } } else { t.accent });
-            self.text(rt, button, &f.center_small, b, t.on_accent);
+            self.text(rt, button, if icon { &f.icon_small } else { &f.center_small }, b, t.on_accent);
             return;
         }
         if let Row::ArchiveHeader(n) = row {
