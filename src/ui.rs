@@ -1054,7 +1054,8 @@ fn view() -> View {
             _ => None,
         })
         .map(|id| DeviceView {
-            cfg: cfg.device(&id),
+            // One-color per-key lighting is shown as the steady color it looks like.
+            cfg: cfg.device(&id).visible(),
             name: cfg.display_name(&id),
             present: present.contains(&id),
             battery: status.iter().find(|(s, _)| *s == id).map(|(_, b)| *b),

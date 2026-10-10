@@ -111,13 +111,14 @@ impl DeviceConfig {
         *self = DeviceConfig { name: std::mem::take(&mut self.name), last_seen: self.last_seen, ..from.lighting() };
     }
 
-    /// Per-key colors that are all the same look exactly like that color shown steadily
-    /// (e.g. right after opening the key editor), so they compare as such.
-    fn visible(&self) -> DeviceConfig {
+    /// What the device shows: per-key colors that are all the same look exactly like that
+    /// color shown steadily (e.g. right after opening the key editor or "fill all"), so the
+    /// panel and preset matching treat them as that.
+    pub fn visible(&self) -> DeviceConfig {
         let keys = self.all_keys();
         match keys.first() {
             Some(&(_, c)) if self.per_key && keys.iter().all(|&(_, k)| k == c) => {
-                let mut d = DeviceConfig { per_key: false, keys: KeyColors::new(), effect: Effect::Static, ..self.lighting() };
+                let mut d = DeviceConfig { per_key: false, keys: KeyColors::new(), effect: Effect::Static, ..self.clone() };
                 if c == Rgb(0, 0, 0) {
                     d.effect = Effect::Off;
                 } else {
@@ -125,12 +126,12 @@ impl DeviceConfig {
                 }
                 d
             }
-            _ => self.lighting(),
+            _ => self.clone(),
         }
     }
 
     fn same_lighting(&self, other: &DeviceConfig) -> bool {
-        let (a, b) = (self.visible(), other.visible());
+        let (a, b) = (self.visible().lighting(), other.visible().lighting());
         // Per-key colors matter only while they are shown; compared key by key, since an off
         // key may be stored as black or (older versions) left out.
         let keys_equal = !a.per_key && !b.per_key || a.all_keys() == b.all_keys();
@@ -269,7 +270,7 @@ impl Config {
 
     /// The color all these devices show, when they all show the same single color.
     pub fn uniform_color(&self, ids: &[String]) -> Option<Rgb> {
-        let devices: Vec<DeviceConfig> = ids.iter().map(|id| self.device(id)).collect();
+        let devices: Vec<DeviceConfig> = ids.iter().map(|id| self.device(id).visible()).collect();
         let first = devices.first()?;
         let single = |d: &DeviceConfig| {
             matches!(d.effect, Effect::Static | Effect::Breathe) && !d.per_key && d.zones.is_empty() && d.color == first.color

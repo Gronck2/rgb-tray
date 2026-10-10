@@ -586,7 +586,7 @@ unsafe fn update_tray(hwnd: HWND, action: u32) {
         let status = STATUS.lock().unwrap();
         let no_link = NO_LINK.lock().unwrap();
         // The icon follows the first connected device.
-        let dc = ids.iter().find(|id| present.contains(id)).map(|id| cfg.device(id)).unwrap_or_default();
+        let dc = ids.iter().find(|id| present.contains(id)).map(|id| cfg.device(id).visible()).unwrap_or_default();
         let mut tip = String::from("Подсветка");
         for id in &ids {
             let name = cfg.display_name(id);
@@ -594,7 +594,7 @@ unsafe fn update_tray(hwnd: HWND, action: u32) {
                 tip.push_str(&format!("\n{name}: нет связи"));
                 continue;
             }
-            tip.push_str(&format!("\n{}: {}", name, cfg.device(id).effect.label().to_lowercase()));
+            tip.push_str(&format!("\n{}: {}", name, cfg.device(id).visible().effect.label().to_lowercase()));
             if let Some((_, b)) = status.iter().find(|(s, _)| s == id) {
                 tip.push_str(&format!(", {}", b.label()));
             }
