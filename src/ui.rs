@@ -83,6 +83,7 @@ const ICON_PIN: &str = "\u{E718}";
 const ICON_PINNED: &str = "\u{E841}";
 const ICON_ADD: &str = "\u{E710}";
 const ICON_POWER: &str = "\u{E7E8}";
+const ICON_CLOSE: &str = "\u{E711}";
 const ICON_BRIGHTNESS: &str = "\u{E706}";
 const ICON_SAVE: &str = "\u{E74E}";
 const ICON_PLAY: &str = "\u{E768}";
@@ -123,6 +124,8 @@ enum Hit {
     RenameDevice(usize),
     /// The power button on the warning about the Logitech LampArray service.
     DisableService,
+    /// The close button on the warning about a program on that row: never show it again.
+    IgnoreApp(usize),
     /// The gear button on the warning about Windows Dynamic Lighting.
     LightingSettings,
     /// Keeps the panel open when it loses focus.
@@ -140,6 +143,8 @@ enum Row {
     ServiceWarning,
     /// Windows Dynamic Lighting is on and drives the lighting itself.
     LightingWarning,
+    /// A vendor program drives the lighting of these devices too (`conflicts::App::key`).
+    AppWarning(&'static str),
     All,
     /// Connected device, or one without a link.
     Device(String),
@@ -183,6 +188,9 @@ fn rows() -> Vec<(R, Row)> {
     }
     if crate::DYNAMIC_LIGHTING_WARN.load(Ordering::Relaxed) {
         push(WARNING_H, Row::LightingWarning);
+    }
+    for c in crate::CONFLICTS.lock().unwrap().iter() {
+        push(WARNING_H, Row::AppWarning(c.app.key));
     }
     push(CARD_H, Row::All);
     let pages = list_pages(active, archived);
@@ -424,6 +432,7 @@ fn card_layout(rows: &[(R, Row)]) -> Vec<(R, Hit)> {
             Row::Archived(_) => v.push((forget_button_rect(*r), Hit::Forget(i))),
             Row::ServiceWarning => v.push((warning_button_rect(*r), Hit::DisableService)),
             Row::LightingWarning => v.push((warning_button_rect(*r), Hit::LightingSettings)),
+            Row::AppWarning(_) => v.push((warning_button_rect(*r), Hit::IgnoreApp(i))),
             _ => {}
         }
         if let Row::Device(id) | Row::Archived(id) = row {
@@ -1627,24 +1636,39 @@ impl Flyout {
         let hover = |h: Hit| self.hover == Some(h);
 
         // Accent-tinted card: something in Windows is fighting over the lighting.
-        let warning = match row {
+        let warning: Option<(String, String, String, &str, Hit)> = match row {
             Row::ServiceWarning => Some((
-                tr!("Мешает служба Logitech", "A Logitech service interferes"),
-                tr!("Из-за неё G915 зависает", "It makes the G915 hang"),
-                tr!("и не слушает эффекты", "and ignore effects"),
+                tr!("Мешает служба Logitech", "A Logitech service interferes").into(),
+                tr!("Из-за неё G915 зависает", "It makes the G915 hang").into(),
+                tr!("и не слушает эффекты", "and ignore effects").into(),
                 ICON_POWER,
                 Hit::DisableService,
             )),
             Row::LightingWarning => Some((
-                tr!("Динамическое освещение", "Dynamic Lighting is on"),
-                tr!("Windows сама управляет подсветкой", "Windows drives the lighting itself"),
-                tr!("и спорит с приложением", "and overrides this app"),
+                tr!("Динамическое освещение", "Dynamic Lighting is on").into(),
+                tr!("Windows сама управляет подсветкой", "Windows drives the lighting itself").into(),
+                tr!("и спорит с приложением", "and overrides this app").into(),
                 ICON_SETTINGS,
                 Hit::LightingSettings,
             )),
+            Row::AppWarning(key) => crate::CONFLICTS.lock().unwrap().iter().find(|c| c.app.key == *key).map(|c| {
+                let name = |id: &String| v.devices.iter().find(|d| d.id == *id).map(|d| d.name.clone()).unwrap_or_else(|| id.clone());
+                let more = if c.devices.len() > 1 { format!(" +{}", c.devices.len() - 1) } else { String::new() };
+                let line = |n: &str| format!("{} {n}{more}", tr!("Тоже управляет:", "Also drives:"));
+                // The first device's name is shortened to keep the line clear of the button.
+                let max_w = warning_button_rect(r).x - r.x - 62.0;
+                let mut first: Vec<char> = c.devices.first().map(name).unwrap_or_default().chars().collect();
+                let mut line1 = line(&first.iter().collect::<String>());
+                while text_width(&line1, &f.sub) > max_w && first.len() > 1 {
+                    first.pop();
+                    line1 = line(&format!("{}…", first.iter().collect::<String>().trim_end()));
+                }
+                (format!("{} {}", tr!("Запущен", "Running:"), c.app.name), line1, crate::i18n::pick(c.app.remedy).to_string(), ICON_CLOSE, Hit::IgnoreApp(i))
+            }),
             _ => None,
         };
         if let Some((title, line1, line2, button, hit)) = warning {
+            let (title, line1, line2) = (title.as_str(), line1.as_str(), line2.as_str());
             self.fill(rt, r, 6.0, t.card);
             self.fill(rt, r, 6.0, D2D1_COLOR_F { a: 0.14, ..t.accent });
             self.stroke(rt, r, 6.0, t.accent, 1.0);
@@ -2118,12 +2142,17 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
                     PAGE.store(p, Ordering::Relaxed);
                 }
             }
-            Some(Row::ServiceWarning | Row::LightingWarning | Row::Pager(..) | Row::Spacer) | None => {}
+            Some(Row::ServiceWarning | Row::LightingWarning | Row::AppWarning(_) | Row::Pager(..) | Row::Spacer) | None => {}
         },
         Hit::PagePrev => turn_page(-1),
         Hit::PageNext => turn_page(1),
         Hit::Page(k) => PAGE.store(k, Ordering::Relaxed),
         Hit::LightingSettings => crate::open_dynamic_lighting_settings(),
+        Hit::IgnoreApp(i) => {
+            if let Some((_, Row::AppWarning(key))) = rows().get(i).cloned() {
+                crate::ignore_app(key);
+            }
+        }
         Hit::DisableService => {
             // The UAC prompt takes the focus; keep the panel open meanwhile.
             PICKING.store(true, Ordering::Relaxed);

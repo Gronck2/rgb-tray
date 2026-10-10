@@ -4,6 +4,7 @@
 mod i18n;
 mod alert;
 mod config;
+mod conflicts;
 mod devices;
 mod editor;
 mod hid;
@@ -77,10 +78,28 @@ static LAMPARRAY_WARN: AtomicBool = AtomicBool::new(false);
 /// LampArray devices itself, fighting with this app.
 static DYNAMIC_LIGHTING_WARN: AtomicBool = AtomicBool::new(false);
 
+/// Vendor programs running now that drive the lighting of devices on the panel.
+static CONFLICTS: Mutex<Vec<conflicts::Conflict>> = Mutex::new(Vec::new());
+
 fn check_services(cfg: &Config) {
     let has_logitech = cfg.devices.keys().any(|id| devices::kind_of(id).key == "logitech");
     LAMPARRAY_WARN.store(has_logitech && services::interferes(services::LOGI_LAMPARRAY), Ordering::Relaxed);
     DYNAMIC_LIGHTING_WARN.store(dynamic_lighting_on(), Ordering::Relaxed);
+    // Not `active_ids()`: callers may hold the config lock.
+    let mut active = PRESENT.lock().unwrap().clone();
+    active.extend(NO_LINK.lock().unwrap().iter().cloned());
+    *CONFLICTS.lock().unwrap() = conflicts::find(&conflicts::running(), &active, &cfg.ignored_apps);
+}
+
+/// Hides the warning about a program for good ("I keep it running on purpose").
+fn ignore_app(key: &str) {
+    let cfg = {
+        let mut cfg = config();
+        cfg.ignored_apps.push(key.to_string());
+        cfg.save();
+        cfg.clone()
+    };
+    check_services(&cfg);
 }
 
 /// The Dynamic Lighting switch in Windows Settings (Personalization → Dynamic Lighting).
@@ -1170,6 +1189,11 @@ fn main() {
             }
         }
         *NO_LINK.lock().unwrap() = no_link;
+        // RGBTRAY_DEMO_APPS=synapse,ghub: as if these programs were running.
+        if let Ok(keys) = std::env::var("RGBTRAY_DEMO_APPS") {
+            let running: Vec<String> = keys.split(',').filter_map(conflicts::by_key).map(|a| a.processes[0].to_string()).collect();
+            *CONFLICTS.lock().unwrap() = conflicts::find(&running, &present, &[]);
+        }
         *PRESENT.lock().unwrap() = present;
         *STATUS.lock().unwrap() = d.found.iter().filter_map(|f| f.dev.battery().map(|b| (f.id.clone(), b))).collect();
         // Optional: selected card and zone of the panel.

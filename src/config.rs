@@ -218,6 +218,9 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub panel_pos: Option<(i32, i32)>,
     pub presets: Vec<Preset>,
+    /// Programs whose "it drives the lighting too" warning the user hid (`conflicts::App::key`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ignored_apps: Vec<String>,
     /// Per-key colors of versions before 0.4, moved to the first Logitech keyboard found
     /// (kept in the file until then).
     #[serde(skip_serializing_if = "is_false")]
@@ -238,6 +241,7 @@ impl Default for Config {
             language: None,
             panel_pos: None,
             presets: Vec::new(),
+            ignored_apps: Vec::new(),
             per_key: false,
             keys: KeyColors::new(),
         }
