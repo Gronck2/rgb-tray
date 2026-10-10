@@ -73,9 +73,33 @@ static NO_LINK: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// Logitech's Dynamic Lighting service is active and can hang the G915 (see `services`).
 static LAMPARRAY_WARN: AtomicBool = AtomicBool::new(false);
 
+/// Windows Dynamic Lighting ("Use Dynamic Lighting on my devices") is on and drives the
+/// LampArray devices itself, fighting with this app.
+static DYNAMIC_LIGHTING_WARN: AtomicBool = AtomicBool::new(false);
+
 fn check_services(cfg: &Config) {
     let has_logitech = cfg.devices.keys().any(|id| devices::kind_of(id).key == "logitech");
     LAMPARRAY_WARN.store(has_logitech && services::interferes(services::LOGI_LAMPARRAY), Ordering::Relaxed);
+    DYNAMIC_LIGHTING_WARN.store(dynamic_lighting_on(), Ordering::Relaxed);
+}
+
+/// The Dynamic Lighting switch in Windows Settings (Personalization → Dynamic Lighting).
+fn dynamic_lighting_on() -> bool {
+    unsafe {
+        let mut v = 0u32;
+        let mut size = 4u32;
+        let key = wide("Software\\Microsoft\\Lighting");
+        let name = wide("AmbientLightingEnabled");
+        RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr(), RRF_RT_REG_DWORD, null_mut(), &mut v as *mut u32 as _, &mut size) == ERROR_SUCCESS
+            && v != 0
+    }
+}
+
+/// Opens Windows Settings at Dynamic Lighting.
+fn open_dynamic_lighting_settings() {
+    unsafe {
+        ShellExecuteW(null_mut(), wide("open").as_ptr(), wide("ms-settings:personalization-lighting").as_ptr(), null(), null(), SW_SHOWNORMAL);
+    }
 }
 
 /// Turns the Logitech LampArray service off (asks for administrator rights), then refreshes
@@ -643,7 +667,46 @@ fn lamparray_test(args: &[String]) {
         s.push_str("no LampArray devices\n");
     }
     let _ = std::fs::write(&out, &s);
-    std::thread::sleep(std::time::Duration::from_secs(seconds));
+    let pause = std::time::Duration::from_secs(seconds);
+    std::thread::sleep(pause);
+    // With "set <hold seconds> <lamp>=<rrggbb>...": those lamps in those colors, the others off.
+    if args.get(3).map(String::as_str) == Some("set") {
+        let hold: u64 = args.get(4).and_then(|v| v.parse().ok()).unwrap_or(20);
+        let pairs: Vec<(u16, Rgb)> =
+            args.iter().skip(5).filter_map(|p| p.split_once('=')).filter_map(|(id, hex)| Some((id.parse().ok()?, config::parse_hex(hex)))).collect();
+        for la in &held {
+            let ok = la.fill(Rgb(0, 0, 0)) & pairs.iter().all(|&(id, c)| la.fill_range(id, id, c));
+            let _ = writeln!(s, "set {pairs:?}: {ok}");
+        }
+        let _ = std::fs::write(&out, &s);
+        std::thread::sleep(std::time::Duration::from_secs(hold));
+    }
+    // With "probe": a fixed sequence that shows which lamps are visible and whether the
+    // first update after taking control is lost. Each step is logged with its result.
+    if args.get(3).map(String::as_str) == Some("probe") {
+        let (red, yellow, green, blue, purple, white, off) =
+            (Rgb(255, 0, 0), Rgb(255, 200, 0), Rgb(0, 255, 0), Rgb(0, 0, 255), Rgb(160, 0, 255), Rgb(255, 255, 255), Rgb(0, 0, 0));
+        let start = std::time::Instant::now();
+        let mut step = |name: &str, f: &dyn Fn(&devices::lamparray::LampArray) -> bool| {
+            let ok: Vec<bool> = held.iter().map(f).collect();
+            let _ = writeln!(s, "{:>5.1}s {name}: {ok:?}", start.elapsed().as_secs_f32());
+            let _ = std::fs::write(&out, &s);
+            std::thread::sleep(pause);
+        };
+        let count = |la: &devices::lamparray::LampArray| la.attributes.lamp_count;
+        step("1 retake control, wait 1 s, all green", &|la| {
+            la.set_autonomous(true);
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let c = la.set_autonomous(false);
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            c & la.fill(green)
+        });
+        step("2 every lamp blue, one by one", &|la| (0..count(la)).all(|i| la.fill_range(i, i, blue)));
+        step("3 lamp 0 red, others off", &|la| la.fill(off) & la.fill_range(0, 0, red));
+        step("4 lamp 3 yellow, others off", &|la| la.fill(off) & la.fill_range(3, 3, yellow));
+        step("5 lamps 4-7 purple, keys off", &|la| la.fill(off) & la.fill_range(4, count(la).saturating_sub(1), purple));
+        step("6 all white in one update", &|la| la.fill(white));
+    }
     drop(held);
 }
 
@@ -1086,6 +1149,9 @@ fn main() {
         check_services(&config().clone());
         if std::env::var_os("RGBTRAY_DEMO_WARN").is_some() {
             LAMPARRAY_WARN.store(true, Ordering::Relaxed);
+        }
+        if std::env::var_os("RGBTRAY_DEMO_DYNLIGHT").is_some() {
+            DYNAMIC_LIGHTING_WARN.store(true, Ordering::Relaxed);
         }
         let mut no_link = d.no_link;
         if std::env::var_os("RGBTRAY_DEMO_NOLINK").is_some() {

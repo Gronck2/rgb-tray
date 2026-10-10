@@ -185,13 +185,15 @@ impl LampArray {
     /// Every lamp in one color (brightness already applied by the caller).
     pub fn fill(&self, c: Rgb) -> bool {
         let count = self.attributes.lamp_count;
-        if count == 0 {
-            return false;
-        }
+        count > 0 && self.fill_range(0, count - 1, c)
+    }
+
+    /// Lamps `first..=last` in one color.
+    pub fn fill_range(&self, first: u16, last: u16, c: Rgb) -> bool {
         let Some(mut r) = self.report(self.ids.range) else { return false };
         self.set_value(&mut r, UPDATE_FLAGS, UPDATE_COMPLETE);
-        self.set_value(&mut r, LAMP_ID_START, 0);
-        self.set_value(&mut r, LAMP_ID_END, count as u32 - 1);
+        self.set_value(&mut r, LAMP_ID_START, first as u32);
+        self.set_value(&mut r, LAMP_ID_END, last as u32);
         let max = |usage| self.logical_max(self.ids.range, usage).unwrap_or(255);
         let scale = |v: u8, usage| (v as u32 * max(usage) + 127) / 255;
         self.set_value(&mut r, RED_CHANNEL, scale(c.0, RED_CHANNEL));

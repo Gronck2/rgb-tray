@@ -116,6 +116,8 @@ enum Hit {
     RenameDevice(usize),
     /// "Отключить" on the warning about the Logitech LampArray service.
     DisableService,
+    /// "Параметры" on the warning about Windows Dynamic Lighting.
+    LightingSettings,
     /// Keeps the panel open when it loses focus.
     Pin,
 }
@@ -125,6 +127,8 @@ enum Hit {
 enum Row {
     /// A Windows service that hangs the keyboard is active.
     ServiceWarning,
+    /// Windows Dynamic Lighting is on and drives the lighting itself.
+    LightingWarning,
     All,
     /// Connected device, or one without a link.
     Device(String),
@@ -158,6 +162,9 @@ fn rows() -> Vec<(R, Row)> {
     };
     if crate::LAMPARRAY_WARN.load(Ordering::Relaxed) {
         push(WARNING_H, Row::ServiceWarning);
+    }
+    if crate::DYNAMIC_LIGHTING_WARN.load(Ordering::Relaxed) {
+        push(WARNING_H, Row::LightingWarning);
     }
     push(CARD_H, Row::All);
     for id in active {
@@ -289,7 +296,7 @@ fn pencil_rect(card: R, row: &Row, name: &str) -> R {
     R { x: n.x + name_width(name).min(n.w) + 4.0, y: n.y, w: 20.0, h: 20.0 }
 }
 
-/// The "Отключить" button of the service warning.
+/// The button of a warning card ("Отключить", "Параметры").
 fn disable_button_rect(card: R) -> R {
     R { x: card.x + card.w - 12.0 - 96.0, y: card.y + (card.h - 28.0) / 2.0, w: 96.0, h: 28.0 }
 }
@@ -321,6 +328,7 @@ fn card_layout(rows: &[(R, Row)]) -> Vec<(R, Hit)> {
             Row::Device(id) if kind_of(id).per_key => v.push((keys_button_rect(*r), Hit::Keys(i))),
             Row::Archived(_) => v.push((forget_button_rect(*r), Hit::Forget(i))),
             Row::ServiceWarning => v.push((disable_button_rect(*r), Hit::DisableService)),
+            Row::LightingWarning => v.push((disable_button_rect(*r), Hit::LightingSettings)),
             _ => {}
         }
         if let Row::Device(id) | Row::Archived(id) = row {
@@ -958,6 +966,9 @@ fn formats() -> windows::core::Result<Formats> {
 }
 
 unsafe fn open() -> windows::core::Result<()> {
+    // Settings may have changed while the panel was closed (e.g. Dynamic Lighting turned off).
+    let cfg = crate::config().clone();
+    crate::check_services(&cfg);
     let hinst = GetModuleHandleW(null());
     let class: Vec<u16> = "RgbTrayFlyout\0".encode_utf16().collect();
     let mut wc: WNDCLASSW = zeroed();
@@ -1509,25 +1520,36 @@ impl Flyout {
         let f = &self.fmt;
         let hover = |h: Hit| self.hover == Some(h);
 
-        if let Row::ServiceWarning = row {
-            // Accent-tinted card: a Windows service is fighting over the keyboard.
+        // Accent-tinted card: something in Windows is fighting over the lighting.
+        let warning = match row {
+            Row::ServiceWarning => Some((
+                tr!("Мешает служба Logitech", "A Logitech service interferes"),
+                tr!("Из-за неё G915 зависает", "It makes the G915 hang"),
+                tr!("и не слушает эффекты", "and ignore effects"),
+                tr!("Отключить", "Disable"),
+                Hit::DisableService,
+            )),
+            Row::LightingWarning => Some((
+                tr!("Динамическое освещение", "Dynamic Lighting is on"),
+                tr!("Windows сама управляет", "Windows drives the lighting"),
+                tr!("подсветкой — выключите", "itself — turn it off"),
+                tr!("Параметры", "Settings"),
+                Hit::LightingSettings,
+            )),
+            _ => None,
+        };
+        if let Some((title, line1, line2, button, hit)) = warning {
             self.fill(rt, r, 6.0, t.card);
             self.fill(rt, r, 6.0, D2D1_COLOR_F { a: 0.14, ..t.accent });
             self.stroke(rt, r, 6.0, t.accent, 1.0);
             self.text(rt, ICON_WARNING, &f.icon, R { x: r.x + 10.0, y: r.y, w: 32.0, h: r.h }, t.accent);
             let text_w = disable_button_rect(r).x - r.x - 58.0;
-            self.text(
-                rt,
-                tr!("Мешает служба Logitech", "A Logitech service interferes"),
-                &f.name,
-                R { x: r.x + 50.0, y: r.y + 10.0, w: text_w, h: 20.0 },
-                t.text,
-            );
-            self.text(rt, tr!("Из-за неё G915 зависает", "It makes the G915 hang"), &f.sub, R { x: r.x + 50.0, y: r.y + 30.0, w: text_w, h: 16.0 }, t.text2);
-            self.text(rt, tr!("и не слушает эффекты", "and ignore effects"), &f.sub, R { x: r.x + 50.0, y: r.y + 44.0, w: text_w, h: 16.0 }, t.text2);
+            self.text(rt, title, &f.name, R { x: r.x + 50.0, y: r.y + 10.0, w: text_w, h: 20.0 }, t.text);
+            self.text(rt, line1, &f.sub, R { x: r.x + 50.0, y: r.y + 30.0, w: text_w, h: 16.0 }, t.text2);
+            self.text(rt, line2, &f.sub, R { x: r.x + 50.0, y: r.y + 44.0, w: text_w, h: 16.0 }, t.text2);
             let b = disable_button_rect(r);
-            self.fill(rt, b, 4.0, if hover(Hit::DisableService) { D2D1_COLOR_F { a: 0.85, ..t.accent } } else { t.accent });
-            self.text(rt, tr!("Отключить", "Disable"), &f.center_small, b, t.on_accent);
+            self.fill(rt, b, 4.0, if hover(hit) { D2D1_COLOR_F { a: 0.85, ..t.accent } } else { t.accent });
+            self.text(rt, button, &f.center_small, b, t.on_accent);
             return;
         }
         if let Row::ArchiveHeader(n) = row {
@@ -1959,8 +1981,9 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
             Some(Row::ArchiveHeader(_)) => {
                 ARCHIVE_OPEN.fetch_xor(true, Ordering::Relaxed);
             }
-            Some(Row::ServiceWarning) | None => {}
+            Some(Row::ServiceWarning | Row::LightingWarning) | None => {}
         },
+        Hit::LightingSettings => crate::open_dynamic_lighting_settings(),
         Hit::DisableService => {
             // The UAC prompt takes the focus; keep the panel open meanwhile.
             PICKING.store(true, Ordering::Relaxed);
