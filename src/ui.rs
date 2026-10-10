@@ -35,6 +35,10 @@ const CARD_STEP: f32 = 54.0;
 /// The "disconnected devices" row that folds the archive.
 const ARCHIVE_H: f32 = 34.0;
 const WARNING_H: f32 = 64.0;
+/// Device cards on one page of the list; more go to further pages.
+const PAGE_SIZE: usize = 5;
+/// The page switch under "All devices": ‹ dots ›.
+const PAGER_H: f32 = 22.0;
 // The section under the device list; its coordinates are relative to its top (`lower_y()`),
 // since the list grows with the number of devices.
 const COLOR_LABEL_Y: f32 = 8.0;
@@ -70,6 +74,8 @@ const EFFECT_LABELS: [crate::i18n::Text; 4] = [("Статичный", "Static"),
 const ICON_ALL: &str = "\u{E82F}";
 const ICON_CHEVRON_DOWN: &str = "\u{E70D}";
 const ICON_CHEVRON_UP: &str = "\u{E70E}";
+const ICON_CHEVRON_LEFT: &str = "\u{E76B}";
+const ICON_CHEVRON_RIGHT: &str = "\u{E76C}";
 const ICON_WARNING: &str = "\u{E7BA}";
 const ICON_SETTINGS: &str = "\u{E713}";
 const ICON_REFRESH: &str = "\u{E72C}";
@@ -121,6 +127,10 @@ enum Hit {
     LightingSettings,
     /// Keeps the panel open when it loses focus.
     Pin,
+    /// The page switch of the device list: previous, next, a page's dot.
+    PagePrev,
+    PageNext,
+    Page(usize),
 }
 
 /// A row of the device list.
@@ -136,7 +146,14 @@ enum Row {
     /// Folds/unfolds the disconnected devices; their count.
     ArchiveHeader(usize),
     Archived(String),
+    /// The page switch: current page and page count.
+    Pager(usize, usize),
+    /// Empty room at the end of a short page, so every page is as tall as the tallest.
+    Spacer,
 }
+
+/// The page of the device list shown.
+static PAGE: AtomicUsize = AtomicUsize::new(0);
 
 /// The disconnected devices are listed.
 static ARCHIVE_OPEN: AtomicBool = AtomicBool::new(false);
@@ -168,18 +185,88 @@ fn rows() -> Vec<(R, Row)> {
         push(WARNING_H, Row::LightingWarning);
     }
     push(CARD_H, Row::All);
-    for id in active {
-        push(CARD_H, Row::Device(id));
+    let pages = list_pages(active, archived);
+    let page = PAGE.load(Ordering::Relaxed).min(pages.len() - 1);
+    if pages.len() > 1 {
+        push(PAGER_H, Row::Pager(page, pages.len()));
     }
-    if !archived.is_empty() {
-        push(ARCHIVE_H, Row::ArchiveHeader(archived.len()));
-        if ARCHIVE_OPEN.load(Ordering::Relaxed) {
-            for id in archived {
-                push(CARD_H, Row::Archived(id));
-            }
-        }
+    let tallest = pages.iter().map(|p| p.iter().map(|r| row_h(r) + (CARD_STEP - CARD_H)).sum::<f32>()).fold(0.0, f32::max);
+    let mut used = 0.0;
+    for row in pages.into_iter().nth(page).unwrap_or_default() {
+        used += row_h(&row) + (CARD_STEP - CARD_H);
+        push(row_h(&row), row);
+    }
+    if tallest - used > 0.5 {
+        push(tallest - used - (CARD_STEP - CARD_H), Row::Spacer);
     }
     out
+}
+
+fn row_h(row: &Row) -> f32 {
+    if matches!(row, Row::ArchiveHeader(_)) {
+        ARCHIVE_H
+    } else {
+        CARD_H
+    }
+}
+
+/// Splits the device list into pages of at most PAGE_SIZE cards. The archive header is not a
+/// card: it goes on the page of the first disconnected device it folds, or ends the last page.
+fn list_pages(active: Vec<String>, archived: Vec<String>) -> Vec<Vec<Row>> {
+    let mut entries: Vec<Row> = active.into_iter().map(Row::Device).collect();
+    if !archived.is_empty() {
+        entries.push(Row::ArchiveHeader(archived.len()));
+        if ARCHIVE_OPEN.load(Ordering::Relaxed) {
+            entries.extend(archived.into_iter().map(Row::Archived));
+        }
+    }
+    let mut pages: Vec<Vec<Row>> = vec![Vec::new()];
+    let mut cards = 0;
+    let mut entries = entries.into_iter().peekable();
+    while let Some(row) = entries.next() {
+        let header = matches!(row, Row::ArchiveHeader(_));
+        // A card that doesn't fit, or the header whose next card doesn't, starts a new page.
+        let next_is_card = entries.peek().is_some();
+        if cards == PAGE_SIZE && (!header || next_is_card) {
+            pages.push(Vec::new());
+            cards = 0;
+        }
+        if !header {
+            cards += 1;
+        }
+        pages.last_mut().unwrap().push(row);
+    }
+    pages
+}
+
+/// The page holding the archive header.
+fn header_page() -> Option<usize> {
+    let active = crate::active_ids();
+    let archived = archived_ids(&active);
+    list_pages(active, archived).iter().position(|p| p.iter().any(|r| matches!(r, Row::ArchiveHeader(_))))
+}
+
+/// Shows a page of the device list (for snapshots).
+pub fn set_page(page: usize) {
+    PAGE.store(page, Ordering::Relaxed);
+}
+
+/// Shows another page (clamped to the existing ones).
+fn turn_page(delta: isize) {
+    let pages = rows().iter().find_map(|(_, r)| if let Row::Pager(_, n) = r { Some(*n) } else { None }).unwrap_or(1);
+    let page = (PAGE.load(Ordering::Relaxed).min(pages - 1) as isize + delta).clamp(0, pages as isize - 1);
+    PAGE.store(page as usize, Ordering::Relaxed);
+}
+
+/// The ‹ › arrows and the dots of the page switch.
+fn pager_parts(r: R, pages: usize) -> Vec<(R, Hit)> {
+    let mut v = vec![(R { x: r.x, y: r.y, w: 32.0, h: r.h }, Hit::PagePrev), (R { x: r.x + r.w - 32.0, y: r.y, w: 32.0, h: r.h }, Hit::PageNext)];
+    let step = 16.0;
+    let x0 = r.cx() - step * pages as f32 / 2.0;
+    for k in 0..pages {
+        v.push((R { x: x0 + k as f32 * step, y: r.y, w: step, h: r.h }, Hit::Page(k)));
+    }
+    v
 }
 
 /// "Не подключено · вчера": when a disconnected device was last seen.
@@ -323,6 +410,14 @@ fn text_width(s: &str, fmt: &IDWriteTextFormat) -> f32 {
 fn card_layout(rows: &[(R, Row)]) -> Vec<(R, Hit)> {
     let mut v = vec![(R { x: W - PAD - 32.0, y: 12.0, w: 32.0, h: 32.0 }, Hit::Reapply), (pin_rect(), Hit::Pin)];
     for (i, (r, row)) in rows.iter().enumerate() {
+        match row {
+            Row::Pager(_, pages) => {
+                v.extend(pager_parts(*r, *pages));
+                continue;
+            }
+            Row::Spacer => continue,
+            _ => {}
+        }
         // Buttons on a card come first, so hit-testing finds them before the card.
         match row {
             Row::Device(id) if kind_of(id).per_key => v.push((keys_button_rect(*r), Hit::Keys(i))),
@@ -1111,7 +1206,7 @@ struct DeviceView {
 /// Snapshot of everything the panel shows.
 struct View {
     rows: Vec<(R, Row)>,
-    /// Shown and archived devices.
+    /// Connected, unlinked and archived devices (on every page of the list).
     devices: Vec<DeviceView>,
     brightness: u8,
     selected: Option<String>,
@@ -1123,16 +1218,16 @@ fn view() -> View {
     let rows = rows();
     let lower_y = lower_y_of(&rows);
     let selected = selected();
+    // Every device, not only the page shown: "All devices" and the controls cover them all.
+    let active = crate::active_ids();
+    let archived = archived_ids(&active);
     let cfg = crate::config();
     let present = crate::PRESENT.lock().unwrap().clone();
     let status = crate::STATUS.lock().unwrap().clone();
     let no_link = crate::NO_LINK.lock().unwrap().clone();
-    let devices = rows
-        .iter()
-        .filter_map(|(_, row)| match row {
-            Row::Device(id) | Row::Archived(id) => Some(id.clone()),
-            _ => None,
-        })
+    let devices = active
+        .into_iter()
+        .chain(archived)
         .map(|id| DeviceView {
             // One-color per-key lighting is shown as the steady color it looks like.
             cfg: cfg.device(&id).visible(),
@@ -1563,6 +1658,33 @@ impl Flyout {
             self.text(rt, button, &f.icon_small, b, t.on_accent);
             return;
         }
+        if let Row::Spacer = row {
+            return;
+        }
+        if let Row::Pager(page, pages) = *row {
+            let parts = pager_parts(r, pages);
+            for (b, hit) in parts {
+                let hovered = hover(hit);
+                match hit {
+                    Hit::PagePrev | Hit::PageNext => {
+                        let enabled = if hit == Hit::PagePrev { page > 0 } else { page + 1 < pages };
+                        let mut c = if hovered && enabled { t.text } else { t.text2 };
+                        if !enabled {
+                            c.a *= 0.35;
+                        }
+                        let icon = if hit == Hit::PagePrev { ICON_CHEVRON_LEFT } else { ICON_CHEVRON_RIGHT };
+                        self.text(rt, icon, &f.icon_tiny, b, c);
+                    }
+                    Hit::Page(k) if k == page => self.circle(rt, b.cx(), b.cy(), 4.0, t.accent),
+                    _ => {
+                        let mut c = t.text2;
+                        c.a *= if hovered { 0.9 } else { 0.45 };
+                        self.circle(rt, b.cx(), b.cy(), 3.0, c);
+                    }
+                }
+            }
+            return;
+        }
         if let Row::ArchiveHeader(n) = row {
             // A plain foldable line, not a card.
             if hover(Hit::Card(i)) {
@@ -1991,9 +2113,16 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
             Some(Row::Device(id) | Row::Archived(id)) => select(Some(id)),
             Some(Row::ArchiveHeader(_)) => {
                 ARCHIVE_OPEN.fetch_xor(true, Ordering::Relaxed);
+                // Opening may move the header to the page of the devices it unfolds: follow it.
+                if let Some(p) = header_page() {
+                    PAGE.store(p, Ordering::Relaxed);
+                }
             }
-            Some(Row::ServiceWarning | Row::LightingWarning) | None => {}
+            Some(Row::ServiceWarning | Row::LightingWarning | Row::Pager(..) | Row::Spacer) | None => {}
         },
+        Hit::PagePrev => turn_page(-1),
+        Hit::PageNext => turn_page(1),
+        Hit::Page(k) => PAGE.store(k, Ordering::Relaxed),
         Hit::LightingSettings => crate::open_dynamic_lighting_settings(),
         Hit::DisableService => {
             // The UAC prompt takes the focus; keep the panel open meanwhile.
@@ -2222,6 +2351,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 invalidate();
             } else {
                 DestroyWindow(hwnd);
+            }
+            0
+        }
+        // The wheel over the device list turns its pages.
+        WM_MOUSEWHEEL => {
+            let mut pt = POINT { x: (lparam & 0xFFFF) as i16 as i32, y: ((lparam >> 16) & 0xFFFF) as i16 as i32 };
+            ScreenToClient(hwnd, &mut pt);
+            let over_list = with_flyout(|f| (pt.y as f32 / f.scale) < lower_y()).unwrap_or(false);
+            let delta = ((wparam >> 16) & 0xFFFF) as i16;
+            if over_list && delta != 0 {
+                turn_page(if delta > 0 { -1 } else { 1 });
+                invalidate();
             }
             0
         }

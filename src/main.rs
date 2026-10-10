@@ -1148,6 +1148,13 @@ fn main() {
         let dark = args.get(i + 2).map(|m| m == "dark");
         let d = devices::discover();
         let mut present: Vec<String> = d.found.iter().map(|f| f.id.clone()).collect();
+        // Extra made-up devices, to see the list pages (registered in memory only, not saved).
+        if let Some(n) = std::env::var("RGBTRAY_DEMO_MANY").ok().and_then(|v| v.parse::<usize>().ok()) {
+            present.extend((1..=n).map(|k| format!("lamparray-DEMO{k:04}")));
+        }
+        if let Some(p) = std::env::var("RGBTRAY_DEMO_PAGE").ok().and_then(|v| v.parse().ok()) {
+            ui::set_page(p);
+        }
         config().register(&present);
         check_services(&config().clone());
         if std::env::var_os("RGBTRAY_DEMO_WARN").is_some() {
