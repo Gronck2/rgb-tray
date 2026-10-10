@@ -1849,9 +1849,13 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
         }
         Hit::Keys(i) => {
             if let Some((_, Row::Device(id))) = rows().get(i).cloned() {
-                DestroyWindow(hwnd);
+                // A pinned panel stays open next to the editor.
+                if !PINNED.load(Ordering::Relaxed) {
+                    DestroyWindow(hwnd);
+                    crate::editor::open(&id);
+                    return;
+                }
                 crate::editor::open(&id);
-                return;
             }
         }
         Hit::RenameDevice(i) => {
