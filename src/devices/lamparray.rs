@@ -3,11 +3,10 @@
 //! and key), and every device is driven the same way. Report ids differ between devices, so
 //! they are looked up by usage in the report descriptor instead of being hard-coded.
 
-use super::{Device, Effect, Rgb};
+use super::{animation, Device, Effect, Rgb};
 use crate::hid::{self, Hid, HidInfo, Preparsed};
-use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use windows_sys::Win32::Devices::HumanInterfaceDevice::*;
 
 const PAGE: u16 = 0x59;
@@ -381,7 +380,7 @@ impl LampArray {
     /// Hands the lighting back to the device's own firmware, e.g. before another driver for
     /// the same device (ASUS Aura) takes over.
     pub fn release(&self) {
-        stop_animation(&self.path);
+        animation::stop(&self.path);
         TAKEN.lock().unwrap().retain(|p| *p != self.path);
         self.set_autonomous(true);
     }
@@ -395,10 +394,9 @@ impl LampArray {
         }
         self.take()?;
         if effect == Effect::Breathe {
-            animate(Animation { path: self.path.clone(), feature_len: self.len as u16, effect, color: Rgb(0, 0, 0), zones, brightness });
-            return Ok(());
+            return if self.start_animation(effect, Rgb(0, 0, 0), zones, brightness) { Ok(()) } else { Err("LampArray: cannot open".into()) };
         }
-        stop_animation(&self.path);
+        animation::stop(&self.path);
         let scaled: Vec<(Vec<u16>, Rgb)> = zones.into_iter().map(|(l, c)| (l, c.scaled(brightness))).collect();
         if self.fill_zones(&scaled) {
             Ok(())
@@ -409,14 +407,6 @@ impl LampArray {
 }
 
 // ---------------------------------------------------------------- driver
-
-/// Product names of the LampArray devices found, by id: the panel shows them as the default name.
-static NAMES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
-
-/// The name the device reports, for devices without a model in KINDS.
-pub fn name_of(id: &str) -> Option<String> {
-    NAMES.lock().unwrap().iter().find(|(i, _)| i == id).map(|(_, n)| n.clone())
-}
 
 /// Devices taken from autonomous mode in this session. Right after that the device drops the
 /// first update (seen on ASUS), so the first take waits a moment.
@@ -436,12 +426,7 @@ pub fn find_all() -> Vec<LampArray> {
         match LampArray::open(&info) {
             Ok(la) => {
                 la.register_zones(&la.id);
-                let name = device_name(&info);
-                let mut names = NAMES.lock().unwrap();
-                names.retain(|(i, _)| *i != la.id);
-                if !name.is_empty() {
-                    names.push((la.id.clone(), name));
-                }
+                super::set_name(&la.id, &super::device_name(&info));
                 out.push(la);
             }
             Err(e) => crate::log(&format!("lamparray: {e}")),
@@ -450,22 +435,29 @@ pub fn find_all() -> Vec<LampArray> {
     out
 }
 
-/// "ASUSTek Computer Inc." + "N-KEY Device" → "ASUSTek N-KEY Device": the product name with the
-/// maker's first word, unless the product name already starts with it.
-fn device_name(info: &HidInfo) -> String {
-    let product = info.product();
-    let maker = info.manufacturer();
-    let maker = maker.split_whitespace().next().unwrap_or("").trim_end_matches(',');
-    if maker.is_empty() || product.to_lowercase().starts_with(&maker.to_lowercase()) {
-        product
-    } else if product.is_empty() {
-        maker.to_string()
-    } else {
-        format!("{maker} {product}")
-    }
-}
-
 impl LampArray {
+    /// Plays breathing or spectrum: the animation thread gets its own handle to the device.
+    fn start_animation(&self, effect: Effect, color: Rgb, zones: Vec<(Vec<u16>, Rgb)>, brightness: u8) -> bool {
+        let info =
+            HidInfo { path: self.path.clone(), vid: 0, pid: 0, usage_page: PAGE, usage: LAMP_ARRAY, feature_len: self.len as u16, input_len: 0, output_len: 0 };
+        let Ok(la) = LampArray::open(&info) else { return false };
+        animation::start(
+            &self.path,
+            Box::new(move |t| match effect {
+                Effect::Breathe => {
+                    let level = (brightness as f32 * animation::breathe(t)) as u8;
+                    if zones.is_empty() {
+                        la.fill(color.scaled(level))
+                    } else {
+                        la.fill_zones(&zones.iter().map(|(l, c)| (l.clone(), c.scaled(level))).collect::<Vec<_>>())
+                    }
+                }
+                _ => la.fill(crate::hue(animation::cycle_hue(t)).scaled(brightness)),
+            }),
+        );
+        true
+    }
+
     /// Switches autonomous mode off; waits after the first time for this device.
     fn take(&self) -> Result<(), String> {
         if !self.set_autonomous(false) {
@@ -486,18 +478,15 @@ impl Device for LampArray {
         self.take()?;
         let ok = match effect {
             Effect::Static => {
-                stop_animation(&self.path);
+                animation::stop(&self.path);
                 self.fill(color.scaled(brightness))
             }
             Effect::Off => {
-                stop_animation(&self.path);
+                animation::stop(&self.path);
                 self.fill(Rgb(0, 0, 0))
             }
             // The standard has no effects: the app plays them frame by frame.
-            Effect::Breathe | Effect::Cycle => {
-                animate(Animation { path: self.path.clone(), feature_len: self.len as u16, effect, color, zones: Vec::new(), brightness });
-                true
-            }
+            Effect::Breathe | Effect::Cycle => self.start_animation(effect, color, Vec::new(), brightness),
         };
         if ok {
             Ok(())
@@ -508,94 +497,6 @@ impl Device for LampArray {
 
     fn apply_zones(&self, effect: Effect, zones: &[(u8, Rgb)], brightness: u8) -> Result<(), String> {
         self.apply_zone_colors(&self.id, effect, zones, brightness)
-    }
-}
-
-// ---------------------------------------------------------------- animation
-
-/// An effect played by the app on one device.
-#[derive(Clone)]
-struct Animation {
-    path: Vec<u16>,
-    feature_len: u16,
-    effect: Effect,
-    color: Rgb,
-    /// Breathing per zone: the lamps of each zone and its color (empty: `color` everywhere).
-    zones: Vec<(Vec<u16>, Rgb)>,
-    brightness: u8,
-}
-
-static ANIMATIONS: Mutex<Vec<Animation>> = Mutex::new(Vec::new());
-static ANIMATOR: std::sync::Once = std::sync::Once::new();
-
-const BREATHE_PERIOD: f32 = 4.0;
-const CYCLE_PERIOD: f32 = 10.0;
-const FRAME: Duration = Duration::from_millis(33);
-
-fn animate(a: Animation) {
-    let mut list = ANIMATIONS.lock().unwrap();
-    list.retain(|o| o.path != a.path);
-    list.push(a);
-    drop(list);
-    ANIMATOR.call_once(|| {
-        std::thread::spawn(animator);
-    });
-}
-
-fn stop_animation(path: &[u16]) {
-    ANIMATIONS.lock().unwrap().retain(|a| a.path != path);
-}
-
-/// Plays the animations: one thread for all devices, each with its own handle. A device that
-/// stops answering is dropped; the next apply starts it again.
-fn animator() {
-    let start = Instant::now();
-    let mut open: HashMap<Vec<u16>, LampArray> = HashMap::new();
-    loop {
-        let list = ANIMATIONS.lock().unwrap().clone();
-        open.retain(|path, _| list.iter().any(|a| &a.path == path));
-        let t = start.elapsed().as_secs_f32();
-        for a in &list {
-            if !open.contains_key(&a.path) {
-                let info = HidInfo {
-                    path: a.path.clone(),
-                    vid: 0,
-                    pid: 0,
-                    usage_page: PAGE,
-                    usage: LAMP_ARRAY,
-                    feature_len: a.feature_len,
-                    input_len: 0,
-                    output_len: 0,
-                };
-                match LampArray::open(&info) {
-                    Ok(la) => {
-                        open.insert(a.path.clone(), la);
-                    }
-                    Err(_) => {
-                        stop_animation(&a.path);
-                        continue;
-                    }
-                }
-            }
-            let la = &open[&a.path];
-            let ok = match a.effect {
-                Effect::Breathe => {
-                    let k = 0.5 - 0.5 * (t / BREATHE_PERIOD * std::f32::consts::TAU).cos();
-                    let level = (a.brightness as f32 * k) as u8;
-                    if a.zones.is_empty() {
-                        la.fill(a.color.scaled(level))
-                    } else {
-                        let frame: Vec<(Vec<u16>, Rgb)> = a.zones.iter().map(|(l, c)| (l.clone(), c.scaled(level))).collect();
-                        la.fill_zones(&frame)
-                    }
-                }
-                _ => la.fill(crate::hue(t / CYCLE_PERIOD * 360.0).scaled(a.brightness)),
-            };
-            if !ok {
-                stop_animation(&a.path);
-            }
-        }
-        std::thread::sleep(FRAME);
     }
 }
 

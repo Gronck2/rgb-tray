@@ -1,8 +1,9 @@
+pub mod animation;
 pub mod asus;
 pub mod lamparray;
 pub mod logitech;
-pub mod macropad;
 pub mod razer;
+pub mod via;
 
 use crate::i18n::Text;
 use serde::{Deserialize, Serialize};
@@ -133,15 +134,48 @@ impl Kind {
 }
 
 /// Every supported model, in panel order.
-pub const KINDS: [Kind; 6] = [
+pub const KINDS: [Kind; 7] = [
     Kind { key: "logitech", names: ("Logitech G915 TKL", "Logitech G915 TKL"), icon: "\u{E765}", zones: &[], per_key: true, port_id: false },
     Kind { key: "naga", names: ("Razer Naga V2 Pro", "Razer Naga V2 Pro"), icon: "\u{E962}", zones: &NAGA_ZONES, per_key: false, port_id: false },
     Kind { key: "dock", names: ("Razer Mouse Dock Pro", "Razer Mouse Dock Pro"), icon: "\u{E772}", zones: &[], per_key: false, port_id: false },
     Kind { key: "asus", names: ("Клавиатура ASUS", "ASUS keyboard"), icon: "\u{E7F8}", zones: &[], per_key: false, port_id: false },
     Kind { key: "macropad", names: ("Geekboard MacroPad", "Geekboard MacroPad"), icon: "\u{E92E}", zones: &[], per_key: false, port_id: true },
+    // Any QMK keyboard with VIA support and RGB lighting.
+    Kind { key: "via", names: ("Клавиатура QMK", "QMK keyboard"), icon: "\u{E765}", zones: &[], per_key: false, port_id: true },
     // Any device with the standard HID LampArray interface and no driver of its own.
     Kind { key: "lamparray", names: ("Устройство LampArray", "LampArray device"), icon: "\u{E82F}", zones: &[], per_key: false, port_id: true },
 ];
+
+/// Names devices report about themselves, by id: the default name of devices of a generic
+/// driver (LampArray, QMK/VIA), whose model isn't known in advance.
+static NAMES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+pub fn set_name(id: &str, name: &str) {
+    let mut names = NAMES.lock().unwrap();
+    names.retain(|(i, _)| i != id);
+    if !name.is_empty() {
+        names.push((id.to_string(), name.to_string()));
+    }
+}
+
+pub fn name_of(id: &str) -> Option<String> {
+    NAMES.lock().unwrap().iter().find(|(i, _)| i == id).map(|(_, n)| n.clone())
+}
+
+/// "ASUSTek Computer Inc." + "N-KEY Device" → "ASUSTek N-KEY Device": the product name with the
+/// maker's first word, unless the product name already starts with it.
+pub fn device_name(info: &crate::hid::HidInfo) -> String {
+    let product = info.product();
+    let maker = info.manufacturer();
+    let maker = maker.split_whitespace().next().unwrap_or("").trim_end_matches(',');
+    if maker.is_empty() || product.to_lowercase().starts_with(&maker.to_lowercase()) {
+        product
+    } else if product.is_empty() {
+        maker.to_string()
+    } else {
+        format!("{maker} {product}")
+    }
+}
 
 /// Independently lit zones of a device: (zone / LED id, name in the interface language).
 /// Fixed for a model (Naga), or read from the device (LampArray, incl. the ASUS keyboard).
@@ -166,8 +200,8 @@ pub fn interface_note(i: &crate::hid::HidInfo) -> Option<&'static str> {
         (0x1532, 0x0001, 0x0002) if i.feature_len == 91 && razer::is_supported(i.pid) => "SUPPORTED: Razer",
         (0x1532, _, _) if i.feature_len == 91 => "Razer control interface (protocol known)",
         (0x0B05, 0xFF31, 0x0079) => "SUPPORTED: ASUS Aura",
-        (0x0483, 0xFF60, 0x0061) if i.pid == macropad::PID => "SUPPORTED: Geekboard MacroPad (VIA)",
-        (_, 0xFF60, 0x0061) => "QMK/VIA raw HID (protocol known)",
+        (via::MACROPAD_VID, 0xFF60, 0x0061) if i.pid == via::MACROPAD_PID => "SUPPORTED: Geekboard MacroPad (VIA)",
+        (_, 0xFF60, 0x0061) => "SUPPORTED: QMK/VIA keyboard (if it has RGB lighting)",
         (_, 0x0059, 0x0001) => "HID LampArray (Windows Dynamic Lighting standard)",
         (_, page, _) if page >= 0xFF00 => "vendor-specific",
         _ => return None,
@@ -271,7 +305,7 @@ pub fn discover() -> Discovery {
     if let Some(d) = asus::Asus::find() {
         found.push(Found { id: "asus".into(), dev: Box::new(d) });
     }
-    for d in macropad::MacroPad::find_all() {
+    for d in via::find_all() {
         found.push(Found { id: d.id.clone(), dev: Box::new(d) });
     }
     for d in lamparray::find_all() {

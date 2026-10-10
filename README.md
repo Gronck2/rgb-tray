@@ -17,8 +17,10 @@ A tiny Windows tray app that controls RGB lighting of keyboards and mice directl
 | Logitech G915 TKL | LIGHTSPEED receiver | Static, breathing, spectrum, off; per-key colors; battery |
 | Razer Naga V2 Pro | HyperSpeed dongle / dock | Separate logo and scroll wheel zones; effects; battery |
 | Razer Mouse Dock Pro | USB | Static, breathing, spectrum, off |
-| ASUS laptop keyboard (Aura) | Built-in | Static, breathing, spectrum, off |
-| Geekboard MacroPad v2 (QMK/VIA) | USB | Static, spectrum, off |
+| ASUS laptop keyboard (Aura) | Built-in | Static, breathing, spectrum, off; keyboard zones and body lamps via LampArray |
+| Geekboard MacroPad v2 (QMK/VIA) | USB | Static, breathing, spectrum, off |
+| Other QMK keyboards with VIA and RGB (Keychron, custom boards…) | USB | Static, breathing, spectrum, off, brightness (breathing and spectrum drawn by the app) |
+| Devices with the Windows Dynamic Lighting standard (HID LampArray) | USB / built-in | Static, breathing, spectrum, off, zones from the device (breathing and spectrum drawn by the app) |
 
 Other models that speak the same protocols may work but are untested.
 
