@@ -139,7 +139,7 @@ impl DeviceConfig {
     }
 }
 
-fn parse_hex(s: &str) -> Rgb {
+pub fn parse_hex(s: &str) -> Rgb {
     let v = u32::from_str_radix(s.trim_start_matches('#'), 16).unwrap_or(0);
     Rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
 }

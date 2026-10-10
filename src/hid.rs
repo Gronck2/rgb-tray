@@ -181,6 +181,14 @@ impl Hid {
         }
     }
 
+    /// The parsed report descriptor, for building and reading reports by usage.
+    pub fn preparsed(&self) -> Option<Preparsed> {
+        unsafe {
+            let mut pp: PHIDP_PREPARSED_DATA = 0;
+            (HidD_GetPreparsedData(self.h, &mut pp) != 0).then_some(Preparsed(pp))
+        }
+    }
+
     pub fn set_feature(&self, buf: &[u8]) -> bool {
         unsafe { HidD_SetFeature(self.h, buf.as_ptr() as _, buf.len() as u32) != 0 }
     }
@@ -230,6 +238,18 @@ impl Hid {
             }
             Ok(Some(n as usize))
         }
+    }
+}
+
+/// Parsed report descriptor of an open device (HidP_* functions take it).
+pub struct Preparsed(pub PHIDP_PREPARSED_DATA);
+
+// An opaque, read-only buffer owned by this value.
+unsafe impl Send for Preparsed {}
+
+impl Drop for Preparsed {
+    fn drop(&mut self) {
+        unsafe { HidD_FreePreparsedData(self.0) };
     }
 }
 

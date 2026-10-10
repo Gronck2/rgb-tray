@@ -1,4 +1,5 @@
 pub mod asus;
+pub mod lamparray;
 pub mod logitech;
 pub mod macropad;
 pub mod razer;

@@ -605,10 +605,46 @@ fn diagnose_report() -> String {
                     let _ = write!(s, "  <- {n}");
                 }
                 let _ = writeln!(s);
+                if h.usage_page == 0x0059 && h.usage == 0x0001 {
+                    let _ = writeln!(s, "        LampArray: {}", devices::lamparray::describe(h));
+                }
             }
         }
     }
     s
+}
+
+fn lamparray_test(args: &[String]) {
+    use std::fmt::Write as _;
+    let out = args.first().cloned().unwrap_or_else(|| "lamparray.txt".into());
+    let hex = args.get(1).map(String::as_str).unwrap_or("00ff00");
+    let color = config::parse_hex(hex);
+    let seconds: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(8);
+    let mut s = String::new();
+    let mut held = Vec::new();
+    for info in devices::lamparray::interfaces() {
+        let _ = writeln!(s, "{:04X}:{:04X} {} — {}", info.vid, info.pid, info.product(), devices::lamparray::describe(&info));
+        match devices::lamparray::LampArray::open(&info) {
+            Ok(la) => {
+                for l in la.lamps().iter().take(12) {
+                    let _ = writeln!(s, "  lamp {:>3}: pos {:?} purposes {:#x} levels {:?} key {:#x}", l.id, l.pos, l.purposes, l.levels, l.key);
+                }
+                let control = la.set_autonomous(false);
+                let fill = la.fill(color);
+                let _ = writeln!(s, "  take control: {control}, fill {hex}: {fill}");
+                held.push(la);
+            }
+            Err(e) => {
+                let _ = writeln!(s, "  open failed: {e}");
+            }
+        }
+    }
+    if held.is_empty() && s.is_empty() {
+        s.push_str("no LampArray devices\n");
+    }
+    let _ = std::fs::write(&out, &s);
+    std::thread::sleep(std::time::Duration::from_secs(seconds));
+    drop(held);
 }
 
 /// "naga-123456H78900012" → "naga-…0012": enough to tell identical devices apart.
@@ -1024,6 +1060,12 @@ fn main() {
     // `--diagnose [file.txt]`: device report for adding support for new devices.
     if let Some(i) = args.iter().position(|a| a == "--diagnose") {
         diagnose(args.get(i + 1).map(std::path::PathBuf::from));
+        return;
+    }
+    // `--lamparray-test <out.txt> <rrggbb> <seconds>`: takes over every LampArray device,
+    // fills it with the color, writes what the devices report, and hands them back.
+    if let Some(i) = args.iter().position(|a| a == "--lamparray-test") {
+        lamparray_test(&args[i + 1..]);
         return;
     }
     if args.iter().any(|a| a == "--uninstall") {
