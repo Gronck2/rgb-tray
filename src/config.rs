@@ -293,7 +293,7 @@ impl Config {
     pub fn display_name(&self, id: &str) -> String {
         match self.devices.get(id) {
             Some(d) if !d.name.is_empty() => d.name.clone(),
-            _ => kind_of(id).name().to_string(),
+            _ => crate::devices::lamparray::name_of(id).unwrap_or_else(|| kind_of(id).name().to_string()),
         }
     }
 

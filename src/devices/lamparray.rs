@@ -3,8 +3,11 @@
 //! and key), and every device is driven the same way. Report ids differ between devices, so
 //! they are looked up by usage in the report descriptor instead of being hard-coded.
 
-use super::Rgb;
+use super::{Device, Effect, Rgb};
 use crate::hid::{self, Hid, HidInfo, Preparsed};
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use windows_sys::Win32::Devices::HumanInterfaceDevice::*;
 
 const PAGE: u16 = 0x59;
@@ -90,13 +93,14 @@ struct Ids {
 }
 
 pub struct LampArray {
+    /// "lamparray-<hash of the HID path>": these devices have no readable serial number.
+    pub id: String,
+    path: Vec<u16>,
     hid: Hid,
     pp: Preparsed,
     len: usize,
     ids: Ids,
     pub attributes: Attributes,
-    /// Autonomous mode was switched off: hand the lighting back when done.
-    controlled: std::cell::Cell<bool>,
 }
 
 /// LampArray interfaces of real devices. Virtual ones ("VHF") are bridges that vendor
@@ -126,7 +130,8 @@ impl LampArray {
             range: report_of(LAMP_ID_START).ok_or("LampArray: no range update report")?,
             control: report_of(AUTONOMOUS_MODE).unwrap_or(0),
         };
-        let mut la = LampArray { hid, pp, len: info.feature_len as usize, ids, attributes: Attributes::default(), controlled: false.into() };
+        let id = format!("lamparray-{}", super::path_hash(&info.path));
+        let mut la = LampArray { id, path: info.path.clone(), hid, pp, len: info.feature_len as usize, ids, attributes: Attributes::default() };
         la.attributes = la.read_attributes()?;
         Ok(la)
     }
@@ -175,11 +180,7 @@ impl LampArray {
         }
         let Some(mut r) = self.report(self.ids.control) else { return false };
         self.set_value(&mut r, AUTONOMOUS_MODE, on as u32);
-        let ok = self.hid.set_feature(&r);
-        if ok {
-            self.controlled.set(!on);
-        }
-        ok
+        self.hid.set_feature(&r)
     }
 
     /// Every lamp in one color (brightness already applied by the caller).
@@ -232,12 +233,369 @@ impl LampArray {
     }
 }
 
-impl Drop for LampArray {
-    /// Hands the lighting back to the device if it was taken.
-    fn drop(&mut self) {
-        if self.controlled.get() {
-            self.set_autonomous(true);
+// ---------------------------------------------------------------- zones
+
+/// A group of lamps colored together, shown as a zone in the panel.
+#[derive(Clone, Debug)]
+pub struct Zone {
+    /// Zone number in the config (1, 2, ...), like the LED ids of Razer zones.
+    pub led: u8,
+    /// Name (Russian, English).
+    pub names: (String, String),
+    pub lamps: Vec<u16>,
+}
+
+/// A zone before numbering: names (Russian, English) and its lamps.
+type ZoneDraft = ((String, String), Vec<u16>);
+
+/// Most zones shown (the switch has room for about this many next to "All").
+const MAX_ZONES: usize = 8;
+
+/// Zones from the lamp layout:
+/// - key lamps without a key binding one by one, left to right (laptop keyboards with a few
+///   backlight zones), named 1, 2, ...; merged into one "Keys" zone if there are too many;
+/// - lamps bound to keys as one zone (their colors are per key);
+/// - other lamps grouped by purpose (body, logo, ...); a group of 2–4 lamps is split into
+///   single lamps named by where they are (↖ ↗ ↙ ↘) while the zones still fit.
+///
+/// One group only: no zones.
+pub fn zones_from(lamps: &[Lamp]) -> Vec<Zone> {
+    type Names = (String, String);
+    let names = |ru: &str, en: &str| -> Names { (ru.into(), en.into()) };
+    let mut groups: Vec<(Names, Vec<&Lamp>)> = Vec::new();
+    let mut key_zones: Vec<&Lamp> = lamps.iter().filter(|l| l.purposes & 1 != 0 && l.key == 0).collect();
+    key_zones.sort_by_key(|l| (l.pos.0, l.pos.1));
+    for l in lamps.iter().filter(|l| l.purposes & 1 == 0 || l.key != 0) {
+        let n = match l.purposes {
+            _ if l.key != 0 => names("Клавиши", "Keys"),
+            p if p & 2 != 0 => names("Корпус", "Body"),
+            p if p & 4 != 0 => names("Логотип", "Logo"),
+            p if p & 8 != 0 => names("Статус", "Status"),
+            p if p & 16 != 0 => names("Освещение", "Lights"),
+            p if p & 32 != 0 => names("Декор", "Display"),
+            _ => names("Другое", "Other"),
+        };
+        match groups.iter_mut().find(|g| g.0 == n) {
+            Some(g) => g.1.push(l),
+            None => groups.push((n, vec![l])),
         }
+    }
+    let mut zones: Vec<ZoneDraft> = Vec::new();
+    if key_zones.len() + groups.len() <= MAX_ZONES {
+        for (k, l) in key_zones.iter().enumerate() {
+            let n = (k + 1).to_string();
+            zones.push(((n.clone(), n), vec![l.id]));
+        }
+    } else if !key_zones.is_empty() {
+        zones.push((names("Клавиши", "Keys"), key_zones.iter().map(|l| l.id).collect()));
+    }
+    // Zones if every remaining group stays whole; splitting one adds its size minus one.
+    let mut total = zones.len() + groups.len();
+    for (n, group) in groups {
+        let single = n.0 != "Клавиши" && (2..=4).contains(&group.len()) && total - 1 + group.len() <= MAX_ZONES;
+        match single.then(|| by_position(&group)).flatten() {
+            Some(split) => {
+                total += group.len() - 1;
+                zones.extend(split);
+            }
+            None => zones.push((n, group.iter().map(|l| l.id).collect())),
+        }
+    }
+    if zones.len() < 2 {
+        return Vec::new();
+    }
+    zones.into_iter().take(MAX_ZONES).enumerate().map(|(k, (names, lamps))| Zone { led: k as u8 + 1, names, lamps }).collect()
+}
+
+/// Single-lamp zones named by an arrow for where each lamp is in its group: ← → when they
+/// differ only left/right, ↑ ↓ only back/front, ↖ ↗ ↙ ↘ for both. Back row first, left to
+/// right. None if two lamps would get the same arrow.
+fn by_position(group: &[&Lamp]) -> Option<Vec<ZoneDraft>> {
+    let n = group.len() as u64;
+    let mid_x = group.iter().map(|l| l.pos.0 as u64).sum::<u64>() / n;
+    let mid_y = group.iter().map(|l| l.pos.1 as u64).sum::<u64>() / n;
+    let spread_x = group.iter().any(|l| (l.pos.0 as u64) != mid_x);
+    let spread_y = group.iter().any(|l| (l.pos.1 as u64) != mid_y);
+    let mut lamps: Vec<&&Lamp> = group.iter().collect();
+    lamps.sort_by_key(|l| ((l.pos.1 as u64) >= mid_y, l.pos.0));
+    let mut out: Vec<ZoneDraft> = Vec::new();
+    for l in lamps {
+        let left = (l.pos.0 as u64) < mid_x;
+        let back = (l.pos.1 as u64) < mid_y;
+        let arrow = match (spread_x, spread_y) {
+            (true, true) => ["↘", "↗", "↙", "↖"][(left as usize) * 2 + back as usize],
+            (true, false) => {
+                if left {
+                    "←"
+                } else {
+                    "→"
+                }
+            }
+            (false, true) => {
+                if back {
+                    "↑"
+                } else {
+                    "↓"
+                }
+            }
+            (false, false) => return None,
+        };
+        if out.iter().any(|z| z.0 .0 == arrow) {
+            return None;
+        }
+        out.push(((arrow.into(), arrow.into()), vec![l.id]));
+    }
+    Some(out)
+}
+/// Zones of the devices found, by device id; and by HID path, so lamps are read only once.
+/// (device id, HID path, zones).
+type DeviceZones = (String, Vec<u16>, Vec<Zone>);
+static ZONES: Mutex<Vec<DeviceZones>> = Mutex::new(Vec::new());
+
+/// The zones of a device found earlier (empty if it has none).
+pub fn zones(id: &str) -> Vec<Zone> {
+    ZONES.lock().unwrap().iter().find(|z| z.0 == id).map(|z| z.2.clone()).unwrap_or_default()
+}
+
+impl LampArray {
+    /// Remembers this device's zones under `id`, reading the lamps the first time.
+    pub fn register_zones(&self, id: &str) {
+        let known = ZONES.lock().unwrap().iter().find(|z| z.1 == self.path).map(|z| z.2.clone());
+        let zones = known.unwrap_or_else(|| zones_from(&self.lamps()));
+        let mut all = ZONES.lock().unwrap();
+        all.retain(|z| z.0 != id && z.1 != self.path);
+        all.push((id.to_string(), self.path.clone(), zones));
+    }
+
+    /// Colors each zone (zone number, color); lamps outside the zones keep their color.
+    fn fill_zones(&self, zones: &[(Vec<u16>, Rgb)]) -> bool {
+        zones.iter().all(|(lamps, c)| lamps.iter().all(|&id| self.fill_range(id, id, *c)))
+    }
+
+    /// The lamps of each configured zone, with its color.
+    fn zone_lamps(&self, id: &str, colors: &[(u8, Rgb)]) -> Vec<(Vec<u16>, Rgb)> {
+        let zones = zones(id);
+        colors.iter().filter_map(|&(led, c)| zones.iter().find(|z| z.led == led).map(|z| (z.lamps.clone(), c))).collect()
+    }
+
+    /// Hands the lighting back to the device's own firmware, e.g. before another driver for
+    /// the same device (ASUS Aura) takes over.
+    pub fn release(&self) {
+        stop_animation(&self.path);
+        TAKEN.lock().unwrap().retain(|p| *p != self.path);
+        self.set_autonomous(true);
+    }
+
+    /// Per-zone colors: static, or breathing played by the app; other effects are whole-device.
+    pub fn apply_zone_colors(&self, id: &str, effect: Effect, colors: &[(u8, Rgb)], brightness: u8) -> Result<(), String> {
+        let zones = self.zone_lamps(id, colors);
+        if zones.is_empty() || !matches!(effect, Effect::Static | Effect::Breathe) {
+            let color = colors.first().map_or(Rgb(255, 255, 255), |z| z.1);
+            return self.apply(effect, color, brightness);
+        }
+        self.take()?;
+        if effect == Effect::Breathe {
+            animate(Animation { path: self.path.clone(), feature_len: self.len as u16, effect, color: Rgb(0, 0, 0), zones, brightness });
+            return Ok(());
+        }
+        stop_animation(&self.path);
+        let scaled: Vec<(Vec<u16>, Rgb)> = zones.into_iter().map(|(l, c)| (l, c.scaled(brightness))).collect();
+        if self.fill_zones(&scaled) {
+            Ok(())
+        } else {
+            Err("LampArray: update failed".into())
+        }
+    }
+}
+
+// ---------------------------------------------------------------- driver
+
+/// Product names of the LampArray devices found, by id: the panel shows them as the default name.
+static NAMES: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+/// The name the device reports, for devices without a model in KINDS.
+pub fn name_of(id: &str) -> Option<String> {
+    NAMES.lock().unwrap().iter().find(|(i, _)| i == id).map(|(_, n)| n.clone())
+}
+
+/// Devices taken from autonomous mode in this session. Right after that the device drops the
+/// first update (seen on ASUS), so the first take waits a moment.
+static TAKEN: Mutex<Vec<Vec<u16>>> = Mutex::new(Vec::new());
+
+/// LampArray devices without a driver of their own in this app. A device that has one (e.g. the
+/// ASUS keyboard: Aura) is left to it; `RGBTRAY_LAMPARRAY_ALL` takes those too, for testing.
+pub fn find_all() -> Vec<LampArray> {
+    let all = std::env::var_os("RGBTRAY_LAMPARRAY_ALL").is_some();
+    let infos = hid::enumerate_all();
+    let native = |i: &HidInfo| infos.iter().any(|o| o.vid == i.vid && o.pid == i.pid && super::interface_note(o).is_some_and(|n| n.starts_with("SUPPORTED")));
+    let mut out = Vec::new();
+    for info in interfaces() {
+        if !all && native(&info) {
+            continue;
+        }
+        match LampArray::open(&info) {
+            Ok(la) => {
+                la.register_zones(&la.id);
+                let name = device_name(&info);
+                let mut names = NAMES.lock().unwrap();
+                names.retain(|(i, _)| *i != la.id);
+                if !name.is_empty() {
+                    names.push((la.id.clone(), name));
+                }
+                out.push(la);
+            }
+            Err(e) => crate::log(&format!("lamparray: {e}")),
+        }
+    }
+    out
+}
+
+/// "ASUSTek Computer Inc." + "N-KEY Device" → "ASUSTek N-KEY Device": the product name with the
+/// maker's first word, unless the product name already starts with it.
+fn device_name(info: &HidInfo) -> String {
+    let product = info.product();
+    let maker = info.manufacturer();
+    let maker = maker.split_whitespace().next().unwrap_or("").trim_end_matches(',');
+    if maker.is_empty() || product.to_lowercase().starts_with(&maker.to_lowercase()) {
+        product
+    } else if product.is_empty() {
+        maker.to_string()
+    } else {
+        format!("{maker} {product}")
+    }
+}
+
+impl LampArray {
+    /// Switches autonomous mode off; waits after the first time for this device.
+    fn take(&self) -> Result<(), String> {
+        if !self.set_autonomous(false) {
+            return Err("LampArray: control report failed".into());
+        }
+        let mut taken = TAKEN.lock().unwrap();
+        if !taken.contains(&self.path) {
+            taken.push(self.path.clone());
+            drop(taken);
+            std::thread::sleep(Duration::from_millis(1000));
+        }
+        Ok(())
+    }
+}
+
+impl Device for LampArray {
+    fn apply(&self, effect: Effect, color: Rgb, brightness: u8) -> Result<(), String> {
+        self.take()?;
+        let ok = match effect {
+            Effect::Static => {
+                stop_animation(&self.path);
+                self.fill(color.scaled(brightness))
+            }
+            Effect::Off => {
+                stop_animation(&self.path);
+                self.fill(Rgb(0, 0, 0))
+            }
+            // The standard has no effects: the app plays them frame by frame.
+            Effect::Breathe | Effect::Cycle => {
+                animate(Animation { path: self.path.clone(), feature_len: self.len as u16, effect, color, zones: Vec::new(), brightness });
+                true
+            }
+        };
+        if ok {
+            Ok(())
+        } else {
+            Err("LampArray: update failed".into())
+        }
+    }
+
+    fn apply_zones(&self, effect: Effect, zones: &[(u8, Rgb)], brightness: u8) -> Result<(), String> {
+        self.apply_zone_colors(&self.id, effect, zones, brightness)
+    }
+}
+
+// ---------------------------------------------------------------- animation
+
+/// An effect played by the app on one device.
+#[derive(Clone)]
+struct Animation {
+    path: Vec<u16>,
+    feature_len: u16,
+    effect: Effect,
+    color: Rgb,
+    /// Breathing per zone: the lamps of each zone and its color (empty: `color` everywhere).
+    zones: Vec<(Vec<u16>, Rgb)>,
+    brightness: u8,
+}
+
+static ANIMATIONS: Mutex<Vec<Animation>> = Mutex::new(Vec::new());
+static ANIMATOR: std::sync::Once = std::sync::Once::new();
+
+const BREATHE_PERIOD: f32 = 4.0;
+const CYCLE_PERIOD: f32 = 10.0;
+const FRAME: Duration = Duration::from_millis(33);
+
+fn animate(a: Animation) {
+    let mut list = ANIMATIONS.lock().unwrap();
+    list.retain(|o| o.path != a.path);
+    list.push(a);
+    drop(list);
+    ANIMATOR.call_once(|| {
+        std::thread::spawn(animator);
+    });
+}
+
+fn stop_animation(path: &[u16]) {
+    ANIMATIONS.lock().unwrap().retain(|a| a.path != path);
+}
+
+/// Plays the animations: one thread for all devices, each with its own handle. A device that
+/// stops answering is dropped; the next apply starts it again.
+fn animator() {
+    let start = Instant::now();
+    let mut open: HashMap<Vec<u16>, LampArray> = HashMap::new();
+    loop {
+        let list = ANIMATIONS.lock().unwrap().clone();
+        open.retain(|path, _| list.iter().any(|a| &a.path == path));
+        let t = start.elapsed().as_secs_f32();
+        for a in &list {
+            if !open.contains_key(&a.path) {
+                let info = HidInfo {
+                    path: a.path.clone(),
+                    vid: 0,
+                    pid: 0,
+                    usage_page: PAGE,
+                    usage: LAMP_ARRAY,
+                    feature_len: a.feature_len,
+                    input_len: 0,
+                    output_len: 0,
+                };
+                match LampArray::open(&info) {
+                    Ok(la) => {
+                        open.insert(a.path.clone(), la);
+                    }
+                    Err(_) => {
+                        stop_animation(&a.path);
+                        continue;
+                    }
+                }
+            }
+            let la = &open[&a.path];
+            let ok = match a.effect {
+                Effect::Breathe => {
+                    let k = 0.5 - 0.5 * (t / BREATHE_PERIOD * std::f32::consts::TAU).cos();
+                    let level = (a.brightness as f32 * k) as u8;
+                    if a.zones.is_empty() {
+                        la.fill(a.color.scaled(level))
+                    } else {
+                        let frame: Vec<(Vec<u16>, Rgb)> = a.zones.iter().map(|(l, c)| (l.clone(), c.scaled(level))).collect();
+                        la.fill_zones(&frame)
+                    }
+                }
+                _ => la.fill(crate::hue(t / CYCLE_PERIOD * 360.0).scaled(a.brightness)),
+            };
+            if !ok {
+                stop_animation(&a.path);
+            }
+        }
+        std::thread::sleep(FRAME);
     }
 }
 

@@ -1,5 +1,6 @@
 //! ASUS laptop keyboard backlight (Aura) over vendor feature reports 0x5D / 0x5A.
 
+use super::lamparray::LampArray;
 use super::{Device, Effect, Rgb};
 use crate::hid::{self, Hid};
 
@@ -7,13 +8,15 @@ const VID: u16 = 0x0B05;
 const AURA_REPORT: u8 = 0x5D;
 const KBD_REPORT: u8 = 0x5A;
 const SPEED_MEDIUM: u8 = 0xEB;
-const LAMP_ARRAY_CONTROL_REPORT: u8 = 0x06;
+/// Device id of the laptop keyboard.
+const ID: &str = "asus";
 
 pub struct Asus {
     aura: Hid,
     kbd: Option<Hid>,
-    /// HID LampArray interface (used by Windows Dynamic Lighting) and its feature report size.
-    lamp_array: Option<(Hid, usize)>,
+    /// The HID LampArray interface (Windows Dynamic Lighting): its zones (keyboard zones and
+    /// body lamps) are colored through it; single colors and effects go through Aura.
+    lamp_array: Option<LampArray>,
 }
 
 impl Asus {
@@ -21,21 +24,18 @@ impl Asus {
         let infos = hid::enumerate(VID);
         let open =
             |usage: u16| infos.iter().find(|i| i.usage_page == 0xFF31 && i.usage == usage && i.feature_len >= 64).and_then(|i| Hid::open(&i.path, true, false));
-        let lamp_array = infos
-            .iter()
-            .find(|i| i.usage_page == 0x0059 && i.usage == 0x0001 && i.feature_len > 1)
-            .and_then(|i| Some((Hid::open(&i.path, true, false)?, i.feature_len as usize)));
+        let lamp_array = infos.iter().find(|i| i.usage_page == 0x0059 && i.usage == 0x0001 && i.feature_len > 1).and_then(|i| LampArray::open(i).ok());
+        if let Some(la) = &lamp_array {
+            la.register_zones(ID);
+        }
         Some(Asus { aura: open(0x0079)?, kbd: open(0x0076), lamp_array })
     }
 
-    /// While Dynamic Lighting drives the keyboard, the firmware ignores Aura commands.
-    /// Setting LampArray AutonomousMode (report 6) hands control back to the firmware.
+    /// While LampArray (this app's zones or Windows Dynamic Lighting) drives the keyboard, the
+    /// firmware ignores Aura commands: hand control back to the firmware first.
     fn take_from_dynamic_lighting(&self) {
-        if let Some((hid, len)) = &self.lamp_array {
-            let mut buf = vec![0u8; *len];
-            buf[0] = LAMP_ARRAY_CONTROL_REPORT;
-            buf[1] = 1;
-            hid.set_feature(&buf);
+        if let Some(la) = &self.lamp_array {
+            la.release();
         }
     }
 
@@ -72,5 +72,13 @@ impl Device for Asus {
         Self::send(&self.aura, &[AURA_REPORT, 0xB3, 0x00, mode, r, g, b, SPEED_MEDIUM, 0x00, breathe])?;
         Self::send(&self.aura, &[AURA_REPORT, 0xB5, 0, 0, 0])?;
         Self::send(&self.aura, &[AURA_REPORT, 0xB4])
+    }
+
+    /// Zone colors go through LampArray; without it the first zone's color for everything.
+    fn apply_zones(&self, effect: Effect, zones: &[(u8, Rgb)], brightness: u8) -> Result<(), String> {
+        match &self.lamp_array {
+            Some(la) if matches!(effect, Effect::Static | Effect::Breathe) => la.apply_zone_colors(ID, effect, zones, brightness),
+            _ => self.apply(effect, zones.first().map_or(Rgb(255, 255, 255), |z| z.1), brightness),
+        }
     }
 }

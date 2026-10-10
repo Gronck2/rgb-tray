@@ -380,7 +380,7 @@ fn panel_hit_test(x: f32, y: f32) -> Option<Hit> {
     let y = y - top;
     // The zone switch exists only for devices with several zones (whole device + each zone).
     let zone_count = selected_zones().len();
-    let zones = zone_rects().into_iter().enumerate().take(if zone_count > 0 { zone_count + 1 } else { 0 });
+    let zones = if zone_count > 0 { zone_rects() } else { Vec::new() }.into_iter().enumerate();
     zones
         .map(|(k, r)| (r, Hit::Zone(k)))
         .chain(preset_chips().into_iter().map(|(r, h, _)| (r, h)))
@@ -764,8 +764,8 @@ fn select(id: Option<String>) {
 }
 
 /// Zones of the device on the selected card.
-fn selected_zones() -> &'static [(u8, crate::i18n::Text)] {
-    selected().map_or(&[], |id| kind_of(&id).zones)
+fn selected_zones() -> Vec<(u8, String)> {
+    selected().map_or(Vec::new(), |id| crate::devices::zones_of(&id))
 }
 
 /// Devices the controls change: the selected one, or every shown one.
@@ -773,15 +773,27 @@ fn target_ids() -> Vec<String> {
     selected().map_or_else(crate::active_ids, |id| vec![id])
 }
 
-const ZONE_SEG_W: [f32; 3] = [72.0, 72.0, 104.0];
+/// Labels of the zone switch: the whole device, then each zone.
+fn zone_labels() -> Vec<String> {
+    let whole = if selected().is_some_and(|id| kind_of(&id).key == "naga") { tr!("Вся мышь", "All") } else { tr!("Все", "All") };
+    std::iter::once(whole.to_string()).chain(selected_zones().into_iter().map(|z| z.1)).collect()
+}
 
+/// Segments of the zone switch, right-aligned on the "Color" line, sized to their labels.
 fn zone_rects() -> Vec<R> {
-    let total: f32 = ZONE_SEG_W.iter().sum();
-    let mut x = W - PAD - total;
-    ZONE_SEG_W
-        .iter()
+    let labels = zone_labels();
+    // Room right of the "Color" label; segments shrink to fit.
+    let room = W - 2.0 * PAD - 70.0;
+    let mut widths: Vec<f32> = labels.iter().map(|l| (l.chars().count() as f32 * 7.2 + 22.0).max(32.0)).collect();
+    let total: f32 = widths.iter().sum();
+    if total > room {
+        widths.iter_mut().for_each(|w| *w *= room / total);
+    }
+    let mut x = W - PAD - widths.iter().sum::<f32>();
+    widths
+        .into_iter()
         .map(|w| {
-            let r = R { x, y: COLOR_LABEL_Y - 5.0, w: *w, h: 28.0 };
+            let r = R { x, y: COLOR_LABEL_Y - 5.0, w, h: 28.0 };
             x += w;
             r
         })
@@ -1315,8 +1327,7 @@ impl Flyout {
             let all = R { x: rects[0].x, y: rects[0].y, w: rects.iter().map(|r| r.w).sum(), h: rects[0].h };
             self.fill(rt, all, 4.0, t.card);
             self.stroke(rt, all, 4.0, t.stroke, 1.0);
-            let names = std::iter::once(tr!("Вся мышь", "All")).chain(zones.iter().map(|z| crate::i18n::pick(z.1)));
-            for (k, (name, r)) in names.zip(rects).enumerate() {
+            for (k, (name, r)) in zone_labels().iter().zip(rects).enumerate() {
                 let r = r.inset(3.0);
                 if zone == k {
                     self.fill(rt, r, 3.0, t.accent);
@@ -1678,7 +1689,7 @@ impl Flyout {
         }
         if !dc.zones.is_empty() && matches!(dc.effect, Effect::Static | Effect::Breathe) {
             // One small dot per zone.
-            for (k, &(led, _)) in kind.zones.iter().enumerate().rev() {
+            for (k, &(led, _)) in crate::devices::zones_of(&d.id).iter().enumerate().rev() {
                 let mut z = dc.clone();
                 z.set_rgb(dc.zone_rgb(led));
                 self.circle(rt, dx - k as f32 * 9.0, dy, 8.0, if selected { t.card } else { bg });

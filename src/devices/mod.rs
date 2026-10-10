@@ -133,13 +133,25 @@ impl Kind {
 }
 
 /// Every supported model, in panel order.
-pub const KINDS: [Kind; 5] = [
+pub const KINDS: [Kind; 6] = [
     Kind { key: "logitech", names: ("Logitech G915 TKL", "Logitech G915 TKL"), icon: "\u{E765}", zones: &[], per_key: true, port_id: false },
     Kind { key: "naga", names: ("Razer Naga V2 Pro", "Razer Naga V2 Pro"), icon: "\u{E962}", zones: &NAGA_ZONES, per_key: false, port_id: false },
     Kind { key: "dock", names: ("Razer Mouse Dock Pro", "Razer Mouse Dock Pro"), icon: "\u{E772}", zones: &[], per_key: false, port_id: false },
     Kind { key: "asus", names: ("Клавиатура ASUS", "ASUS keyboard"), icon: "\u{E7F8}", zones: &[], per_key: false, port_id: false },
     Kind { key: "macropad", names: ("Geekboard MacroPad", "Geekboard MacroPad"), icon: "\u{E92E}", zones: &[], per_key: false, port_id: true },
+    // Any device with the standard HID LampArray interface and no driver of its own.
+    Kind { key: "lamparray", names: ("Устройство LampArray", "LampArray device"), icon: "\u{E82F}", zones: &[], per_key: false, port_id: true },
 ];
+
+/// Independently lit zones of a device: (zone / LED id, name in the interface language).
+/// Fixed for a model (Naga), or read from the device (LampArray, incl. the ASUS keyboard).
+pub fn zones_of(id: &str) -> Vec<(u8, String)> {
+    let kind = kind_of(id);
+    if !kind.zones.is_empty() {
+        return kind.zones.iter().map(|&(led, name)| (led, crate::i18n::pick(name).to_string())).collect();
+    }
+    lamparray::zones(id).into_iter().map(|z| (z.led, if crate::i18n::en() { z.names.1 } else { z.names.0 })).collect()
+}
 
 /// Independently lit zones of the Naga V2 Pro: (LED id, name).
 pub const NAGA_ZONES: [(u8, Text); 2] = [(0x04, ("Логотип", "Logo")), (0x05, ("Боковая панель", "Side panel"))];
@@ -260,6 +272,9 @@ pub fn discover() -> Discovery {
         found.push(Found { id: "asus".into(), dev: Box::new(d) });
     }
     for d in macropad::MacroPad::find_all() {
+        found.push(Found { id: d.id.clone(), dev: Box::new(d) });
+    }
+    for d in lamparray::find_all() {
         found.push(Found { id: d.id.clone(), dev: Box::new(d) });
     }
     // One device reachable two ways (e.g. a keyboard on cable and receiver) is driven once.

@@ -199,8 +199,8 @@ fn apply_all() {
             let brightness = cfg.effective_brightness(&f.id);
             let res = if kind.per_key && dc.per_key {
                 f.dev.apply_keys(&dc.all_keys(), brightness)
-            } else if !kind.zones.is_empty() && !dc.zones.is_empty() {
-                let colors: Vec<(u8, Rgb)> = kind.zones.iter().map(|&(led, _)| (led, dc.zone_rgb(led))).collect();
+            } else if !dc.zones.is_empty() && !devices::zones_of(&f.id).is_empty() {
+                let colors: Vec<(u8, Rgb)> = devices::zones_of(&f.id).iter().map(|&(led, _)| (led, dc.zone_rgb(led))).collect();
                 f.dev.apply_zones(dc.effect, &colors, brightness)
             } else {
                 f.dev.apply(dc.effect, dc.rgb(), brightness)
@@ -258,7 +258,7 @@ fn set_color(ids: &[String], c: Rgb) {
 fn set_zone_color(id: &str, led: u8, c: Rgb) {
     let mut cfg = config();
     let dc = cfg.device_mut(id);
-    let leds: Vec<u8> = devices::kind_of(id).zones.iter().map(|z| z.0).collect();
+    let leds: Vec<u8> = devices::zones_of(id).iter().map(|z| z.0).collect();
     dc.set_zone(led, c, &leds);
     if matches!(dc.effect, Effect::Off | Effect::Cycle) {
         dc.effect = Effect::Static;
@@ -707,7 +707,10 @@ fn lamparray_test(args: &[String]) {
         step("5 lamps 4-7 purple, keys off", &|la| la.fill(off) & la.fill_range(4, count(la).saturating_sub(1), purple));
         step("6 all white in one update", &|la| la.fill(white));
     }
-    drop(held);
+    // Hand the lighting back to the devices.
+    for la in &held {
+        la.set_autonomous(true);
+    }
 }
 
 /// "naga-123456H78900012" → "naga-…0012": enough to tell identical devices apart.
