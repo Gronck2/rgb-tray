@@ -506,7 +506,9 @@ fn reg_string(key: &str, value: &str) -> String {
 }
 
 /// A text report for "please add my device" requests: app and Windows versions, supported
-/// devices found, interfering services and every HID interface with its ids and report sizes.
+/// devices found, interfering services and every HID device with its interfaces, the ones
+/// that can carry lighting first. Serial numbers are shortened: the report is meant for a
+/// public issue.
 fn diagnose_report() -> String {
     use std::fmt::Write as _;
     let nt = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
@@ -523,12 +525,12 @@ fn diagnose_report() -> String {
         let _guard = APPLY_LOCK.lock().unwrap();
         devices::discover()
     };
-    let _ = writeln!(s, "\nSupported devices:");
+    let _ = writeln!(s, "\nDevices driven by RGB Tray:");
     for f in &found.found {
-        let _ = writeln!(s, "  {} — {}", f.id, devices::kind_of(&f.id).names.1);
+        let _ = writeln!(s, "  {} — {}", short_id(&f.id), devices::kind_of(&f.id).names.1);
     }
     for id in &found.no_link {
-        let _ = writeln!(s, "  {id} — no link");
+        let _ = writeln!(s, "  {} — no link", short_id(id));
     }
     for kind in &found.no_link_kinds {
         let _ = writeln!(s, "  {kind} — no link (serial unknown)");
@@ -537,33 +539,88 @@ fn diagnose_report() -> String {
         let _ = writeln!(s, "  none found");
     }
     let lamparray = if services::interferes(services::LOGI_LAMPARRAY) { "running (makes the G915 hang)" } else { "disabled or absent" };
-    let _ = writeln!(s, "\nLogitech LampArray service: {lamparray}");
+    let _ = writeln!(s, "Logitech LampArray service: {lamparray}");
 
+    // One entry per physical device: its interfaces share the USB ids and the connection.
     let mut hids = hid::enumerate_all();
     hids.sort_by_key(|h| (h.vid, h.pid, h.usage_page, h.usage));
-    let _ = writeln!(s, "\nHID interfaces ({}):", hids.len());
-    let _ = writeln!(s, "VID:PID    UsagePage:Usage  in/out/feature  Product — path");
+    let mut groups: Vec<Vec<&hid::HidInfo>> = Vec::new();
     for h in &hids {
-        let path = String::from_utf16_lossy(&h.path[..h.path.len().saturating_sub(1)]);
-        // The interface GUID at the end is the same for all of them.
-        let path = path.split("#{").next().unwrap_or(&path).to_string();
-        let _ = writeln!(
-            s,
-            "{:04X}:{:04X}  {:04X}:{:04X}        {:>3}/{:>3}/{:>3}     {} — {}",
-            h.vid,
-            h.pid,
-            h.usage_page,
-            h.usage,
-            h.input_len,
-            h.output_len,
-            h.feature_len,
-            h.product(),
-            path
-        );
+        match groups.iter_mut().find(|g| g[0].vid == h.vid && g[0].pid == h.pid && g[0].transport() == h.transport()) {
+            Some(g) => g.push(h),
+            None => groups.push(vec![h]),
+        }
+    }
+    let rgb_vendor = |vid: u16| devices::RGB_VENDORS.iter().find(|v| v.0 == vid).map(|v| v.1);
+    let notes = |g: &[&hid::HidInfo]| g.iter().filter_map(|h| devices::interface_note(h)).collect::<Vec<_>>();
+    let supported = |g: &[&hid::HidInfo]| notes(g).iter().any(|n| n.starts_with("SUPPORTED"));
+    let candidate = |g: &[&hid::HidInfo]| !notes(g).is_empty() || rgb_vendor(g[0].vid).is_some();
+
+    let section = |g: &[&hid::HidInfo]| {
+        if supported(g) {
+            0
+        } else if candidate(g) {
+            1
+        } else {
+            2
+        }
+    };
+    let titles = ["Supported devices", "Other devices with lighting or vendor interfaces", "Other HID devices"];
+    for (k, title) in titles.into_iter().enumerate() {
+        let list: Vec<&Vec<&hid::HidInfo>> = groups.iter().filter(|g| section(g) == k).collect();
+        let _ = writeln!(s, "\n{title} ({}):", list.len());
+        for g in list {
+            let first = g[0];
+            let maker = g.iter().map(|h| h.manufacturer()).find(|m| !m.is_empty()).unwrap_or_default();
+            let name = g.iter().map(|h| h.product()).find(|p| !p.is_empty()).unwrap_or_default();
+            let mut line = format!("{:04X}:{:04X}  {}", first.vid, first.pid, first.transport());
+            for part in [maker.as_str(), name.as_str()].into_iter().filter(|p| !p.is_empty()) {
+                let _ = write!(line, " — {part}");
+            }
+            if let Some(v) = rgb_vendor(first.vid) {
+                let _ = write!(line, "  [RGB vendor: {v}]");
+            }
+            let _ = writeln!(s, "{line}");
+            // Interface (MI_xx) and collection (COLxx) from the path, in that order.
+            let part = |h: &hid::HidInfo, key: &str| {
+                let path = String::from_utf16_lossy(&h.path).to_lowercase();
+                path.find(key).map(|i| path[i..].chars().take(key.len() + 2).collect::<String>().to_uppercase()).unwrap_or_default()
+            };
+            let mut g = g.clone();
+            g.sort_by_key(|h| (part(h, "mi_"), part(h, "col")));
+            for h in g {
+                let _ = write!(
+                    s,
+                    "    {:<6}{:<6} {:04X}:{:04X} {:<15} in {:>3}  out {:>3}  feature {:>3}",
+                    part(h, "mi_"),
+                    part(h, "col"),
+                    h.usage_page,
+                    h.usage,
+                    devices::usage_name(h.usage_page, h.usage),
+                    h.input_len,
+                    h.output_len,
+                    h.feature_len
+                );
+                if let Some(n) = devices::interface_note(h).filter(|n| *n != "vendor-specific") {
+                    let _ = write!(s, "  <- {n}");
+                }
+                let _ = writeln!(s);
+            }
+        }
     }
     s
 }
 
+/// "naga-123456H78900012" → "naga-…0012": enough to tell identical devices apart.
+fn short_id(id: &str) -> String {
+    match id.split_once('-') {
+        Some((kind, serial)) if serial.chars().count() > 4 => {
+            let tail: String = serial.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+            format!("{kind}-…{tail}")
+        }
+        _ => id.to_string(),
+    }
+}
 /// Writes the device report to `path`, or next to the settings and opens it in Notepad.
 fn diagnose(path: Option<std::path::PathBuf>) {
     let open = path.is_none();
@@ -577,6 +634,62 @@ fn diagnose(path: Option<std::path::PathBuf>) {
         }
         Ok(()) => {}
         Err(e) => unsafe { message(&format!("{}\n{e}", tr!("Не удалось сохранить отчёт:", "Could not save the report:")), true) },
+    }
+}
+
+/// The project page; device requests and bug reports go to its issues.
+const REPO_URL: &str = "https://github.com/Gronck2/rgb-tray";
+
+/// Puts text on the clipboard.
+unsafe fn copy_to_clipboard(text: &str) -> bool {
+    use windows_sys::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
+    use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    const CF_UNICODETEXT: u32 = 13;
+    let w: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+    if OpenClipboard(HWND_MAIN.load(Ordering::Relaxed) as HWND) == 0 {
+        return false;
+    }
+    EmptyClipboard();
+    let mem = GlobalAlloc(GMEM_MOVEABLE, w.len() * 2);
+    let mut ok = false;
+    if !mem.is_null() {
+        let p = GlobalLock(mem) as *mut u16;
+        if !p.is_null() {
+            std::ptr::copy_nonoverlapping(w.as_ptr(), p, w.len());
+            GlobalUnlock(mem);
+            // On success the clipboard owns the memory.
+            ok = !SetClipboardData(CF_UNICODETEXT, mem).is_null();
+        }
+        if !ok {
+            GlobalFree(mem);
+        }
+    }
+    CloseClipboard();
+    ok
+}
+
+/// "Request device support": copies the device report and opens the request form on GitHub.
+/// Runs on its own thread: finding the devices takes a moment.
+fn request_device_support() {
+    let report = diagnose_report();
+    // Also kept as a file, in case the clipboard gets overwritten before pasting.
+    let path = Config::dir().join("rgbtray-diagnose.txt");
+    let _ = std::fs::create_dir_all(Config::dir());
+    let _ = std::fs::write(&path, format!("\u{FEFF}{}", report.replace('\n', "\r\n")));
+    unsafe {
+        let copied = copy_to_clipboard(&report);
+        let text = if copied {
+            tr!(
+                "Отчёт об устройствах скопирован в буфер обмена.\n\nСейчас откроется форма запроса на GitHub (нужен аккаунт GitHub). Укажите модель устройства и вставьте отчёт в поле «Device report» (Ctrl+V).",
+                "The device report is copied to the clipboard.\n\nThe request form on GitHub opens next (a GitHub account is needed). Enter the device model and paste the report into the \"Device report\" field (Ctrl+V)."
+            )
+            .to_string()
+        } else {
+            format!("{}\n{}", tr!("Не удалось скопировать отчёт. Он сохранён в файл:", "Could not copy the report. It is saved to:"), path.display())
+        };
+        message(&text, !copied);
+        let url = wide(&format!("{REPO_URL}/issues/new?template=device-request.yml"));
+        ShellExecuteW(null_mut(), wide("open").as_ptr(), url.as_ptr(), null(), null(), SW_SHOWNORMAL);
     }
 }
 

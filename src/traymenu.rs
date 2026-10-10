@@ -36,6 +36,7 @@ enum Item {
     Export,
     Import,
     Diagnose,
+    RequestDevice,
     Exit,
 }
 
@@ -47,7 +48,7 @@ enum Row {
     Version,
 }
 
-const ROWS: [Row; 12] = [
+const ROWS: [Row; 13] = [
     Row::Item(Item::Open),
     Row::Item(Item::Keys),
     Row::Item(Item::Reapply),
@@ -57,6 +58,7 @@ const ROWS: [Row; 12] = [
     Row::Item(Item::Export),
     Row::Item(Item::Import),
     Row::Item(Item::Diagnose),
+    Row::Item(Item::RequestDevice),
     Row::Divider,
     Row::Version,
     Row::Item(Item::Exit),
@@ -283,6 +285,7 @@ impl Menu {
                         Item::Export => ("\u{E74E}", tr!("Сохранить настройки в файл…", "Save settings to a file…")),
                         Item::Import => ("\u{E8E5}", tr!("Загрузить настройки из файла…", "Load settings from a file…")),
                         Item::Diagnose => ("\u{E9D9}", tr!("Отчёт об устройствах…", "Device report…")),
+                        Item::RequestDevice => ("\u{E710}", tr!("Запросить поддержку устройства…", "Request device support…")),
                         Item::Exit => ("\u{E7E8}", tr!("Выход", "Exit")),
                     };
                     self.text(rt, icon, &self.fmt.icon, R { x: r.x + 6.0, y: r.y, w: 28.0, h: r.h }, fg);
@@ -332,6 +335,9 @@ fn run(item: Item, keyboard: Option<String>) {
         // Searching devices takes a moment; the report opens in Notepad when ready.
         Item::Diagnose => {
             std::thread::spawn(|| crate::diagnose(None));
+        }
+        Item::RequestDevice => {
+            std::thread::spawn(crate::request_device_support);
         }
         Item::Exit => crate::quit(),
     }

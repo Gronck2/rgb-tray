@@ -1,0 +1,68 @@
+name: Device request / Запрос устройства
+description: Ask to support a new keyboard, mouse or other RGB device / Попросить поддержку нового устройства
+title: "Device request: "
+labels: ["device request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **How to get the device report:** right-click the RGB Tray icon → **Request device support…** — the report is copied to the clipboard. Or run `rgbtray --diagnose report.txt`.
+
+        **Как получить отчёт:** правый клик по значку RGB Tray → **Запросить поддержку устройства…** — отчёт скопируется в буфер обмена. Или `rgbtray --diagnose report.txt`.
+
+  - type: input
+    id: model
+    attributes:
+      label: Device model / Модель устройства
+      description: Exact model, as on the box or the vendor site / Точная модель, как на коробке или сайте производителя
+      placeholder: "SteelSeries Apex Pro TKL (2023)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: connection
+    attributes:
+      label: Connection / Подключение
+      multiple: true
+      options:
+        - USB cable / Кабель USB
+        - Wireless dongle / Радиоприёмник
+        - Bluetooth
+        - Built into a laptop / Встроено в ноутбук
+        - Other / Другое
+    validations:
+      required: true
+
+  - type: textarea
+    id: lighting
+    attributes:
+      label: Lighting / Подсветка
+      description: What lights up and how it can be set in the vendor software / Что светится и что можно настроить в фирменной программе
+      placeholder: |
+        Per-key RGB on the keyboard, a light bar on the side; effects: static, breathing, wave.
+        Цвет каждой клавиши, полоса сбоку; эффекты: статичный, дыхание, волна.
+    validations:
+      required: true
+
+  - type: input
+    id: software
+    attributes:
+      label: Vendor software / Фирменная программа
+      description: The program that controls the lighting now, if any / Программа, которой подсветка управляется сейчас
+      placeholder: "SteelSeries GG 80.0"
+
+  - type: textarea
+    id: report
+    attributes:
+      label: Device report
+      description: Paste the whole report here (Ctrl+V) / Вставьте отчёт целиком (Ctrl+V)
+      render: text
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: testing
+    attributes:
+      label: Testing / Проверка
+      options:
+        - label: I can try test builds with this device and report what happens / Могу проверять тестовые сборки на этом устройстве

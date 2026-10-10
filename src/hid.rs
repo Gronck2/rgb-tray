@@ -26,17 +26,40 @@ pub struct HidInfo {
 impl HidInfo {
     /// The product name the device reports (empty if none or not readable).
     pub fn product(&self) -> String {
+        self.string(HidD_GetProductString)
+    }
+
+    /// The manufacturer name the device reports (empty if none or not readable).
+    pub fn manufacturer(&self) -> String {
+        self.string(HidD_GetManufacturerString)
+    }
+
+    /// How the device is connected, from its interface path.
+    pub fn transport(&self) -> &'static str {
+        let path = String::from_utf16_lossy(&self.path).to_lowercase();
+        // HID over Bluetooth Classic and Bluetooth LE (HOGP) services.
+        if path.contains("{00001124-") || path.contains("{00001812-") {
+            "Bluetooth"
+        } else if path.contains("vid_") {
+            "USB"
+        } else {
+            "internal"
+        }
+    }
+
+    /// A string descriptor read with `get` (HidD_GetProductString etc.); empty if none.
+    fn string(&self, get: unsafe extern "system" fn(HANDLE, *mut core::ffi::c_void, u32) -> BOOLEAN) -> String {
         unsafe {
             let h = CreateFileW(self.path.as_ptr(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE, null(), OPEN_EXISTING, 0, null_mut());
             if h == INVALID_HANDLE_VALUE {
                 return String::new();
             }
             let mut buf = [0u16; 128];
-            let ok = HidD_GetProductString(h, buf.as_mut_ptr() as _, (buf.len() * 2) as u32) != 0;
+            let ok = get(h, buf.as_mut_ptr() as _, (buf.len() * 2) as u32) != 0;
             CloseHandle(h);
             let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
             if ok {
-                String::from_utf16_lossy(&buf[..len])
+                String::from_utf16_lossy(&buf[..len]).trim().to_string()
             } else {
                 String::new()
             }

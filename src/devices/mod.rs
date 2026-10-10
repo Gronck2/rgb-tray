@@ -143,6 +143,64 @@ pub const KINDS: [Kind; 5] = [
 /// Independently lit zones of the Naga V2 Pro: (LED id, name).
 pub const NAGA_ZONES: [(u8, Text); 2] = [(0x04, ("Логотип", "Logo")), (0x05, ("Боковая панель", "Side panel"))];
 
+/// What a HID interface is to this app, for the device report: a supported device, or a
+/// known lighting protocol that a new driver could build on.
+pub fn interface_note(i: &crate::hid::HidInfo) -> Option<&'static str> {
+    Some(match (i.vid, i.usage_page, i.usage) {
+        (0x046D, 0xFF00, 0x0002) if logitech::RECEIVER_PIDS.contains(&i.pid) => "SUPPORTED: Logitech receiver (HID++)",
+        (0x046D, 0xFF00, 0x0002) => "Logitech HID++ (protocol known)",
+        // Razer lighting goes through 91-byte feature reports on the first mouse collection.
+        (0x1532, 0x0001, 0x0002) if i.feature_len == 91 && razer::is_supported(i.pid) => "SUPPORTED: Razer",
+        (0x1532, _, _) if i.feature_len == 91 => "Razer control interface (protocol known)",
+        (0x0B05, 0xFF31, 0x0079) => "SUPPORTED: ASUS Aura",
+        (0x0483, 0xFF60, 0x0061) if i.pid == macropad::PID => "SUPPORTED: Geekboard MacroPad (VIA)",
+        (_, 0xFF60, 0x0061) => "QMK/VIA raw HID (protocol known)",
+        (_, 0x0059, 0x0001) => "HID LampArray (Windows Dynamic Lighting standard)",
+        (_, page, _) if page >= 0xFF00 => "vendor-specific",
+        _ => return None,
+    })
+}
+
+/// Plain name of a standard HID usage, to make the report readable.
+pub fn usage_name(page: u16, usage: u16) -> &'static str {
+    match (page, usage) {
+        (0x0001, 0x0002) => "mouse",
+        (0x0001, 0x0006) => "keyboard",
+        (0x0001, 0x0080) => "system control",
+        (0x0001, 0x000C) => "wireless radio",
+        (0x000C, 0x0001) => "media keys",
+        (0x000D, _) => "touch",
+        (0x0059, _) => "lighting",
+        (p, _) if p >= 0xFF00 => "vendor",
+        _ => "",
+    }
+}
+
+/// Vendors known for RGB peripherals or lighting controllers (USB vendor id, name).
+pub const RGB_VENDORS: &[(u16, &str)] = &[
+    (0x03F0, "HP / HyperX"),
+    (0x0483, "STMicroelectronics (QMK boards)"),
+    (0x048D, "ITE (laptop / motherboard RGB)"),
+    (0x046D, "Logitech"),
+    (0x04D9, "Holtek (keyboards)"),
+    (0x0951, "Kingston / HyperX"),
+    (0x0B05, "ASUS"),
+    (0x0C45, "Microdia (keyboards)"),
+    (0x1038, "SteelSeries"),
+    (0x1044, "Gigabyte"),
+    (0x1462, "MSI"),
+    (0x1532, "Razer"),
+    (0x187C, "Alienware"),
+    (0x1B1C, "Corsair"),
+    (0x1E71, "NZXT"),
+    (0x1E7D, "ROCCAT / Turtle Beach"),
+    (0x2516, "Cooler Master"),
+    (0x258A, "SinoWealth (keyboards, mice)"),
+    (0x26CE, "ASRock"),
+    (0x31E3, "Wooting"),
+    (0x3434, "Keychron"),
+];
+
 /// The model of a device id ("naga-123456…" → Naga); unknown ids get the first model.
 pub fn kind_of(id: &str) -> &'static Kind {
     let key = id.split('-').next().unwrap_or(id);

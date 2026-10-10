@@ -1,0 +1,29 @@
+name: Bug report / Ошибка
+description: Something does not work as expected / Что-то работает не так
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened / Что случилось
+      description: What you did, what you expected and what happened instead / Что вы сделали, чего ожидали и что произошло
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: RGB Tray version / Версия RGB Tray
+      description: Shown in the tray menu (right-click the icon) / Видна в меню значка (правый клик)
+      placeholder: "0.6.1"
+    validations:
+      required: true
+
+  - type: textarea
+    id: report
+    attributes:
+      label: Device report
+      description: |
+        Right-click the tray icon → **Device report…** and paste the text here.
+        Правый клик по значку → **Отчёт об устройствах…**, вставьте текст сюда.
+      render: text

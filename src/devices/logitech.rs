@@ -10,7 +10,7 @@ use super::{Battery, Device, Effect, Rgb};
 use crate::hid::{self, Hid};
 
 const VID: u16 = 0x046D;
-const RECEIVER_PIDS: [u16; 6] = [0xC539, 0xC53A, 0xC53F, 0xC541, 0xC545, 0xC547];
+pub const RECEIVER_PIDS: [u16; 6] = [0xC539, 0xC53A, 0xC53F, 0xC541, 0xC545, 0xC547];
 const LONG: u8 = 0x11;
 /// Software id for requests from regular applies; the key editor uses its own
 /// so responses to two concurrent connections can't be mixed up.

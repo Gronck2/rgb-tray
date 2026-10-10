@@ -16,6 +16,11 @@ struct Model {
     has_battery: bool,
 }
 
+/// A Razer product id this app drives.
+pub fn is_supported(pid: u16) -> bool {
+    MODELS.iter().any(|m| m.pid == pid)
+}
+
 const MODELS: &[Model] = &[
     // Naga V2 Pro: wireless (HyperSpeed) and wired PIDs. 0x01 scroll wheel, 0x04 logo, 0x05 side.
     Model { pid: 0x00A8, key: "naga", transaction_id: 0x1F, leds: &[0x01, 0x04, 0x05], has_battery: true },

@@ -20,7 +20,11 @@ A tiny Windows tray app that controls RGB lighting of keyboards and mice directl
 | ASUS laptop keyboard (Aura) | Built-in | Static, breathing, spectrum, off |
 | Geekboard MacroPad v2 (QMK/VIA) | USB | Static, spectrum, off |
 
-Other models that speak the same protocols may work but are untested. To ask for a new device, attach the output of `rgbtray --diagnose` (see below).
+Other models that speak the same protocols may work but are untested.
+
+### Asking for a new device
+
+Right-click the tray icon → **Request device support…**. RGB Tray lists your HID devices, marks the ones that may have controllable lighting, copies the report to the clipboard and opens the [request form](../../issues/new?template=device-request.yml). Enter the model and paste the report. Serial numbers in the report are shortened.
 
 ## Features
 
@@ -53,7 +57,7 @@ Close vendor lighting software before using RGB Tray: two programs writing to th
 
 | Command | What it does |
 |---|---|
-| `rgbtray --diagnose [file.txt]` | Writes a report of the app and Windows versions, the devices found and all HID interfaces. Without a file name it is saved to `%APPDATA%\rgbtray\rgbtray-diagnose.txt` and opened in Notepad. Also available in the tray menu. |
+| `rgbtray --diagnose [file.txt]` | Writes the device report: app and Windows versions, supported devices, and all HID devices grouped with their interfaces, likely lighting controllers first. Without a file name it is saved to `%APPDATA%\rgbtray\rgbtray-diagnose.txt` and opened in Notepad. Also available in the tray menu. |
 | `rgbtray --show` | Starts with the panel open and pinned. |
 | `rgbtray --uninstall` | Removes the app (settings are kept). |
 

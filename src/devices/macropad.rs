@@ -6,7 +6,7 @@ use super::{Device, Effect, Rgb};
 use crate::hid::{self, Hid};
 
 const VID: u16 = 0x0483;
-const PID: u16 = 0xA372;
+pub const PID: u16 = 0xA372;
 
 const CMD_SET_LIGHTING: u8 = 0x07;
 const BRIGHTNESS: u8 = 0x80;
