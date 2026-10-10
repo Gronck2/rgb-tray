@@ -250,12 +250,13 @@ impl Device for Logitech {
             }
         };
         for (zone, ids) in self.zones.iter().enumerate() {
-            // G915 firmware bug: breathing or "off" on the logo (zone 0) makes the keyboard ignore
-            // every later effect until it is switched off and on. The logo gets a steady color
-            // instead (black for off).
+            // G915 firmware bug: breathing on the logo (zone 0), or the firmware "off" effect on
+            // any zone, now and then makes the keyboard ignore every later effect until it is
+            // switched off and on. The logo breathes as a steady color instead, and "off" is
+            // steady black everywhere.
             let (id, params) = match (zone, id) {
                 (0, EFFECT_BREATHE) => (EFFECT_STATIC, [r, g, b, 0, 0, 0, 0, 0, 0, 0]),
-                (0, EFFECT_OFF) => (EFFECT_STATIC, [0; 10]),
+                (_, EFFECT_OFF) => (EFFECT_STATIC, [0; 10]),
                 _ => (id, params),
             };
             // Going straight from one animation to another (breathing → spectrum) also hangs the
