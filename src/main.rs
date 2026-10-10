@@ -482,6 +482,72 @@ fn quit() {
     unsafe { DestroyWindow(HWND_MAIN.load(Ordering::Relaxed) as HWND) };
 }
 
+// ---------------------------------------------------------------- export / import
+
+/// Asks for a settings file to save to (`save`) or open; None when cancelled.
+unsafe fn settings_file_dialog(save: bool) -> Option<std::path::PathBuf> {
+    let mut buf = [0u16; 1024];
+    let name = wide("rgbtray-settings.toml");
+    if save {
+        buf[..name.len()].copy_from_slice(&name);
+    }
+    let filter: Vec<u16> = "Настройки RGB Tray (*.toml)\0*.toml\0Все файлы\0*.*\0\0".encode_utf16().collect();
+    let ext = wide("toml");
+    let mut ofn: OPENFILENAMEW = zeroed();
+    ofn.lStructSize = size_of::<OPENFILENAMEW>() as u32;
+    ofn.hwndOwner = HWND_MAIN.load(Ordering::Relaxed) as HWND;
+    ofn.lpstrFilter = filter.as_ptr();
+    ofn.lpstrFile = buf.as_mut_ptr();
+    ofn.nMaxFile = buf.len() as u32;
+    ofn.lpstrDefExt = ext.as_ptr();
+    ofn.Flags = OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST | if save { OFN_OVERWRITEPROMPT } else { OFN_FILEMUSTEXIST };
+    let ok = if save { GetSaveFileNameW(&mut ofn) } else { GetOpenFileNameW(&mut ofn) } != 0;
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(0);
+    (ok && len > 0).then(|| std::path::PathBuf::from(String::from_utf16_lossy(&buf[..len])))
+}
+
+unsafe fn message(text: &str, error: bool) {
+    let flags = if error { MB_ICONERROR } else { MB_ICONINFORMATION };
+    MessageBoxW(HWND_MAIN.load(Ordering::Relaxed) as HWND, wide(text).as_ptr(), wide("RGB Tray").as_ptr(), MB_OK | flags | MB_SETFOREGROUND);
+}
+
+/// Saves all settings (colors, presets, key colors, devices) to a file of the user's choice.
+fn export_settings() {
+    unsafe {
+        let Some(path) = settings_file_dialog(true) else { return };
+        let text = toml::to_string_pretty(&*config()).unwrap_or_default();
+        if let Err(e) = std::fs::write(&path, text) {
+            message(&format!("Не удалось сохранить настройки:\n{e}"), true);
+        }
+    }
+}
+
+/// Replaces all settings with a saved file; the current ones are kept as a backup next to
+/// the config.
+fn import_settings() {
+    unsafe {
+        let Some(path) = settings_file_dialog(false) else { return };
+        let loaded = std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|s| toml::from_str::<Config>(&s).map_err(|e| e.to_string()));
+        let new = match loaded {
+            Ok(c) => c,
+            Err(e) => {
+                message(&format!("Это не файл настроек RGB Tray:\n{e}"), true);
+                return;
+            }
+        };
+        let _ = std::fs::copy(Config::dir().join("config.toml"), Config::dir().join("config.before-import.toml"));
+        {
+            let mut cfg = config();
+            *cfg = new;
+            cfg.save();
+        }
+        ui::PINNED.store(config().pinned, Ordering::Relaxed);
+        register_hotkeys();
+        apply_all();
+        ui::refresh();
+    }
+}
+
 unsafe fn pick_color(owner: HWND, initial: Rgb) -> Option<Rgb> {
     let mut custom = [0u32; 16];
     {

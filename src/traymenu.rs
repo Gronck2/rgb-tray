@@ -20,7 +20,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::ui::{text_format, theme, Theme, R};
 
-const W: f32 = 260.0;
+const W: f32 = 290.0;
 const PAD: f32 = 4.0;
 const ITEM_H: f32 = 36.0;
 const GAP: f32 = 9.0;
@@ -32,6 +32,8 @@ enum Item {
     Keys,
     Reapply,
     Autostart,
+    Export,
+    Import,
     Exit,
 }
 
@@ -43,11 +45,14 @@ enum Row {
     Version,
 }
 
-const ROWS: [Row; 7] = [
+const ROWS: [Row; 10] = [
     Row::Item(Item::Open),
     Row::Item(Item::Keys),
     Row::Item(Item::Reapply),
     Row::Item(Item::Autostart),
+    Row::Divider,
+    Row::Item(Item::Export),
+    Row::Item(Item::Import),
     Row::Divider,
     Row::Version,
     Row::Item(Item::Exit),
@@ -269,10 +274,14 @@ impl Menu {
                         Item::Keys => ("\u{E765}", "Цвета клавиш…"),
                         Item::Reapply => ("\u{E72C}", "Применить заново"),
                         Item::Autostart => ("\u{E823}", "Запускать с Windows"),
+                        Item::Export => ("\u{E74E}", "Сохранить настройки в файл…"),
+                        Item::Import => ("\u{E8E5}", "Загрузить настройки из файла…"),
                         Item::Exit => ("\u{E7E8}", "Выход"),
                     };
                     self.text(rt, icon, &self.fmt.icon, R { x: r.x + 6.0, y: r.y, w: 28.0, h: r.h }, fg);
-                    self.text(rt, label, &self.fmt.text, R { x: r.x + 40.0, y: r.y, w: r.w - 100.0, h: r.h }, fg);
+                    // Only the autostart row needs room for its switch.
+                    let label_w = if item == Item::Autostart { r.w - 100.0 } else { r.w - 44.0 };
+                    self.text(rt, label, &self.fmt.text, R { x: r.x + 40.0, y: r.y, w: label_w, h: r.h }, fg);
                     if item == Item::Autostart {
                         // A small switch, like the one in the panel.
                         let sw = R { x: r.x + r.w - 46.0, y: r.cy() - 9.0, w: 36.0, h: 18.0 };
@@ -310,6 +319,8 @@ fn run(item: Item, keyboard: Option<String>) {
         }
         Item::Reapply => crate::apply_all(),
         Item::Autostart => crate::set_autostart(!crate::autostart_enabled()),
+        Item::Export => crate::export_settings(),
+        Item::Import => crate::import_settings(),
         Item::Exit => crate::quit(),
     }
 }
