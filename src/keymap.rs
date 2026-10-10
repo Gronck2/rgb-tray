@@ -11,6 +11,16 @@ const fn m(usage: u8) -> u8 {
     usage - 0x78
 }
 
+/// The HID keyboard usage (page 7) of an editor key code, for keyboards addressed by usage
+/// (LampArray). None for the logo, brightness and media keys, which have no such usage.
+pub fn usage_of(code: u8) -> Option<u32> {
+    match code {
+        LOGO | BRIGHTNESS | MEDIA_PLAY | MEDIA_MUTE | MEDIA_NEXT | MEDIA_PREV | 0 => None,
+        c @ 0x68..=0x6F => Some(c as u32 + 0x78),
+        c => Some(c as u32 + 0x03),
+    }
+}
+
 pub const LOGO: u8 = 0xD2;
 pub const BRIGHTNESS: u8 = 0x99;
 // Checked on a G915 TKL by painting each code in its own color.

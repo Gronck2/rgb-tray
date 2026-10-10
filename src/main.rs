@@ -138,12 +138,13 @@ fn log(msg: &str) {
     eprintln!("{msg}");
     let path = Config::dir().join("rgbtray.log");
     let _ = std::fs::create_dir_all(Config::dir());
+    // A full log becomes the previous one, so the lines before a problem survive.
     if std::fs::metadata(&path).map(|m| m.len() > 512 * 1024).unwrap_or(false) {
-        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::rename(&path, Config::dir().join("rgbtray.old.log"));
     }
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(f, "[{secs}] {msg}");
+        let _ = writeln!(f, "[{}.{:03}] {msg}", now.as_secs(), now.subsec_millis());
     }
 }
 
@@ -195,9 +196,8 @@ fn apply_all() {
         let mut present = Vec::new();
         for f in &d.found {
             let dc = cfg.device(&f.id);
-            let kind = devices::kind_of(&f.id);
             let brightness = cfg.effective_brightness(&f.id);
-            let res = if kind.per_key && dc.per_key {
+            let res = if devices::has_per_key(&f.id) && dc.per_key {
                 f.dev.apply_keys(&dc.all_keys(), brightness)
             } else if !dc.zones.is_empty() && !devices::zones_of(&f.id).is_empty() {
                 let colors: Vec<(u8, Rgb)> = devices::zones_of(&f.id).iter().map(|&(led, _)| (led, dc.zone_rgb(led))).collect();
@@ -675,7 +675,7 @@ fn lamparray_test(args: &[String]) {
         let pairs: Vec<(u16, Rgb)> =
             args.iter().skip(5).filter_map(|p| p.split_once('=')).filter_map(|(id, hex)| Some((id.parse().ok()?, config::parse_hex(hex)))).collect();
         for la in &held {
-            let ok = la.fill(Rgb(0, 0, 0)) & pairs.iter().all(|&(id, c)| la.fill_range(id, id, c));
+            let ok = la.fill(Rgb(0, 0, 0)) & la.set_lamps(&pairs);
             let _ = writeln!(s, "set {pairs:?}: {ok}");
         }
         let _ = std::fs::write(&out, &s);

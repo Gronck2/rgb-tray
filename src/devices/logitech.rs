@@ -182,6 +182,9 @@ impl Logitech {
 
     /// Switches the keyboard to per-key mode and sets every given key.
     pub fn apply_keys(&self, keys: &[(u8, Rgb)], brightness: u8) -> Result<(), String> {
+        // The G915 sometimes stops taking effects until it is switched off and on; the
+        // sequence of commands before that shows in the log.
+        crate::log(&format!("{}: per-key colors, {} keys, brightness {brightness}", self.id, keys.len()));
         self.req(5, &[0x01, 0x01])?;
         // Firmware effects must be disabled, otherwise they paint over the keys.
         for (zone, ids) in self.zones.iter().enumerate() {
@@ -227,6 +230,7 @@ impl Logitech {
 
 impl Device for Logitech {
     fn apply(&self, effect: Effect, color: Rgb, brightness: u8) -> Result<(), String> {
+        crate::log(&format!("{}: {effect:?} {color:?} brightness {brightness}", self.id));
         // Take lighting control from the onboard mode.
         self.req(5, &[0x01, 0x01])?;
         let Rgb(r, g, b) = color.scaled(brightness);
@@ -275,6 +279,10 @@ impl Device for Logitech {
 
     fn apply_keys(&self, keys: &[(u8, Rgb)], brightness: u8) -> Result<(), String> {
         Logitech::apply_keys(self, keys, brightness)
+    }
+
+    fn update_keys(&self, keys: &[(u8, Rgb)], brightness: u8) -> Result<(), String> {
+        Logitech::update_keys(self, keys, brightness)
     }
 
     fn battery(&self) -> Option<Battery> {

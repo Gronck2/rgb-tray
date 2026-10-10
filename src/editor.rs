@@ -1,4 +1,5 @@
-//! Per-key color editor for the Logitech keyboard: a drawn TKL layout to paint on.
+//! Per-key color editor for keyboards with per-key lighting (Logitech G915, LampArray
+//! keyboards whose lamps are bound to keys): a drawn TKL layout to paint on.
 //! Changes go to the keyboard immediately through a dedicated worker thread.
 
 use std::cell::RefCell;
@@ -21,7 +22,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::config::Scheme;
-use crate::devices::logitech::{Logitech, SW_ID_EDITOR};
+use crate::devices::Device;
 use crate::devices::{Effect, Rgb};
 use crate::keymap::{self, KeyDef};
 use crate::ui::{col, rgb_col, text_format, theme, Theme, PALETTE, R};
@@ -92,7 +93,7 @@ fn send(msg: Msg) {
     if worker.is_none() {
         let (tx, rx) = channel::<Msg>();
         std::thread::spawn(move || {
-            let mut kb: Option<Logitech> = None;
+            let mut kb: Option<Box<dyn Device>> = None;
             while let Ok(first) = rx.recv() {
                 // Coalesce everything queued while the previous batch was being sent.
                 let mut full = false;
@@ -106,7 +107,7 @@ fn send(msg: Msg) {
                 }
                 let _guard = crate::APPLY_LOCK.lock().unwrap();
                 if kb.is_none() {
-                    kb = Logitech::find_id(SW_ID_EDITOR, &target());
+                    kb = crate::devices::open_for_keys(&target());
                     full = true;
                 }
                 let Some(k) = &kb else { continue };
@@ -537,7 +538,7 @@ unsafe fn create_window() -> windows::core::Result<()> {
 /// Renders the editor into a PNG file (no window needed), for checking the look.
 pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Result<()> {
     if target().is_empty() {
-        let first = crate::PRESENT.lock().unwrap().iter().find(|id| crate::devices::kind_of(id).per_key).cloned();
+        let first = crate::PRESENT.lock().unwrap().iter().find(|id| crate::devices::has_per_key(id)).cloned();
         *TARGET.lock().unwrap() = first.unwrap_or_else(|| "logitech".into());
     }
 

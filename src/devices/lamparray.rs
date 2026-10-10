@@ -89,6 +89,10 @@ struct Ids {
     response: u8,
     range: u8,
     control: u8,
+    /// LampMultiUpdate: colors of several lamps in one report (0: none).
+    multi: u8,
+    /// Lamps per multi-update report.
+    multi_count: usize,
 }
 
 pub struct LampArray {
@@ -122,12 +126,19 @@ impl LampArray {
         // the one without color channels.
         let colored = report_ids(&pp, RED_CHANNEL);
         let request = report_ids(&pp, LAMP_ID).into_iter().find(|id| *id != response && !colored.contains(id)).unwrap_or(0);
+        let range = report_of(LAMP_ID_START).ok_or("LampArray: no range update report")?;
+        // The multi update carries color channels too, with a lamp id array.
+        let multi = colored.iter().copied().find(|&id| id != range).unwrap_or(0);
+        let multi_count = if multi != 0 { slot_caps(&pp, multi, LAMP_ID).iter().map(|c| c.ReportCount as usize).sum() } else { 0 };
         let ids = Ids {
-            attributes: report_of(LAMP_COUNT).ok_or("LampArray: no attributes report")?,
+            // LampCount is in the multi update as well; the bounding box only here.
+            attributes: report_of(BOX_WIDTH).ok_or("LampArray: no attributes report")?,
             request,
             response,
-            range: report_of(LAMP_ID_START).ok_or("LampArray: no range update report")?,
+            range,
             control: report_of(AUTONOMOUS_MODE).unwrap_or(0),
+            multi: if multi_count > 0 { multi } else { 0 },
+            multi_count,
         };
         let id = format!("lamparray-{}", super::path_hash(&info.path));
         let mut la = LampArray { id, path: info.path.clone(), hid, pp, len: info.feature_len as usize, ids, attributes: Attributes::default() };
@@ -203,6 +214,81 @@ impl LampArray {
         let lit = c != Rgb(0, 0, 0);
         self.set_value(&mut r, INTENSITY_CHANNEL, if lit { max(INTENSITY_CHANNEL) } else { 0 });
         self.hid.set_feature(&r)
+    }
+
+    /// Colors single lamps (brightness already applied): several per report with LampMultiUpdate,
+    /// one by one otherwise. Only the last report says the update is complete.
+    pub fn set_lamps(&self, lamps: &[(u16, Rgb)]) -> bool {
+        if self.ids.multi == 0 || self.ids.multi_count == 0 {
+            return lamps.iter().all(|&(id, c)| self.fill_range(id, id, c));
+        }
+        let max = |usage| self.logical_max(self.ids.multi, usage).unwrap_or(255);
+        let (red, green, blue, intensity) = (max(RED_CHANNEL), max(GREEN_CHANNEL), max(BLUE_CHANNEL), max(INTENSITY_CHANNEL));
+        let scale = |v: u8, m: u32| ((v as u32 * m + 127) / 255) as u8;
+        let chunks: Vec<&[(u16, Rgb)]> = lamps.chunks(self.ids.multi_count).collect();
+        for (k, chunk) in chunks.iter().enumerate() {
+            let Some(mut r) = self.report(self.ids.multi) else { return false };
+            self.set_value(&mut r, LAMP_COUNT, chunk.len() as u32);
+            self.set_value(&mut r, UPDATE_FLAGS, if k + 1 == chunks.len() { UPDATE_COMPLETE } else { 0 });
+            let ids: Vec<u32> = chunk.iter().map(|l| l.0 as u32).collect();
+            let channel = |f: &dyn Fn(Rgb) -> u32| chunk.iter().map(|l| f(l.1)).collect::<Vec<u32>>();
+            let ok = self.set_slots(&mut r, LAMP_ID, &ids)
+                & self.set_slots(&mut r, RED_CHANNEL, &channel(&|c| scale(c.0, red) as u32))
+                & self.set_slots(&mut r, GREEN_CHANNEL, &channel(&|c| scale(c.1, green) as u32))
+                & self.set_slots(&mut r, BLUE_CHANNEL, &channel(&|c| scale(c.2, blue) as u32))
+                & self.set_slots(&mut r, INTENSITY_CHANNEL, &channel(&|c| if c == Rgb(0, 0, 0) { 0 } else { intensity }));
+            if !ok {
+                return false;
+            }
+            if !self.hid.set_feature(&r) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Fills the per-lamp slots of a multi update (lamp ids or one color channel). Descriptors
+    /// declare them either as one array field or as one field per slot (ASUS); both are handled.
+    fn set_slots(&self, report: &mut [u8], usage: u16, values: &[u32]) -> bool {
+        let caps = slot_caps(&self.pp, self.ids.multi, usage);
+        let st = match caps.as_slice() {
+            [c] if c.ReportCount > 1 => {
+                let bytes_per = (c.BitSize as usize).div_ceil(8);
+                let mut bytes = vec![0u8; c.ReportCount as usize * bytes_per];
+                for (j, v) in values.iter().enumerate().take(c.ReportCount as usize) {
+                    bytes[j * bytes_per..(j + 1) * bytes_per].copy_from_slice(&v.to_le_bytes()[..bytes_per]);
+                }
+                // The same usage is a single value in other reports: name this field's collection.
+                unsafe {
+                    HidP_SetUsageValueArray(
+                        HidP_Feature,
+                        PAGE,
+                        c.LinkCollection,
+                        usage,
+                        bytes.as_ptr(),
+                        bytes.len() as u16,
+                        self.pp.0,
+                        report.as_mut_ptr(),
+                        report.len() as u32,
+                    )
+                }
+            }
+            _ => {
+                let mut data: Vec<HIDP_DATA> = caps
+                    .iter()
+                    .zip(values)
+                    .map(|(c, &v)| HIDP_DATA { DataIndex: data_index(c), Reserved: 0, Anonymous: HIDP_DATA_0 { RawValue: v } })
+                    .collect();
+                let mut n = data.len() as u32;
+                unsafe { HidP_SetData(HidP_Feature, data.as_mut_ptr(), &mut n, self.pp.0, report.as_mut_ptr(), report.len() as u32) }
+            }
+        };
+        if st != HIDP_STATUS_SUCCESS {
+            let info: Vec<String> =
+                caps.iter().map(|c| format!("count {} bits {} range {} index {}", c.ReportCount, c.BitSize, c.IsRange, data_index(c))).collect();
+            crate::log(&format!("lamparray: slots of usage {usage:#x}: status {:#x}; fields {info:?}", st as u32));
+        }
+        st == HIDP_STATUS_SUCCESS
     }
 
     /// An empty feature report with its id set.
@@ -347,23 +433,44 @@ fn by_position(group: &[&Lamp]) -> Option<Vec<ZoneDraft>> {
     Some(out)
 }
 /// Zones of the devices found, by device id; and by HID path, so lamps are read only once.
-/// (device id, HID path, zones).
-type DeviceZones = (String, Vec<u16>, Vec<Zone>);
-static ZONES: Mutex<Vec<DeviceZones>> = Mutex::new(Vec::new());
+/// What is known about a device's lamps: its zones and which lamps light which key.
+struct Layout {
+    id: String,
+    path: Vec<u16>,
+    zones: Vec<Zone>,
+    /// (HID keyboard usage, lamp id): a key can have several lamps.
+    keys: Vec<(u32, u16)>,
+}
+
+/// Layouts of the devices found, so lamps are read only once per device.
+static LAYOUTS: Mutex<Vec<Layout>> = Mutex::new(Vec::new());
 
 /// The zones of a device found earlier (empty if it has none).
 pub fn zones(id: &str) -> Vec<Zone> {
-    ZONES.lock().unwrap().iter().find(|z| z.0 == id).map(|z| z.2.clone()).unwrap_or_default()
+    LAYOUTS.lock().unwrap().iter().find(|l| l.id == id).map(|l| l.zones.clone()).unwrap_or_default()
+}
+
+/// The device has lamps bound to keys: its key colors are edited in the key editor.
+pub fn has_keys(id: &str) -> bool {
+    LAYOUTS.lock().unwrap().iter().any(|l| l.id == id && !l.keys.is_empty())
+}
+
+/// Lamps lighting a key (HID keyboard usage).
+fn key_lamps(id: &str, usage: u32) -> Vec<u16> {
+    LAYOUTS.lock().unwrap().iter().find(|l| l.id == id).map(|l| l.keys.iter().filter(|k| k.0 == usage).map(|k| k.1).collect()).unwrap_or_default()
 }
 
 impl LampArray {
-    /// Remembers this device's zones under `id`, reading the lamps the first time.
+    /// Remembers this device's zones and key lamps under `id`, reading the lamps the first time.
     pub fn register_zones(&self, id: &str) {
-        let known = ZONES.lock().unwrap().iter().find(|z| z.1 == self.path).map(|z| z.2.clone());
-        let zones = known.unwrap_or_else(|| zones_from(&self.lamps()));
-        let mut all = ZONES.lock().unwrap();
-        all.retain(|z| z.0 != id && z.1 != self.path);
-        all.push((id.to_string(), self.path.clone(), zones));
+        let known = LAYOUTS.lock().unwrap().iter().find(|l| l.path == self.path).map(|l| (l.zones.clone(), l.keys.clone()));
+        let (zones, keys) = known.unwrap_or_else(|| {
+            let lamps = self.lamps();
+            (zones_from(&lamps), lamps.iter().filter(|l| l.key != 0).map(|l| (l.key, l.id)).collect())
+        });
+        let mut all = LAYOUTS.lock().unwrap();
+        all.retain(|l| l.id != id && l.path != self.path);
+        all.push(Layout { id: id.to_string(), path: self.path.clone(), zones, keys });
     }
 
     /// Colors each zone (zone number, color); lamps outside the zones keep their color.
@@ -498,6 +605,25 @@ impl Device for LampArray {
     fn apply_zones(&self, effect: Effect, zones: &[(u8, Rgb)], brightness: u8) -> Result<(), String> {
         self.apply_zone_colors(&self.id, effect, zones, brightness)
     }
+
+    /// Key colors by the editor's key codes, mapped to the lamps the device binds to each key.
+    fn apply_keys(&self, keys: &[(u8, Rgb)], brightness: u8) -> Result<(), String> {
+        if !has_keys(&self.id) {
+            return Err("LampArray: no lamps bound to keys".into());
+        }
+        self.take()?;
+        animation::stop(&self.path);
+        let lamps: Vec<(u16, Rgb)> = keys
+            .iter()
+            .filter_map(|&(code, c)| crate::keymap::usage_of(code).map(|u| (u, c.scaled(brightness))))
+            .flat_map(|(usage, c)| key_lamps(&self.id, usage).into_iter().map(move |lamp| (lamp, c)))
+            .collect();
+        if self.set_lamps(&lamps) {
+            Ok(())
+        } else {
+            Err("LampArray: update failed".into())
+        }
+    }
 }
 
 fn value_caps(pp: &Preparsed, usage: u16) -> Vec<HIDP_VALUE_CAPS> {
@@ -509,6 +635,24 @@ fn value_caps(pp: &Preparsed, usage: u16) -> Vec<HIDP_VALUE_CAPS> {
         }
         caps.truncate(n as usize);
         caps
+    }
+}
+
+/// The fields of a usage in one report, in declaration order (slot 0 first).
+fn slot_caps(pp: &Preparsed, report: u8, usage: u16) -> Vec<HIDP_VALUE_CAPS> {
+    let mut caps: Vec<HIDP_VALUE_CAPS> = value_caps(pp, usage).into_iter().filter(|c| c.ReportID == report).collect();
+    caps.sort_by_key(data_index);
+    caps
+}
+
+fn data_index(c: &HIDP_VALUE_CAPS) -> u16 {
+    // A usage declared once per field: never a usage range here.
+    unsafe {
+        if c.IsRange != 0 {
+            c.Anonymous.Range.DataIndexMin
+        } else {
+            c.Anonymous.NotRange.DataIndex
+        }
     }
 }
 
@@ -531,7 +675,7 @@ pub fn describe(info: &HidInfo) -> String {
             let fixed = lamps.iter().filter(|l| !l.programmable).count();
             let colors = lamps.first().map(|l| format!(", {}/{}/{} color levels", l.levels.0, l.levels.1, l.levels.2)).unwrap_or_default();
             format!(
-                "{}, {} lamps ({} read, {} bound to keys, {} not programmable), {:.1} x {:.1} cm, update every {} us{}",
+                "{}, {} lamps ({} read, {} bound to keys, {} not programmable), {:.1} x {:.1} cm, update every {} us{}, {}",
                 kind_name(a.kind),
                 a.lamp_count,
                 lamps.len(),
@@ -540,7 +684,8 @@ pub fn describe(info: &HidInfo) -> String {
                 a.size.0 as f32 / 10_000.0,
                 a.size.1 as f32 / 10_000.0,
                 a.min_update_interval_us,
-                colors
+                colors,
+                if la.ids.multi != 0 { format!("multi-update {} lamps/report", la.ids.multi_count) } else { "no multi-update".to_string() }
             )
         }
         Err(e) => e,

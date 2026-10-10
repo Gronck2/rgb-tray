@@ -370,7 +370,7 @@ fn name_width(name: &str) -> f32 {
 /// Name area of a device card, up to its buttons.
 fn name_rect(card: R, row: &Row) -> R {
     let buttons_x = match row {
-        Row::Device(id) if kind_of(id).per_key => keys_button_rect(card).x,
+        Row::Device(id) if crate::devices::has_per_key(id) => keys_button_rect(card).x,
         Row::Archived(_) => forget_button_rect(card).x,
         _ => card.x + card.w - 50.0,
     };
@@ -420,7 +420,7 @@ fn card_layout(rows: &[(R, Row)]) -> Vec<(R, Hit)> {
         }
         // Buttons on a card come first, so hit-testing finds them before the card.
         match row {
-            Row::Device(id) if kind_of(id).per_key => v.push((keys_button_rect(*r), Hit::Keys(i))),
+            Row::Device(id) if crate::devices::has_per_key(id) => v.push((keys_button_rect(*r), Hit::Keys(i))),
             Row::Archived(_) => v.push((forget_button_rect(*r), Hit::Forget(i))),
             Row::ServiceWarning => v.push((warning_button_rect(*r), Hit::DisableService)),
             Row::LightingWarning => v.push((warning_button_rect(*r), Hit::LightingSettings)),
@@ -1822,7 +1822,7 @@ impl Flyout {
         }
 
         match row {
-            Row::Device(_) if kind.per_key => {
+            Row::Device(id) if crate::devices::has_per_key(id) => {
                 let kb = keys_button_rect(r);
                 self.fill(rt, kb, 4.0, if hover(Hit::Keys(i)) { t.card_hover } else { t.bg });
                 self.stroke(rt, kb, 4.0, t.stroke, 1.0);

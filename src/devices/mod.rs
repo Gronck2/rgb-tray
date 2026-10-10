@@ -49,6 +49,11 @@ pub trait Device {
         Err("per-key colors are not supported".into())
     }
 
+    /// Changes some key colors while per-key colors are shown (the key editor).
+    fn update_keys(&self, keys: &[(u8, Rgb)], brightness: u8) -> Result<(), String> {
+        self.apply_keys(keys, brightness)
+    }
+
     /// The effect with a separate color per lighting zone (LED id, color).
     fn apply_zones(&self, effect: Effect, zones: &[(u8, Rgb)], brightness: u8) -> Result<(), String> {
         let color = zones.first().map(|z| z.1).unwrap_or(Rgb(255, 255, 255));
@@ -145,6 +150,21 @@ pub const KINDS: [Kind; 7] = [
     // Any device with the standard HID LampArray interface and no driver of its own.
     Kind { key: "lamparray", names: ("Устройство LampArray", "LampArray device"), icon: "\u{E82F}", zones: &[], per_key: false, port_id: true },
 ];
+
+/// The device has per-key colors (the key editor): a model with them (G915), or a LampArray
+/// keyboard whose lamps are bound to keys.
+pub fn has_per_key(id: &str) -> bool {
+    kind_of(id).per_key || lamparray::has_keys(id)
+}
+
+/// Opens a keyboard for the key editor, by id.
+pub fn open_for_keys(id: &str) -> Option<Box<dyn Device>> {
+    match kind_of(id).key {
+        "logitech" => logitech::Logitech::find_id(logitech::SW_ID_EDITOR, id).map(|k| Box::new(k) as Box<dyn Device>),
+        "lamparray" => lamparray::find_all().into_iter().find(|d| d.id == id).map(|d| Box::new(d) as Box<dyn Device>),
+        _ => None,
+    }
+}
 
 /// Names devices report about themselves, by id: the default name of devices of a generic
 /// driver (LampArray, QMK/VIA), whose model isn't known in advance.
