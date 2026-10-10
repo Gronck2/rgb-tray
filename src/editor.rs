@@ -425,10 +425,11 @@ pub fn open(id: &str) {
             let mut cfg = crate::config();
             let d = cfg.device_mut(id);
             if !d.per_key {
-                // Start from what the keyboard shows now.
-                if d.keys.is_empty() {
-                    let c = if d.effect == Effect::Off { OFF } else { d.rgb() };
-                    for code in keymap::all_codes() {
+                // Keys never set (all of them the first time, or keys added to the layout later)
+                // start from what the keyboard shows now.
+                let c = if d.effect == Effect::Off { OFF } else { d.rgb() };
+                for code in keymap::all_codes() {
+                    if !d.has_key(code) {
                         d.set_key(code, c);
                     }
                 }

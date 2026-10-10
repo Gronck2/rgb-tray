@@ -87,12 +87,14 @@ impl DeviceConfig {
         self.keys.get(&code.to_string()).map(|s| parse_hex(s)).unwrap_or(Rgb(0, 0, 0))
     }
 
+    /// Off keys are stored too ("#000000"): a missing key is one that was never set, e.g. a key
+    /// added to the layout later, and gets the keyboard's current color in the editor.
     pub fn set_key(&mut self, code: u8, c: Rgb) {
-        if c == Rgb(0, 0, 0) {
-            self.keys.remove(&code.to_string());
-        } else {
-            self.keys.insert(code.to_string(), to_hex(c));
-        }
+        self.keys.insert(code.to_string(), to_hex(c));
+    }
+
+    pub fn has_key(&self, code: u8) -> bool {
+        self.keys.contains_key(&code.to_string())
     }
 
     /// Every addressable key with its color (off keys included), ready to send.
@@ -111,11 +113,10 @@ impl DeviceConfig {
 
     fn same_lighting(&self, other: &DeviceConfig) -> bool {
         let (a, b) = (self.lighting(), other.lighting());
-        // Per-key colors matter only while they are shown.
-        if !a.per_key && !b.per_key {
-            return DeviceConfig { keys: KeyColors::new(), ..a } == DeviceConfig { keys: KeyColors::new(), ..b };
-        }
-        a == b
+        // Per-key colors matter only while they are shown; compared key by key, since an off
+        // key may be stored as black or (older versions) left out.
+        let keys_equal = !a.per_key && !b.per_key || a.all_keys() == b.all_keys();
+        keys_equal && DeviceConfig { keys: KeyColors::new(), ..a } == DeviceConfig { keys: KeyColors::new(), ..b }
     }
 }
 
