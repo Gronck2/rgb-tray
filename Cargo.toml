@@ -2,6 +2,7 @@
 name = "rgbtray"
 version = "0.5.14"
 edition = "2021"
+license = "MIT OR Apache-2.0"
 description = "Tiny tray app controlling Logitech G915, Razer and ASUS Aura lighting directly over HID"
 
 [dependencies]
