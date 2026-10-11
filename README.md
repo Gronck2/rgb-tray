@@ -58,7 +58,7 @@ A Razer device can often be added right away, without a new version: describe it
 2. Run it. The app installs itself to `%LOCALAPPDATA%\Programs\RGB Tray` for the current user, without administrator rights, and starts.
 3. It can be removed from Windows Settings → Apps.
 
-The installer is not code-signed yet, so Windows SmartScreen may show a warning (More info → Run anyway). Settings are stored in `%APPDATA%\rgbtray` and survive updates and reinstalls.
+The installer is not code-signed yet, so Windows SmartScreen may show a warning (More info → Run anyway). Settings are stored in `%APPDATA%\rgbtray` and survive updates and reinstalls. The `backups` folder there keeps copies of the settings from the last 14 days and from before each update; if the settings file gets damaged, the app takes the last copy that works by itself.
 
 Close vendor lighting software before using RGB Tray: two programs writing to the same device fight each other. On Windows 11 the "Logitech LampArray" service (Dynamic Lighting) makes the G915 ignore effects; the app warns about it and offers to disable it.
 

@@ -308,6 +308,79 @@ fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// Writes through a temporary file and a rename, so a crash or power loss in the middle
+/// leaves the old file, never a cut one.
+fn write_atomically(path: &std::path::Path, text: &str) {
+    let tmp = path.with_extension("toml.tmp");
+    if std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, path).is_err() {
+        let _ = std::fs::write(path, text);
+    }
+}
+
+/// Daily copies kept in `backups/`, and copies made before each new version.
+const DAILY_COPIES: usize = 14;
+const VERSION_COPIES: usize = 10;
+
+/// "2026-10-11" of Unix seconds (UTC), for copy names that sort by date.
+fn date(secs: u64) -> String {
+    // Days to civil date (Howard Hinnant's algorithm).
+    let z = (secs / 86_400) as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + (m <= 2) as i64;
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Copies of settings that read well: the last one, today's, and this version's first.
+fn keep_copies(dir: &std::path::Path, text: &str) {
+    write_atomically(&dir.join("config.backup.toml"), text);
+    let backups = dir.join("backups");
+    if std::fs::create_dir_all(&backups).is_err() {
+        return;
+    }
+    let daily = backups.join(format!("config-{}.toml", date(now())));
+    if !daily.exists() {
+        let _ = std::fs::write(&daily, text);
+    }
+    // Before a new version first saves anything: what the previous one left.
+    let version = backups.join(format!("config-before-{}.toml", env!("CARGO_PKG_VERSION")));
+    if !version.exists() {
+        let _ = std::fs::write(&version, text);
+    }
+    prune(&backups, "config-before-", VERSION_COPIES);
+    prune(&backups, "config-2", DAILY_COPIES);
+}
+
+/// Keeps the newest `keep` copies whose names start with `prefix`.
+fn prune(dir: &std::path::Path, prefix: &str, keep: usize) {
+    let mut files: Vec<(std::time::SystemTime, std::path::PathBuf)> = std::fs::read_dir(dir)
+        .map(|d| {
+            d.flatten()
+                .filter(|e| e.file_name().to_string_lossy().starts_with(prefix))
+                .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort_by_key(|f| std::cmp::Reverse(f.0));
+    for (_, old) in files.into_iter().skip(keep) {
+        let _ = std::fs::remove_file(old);
+    }
+}
+
+/// Every copy to restore from, newest first: the last good one, then those in `backups/`.
+fn copies_newest_first(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files: Vec<(std::time::SystemTime, std::path::PathBuf)> = std::fs::read_dir(dir.join("backups"))
+        .map(|d| d.flatten().filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path()))).collect())
+        .unwrap_or_default();
+    files.sort_by_key(|f| std::cmp::Reverse(f.0));
+    std::iter::once(dir.join("config.backup.toml")).chain(files.into_iter().map(|f| f.1)).collect()
+}
+
 impl Config {
     pub fn snapshot(&self, name: String) -> Preset {
         Preset {
@@ -463,20 +536,36 @@ impl Config {
         Self::dir().join("config.toml")
     }
 
-    /// Reads the settings. A file that can't be read is copied aside before anything can
-    /// overwrite it (`config.unreadable-<time>.toml`) and the app starts from defaults; a good
-    /// one is copied to `config.backup.toml`, the last settings that worked.
+    /// Reads the settings (see `load_from`).
     pub fn load() -> Config {
-        let Ok(text) = std::fs::read_to_string(Self::path()) else { return Config::default() };
+        Self::load_from(&Self::dir())
+    }
+
+    /// Reads `config.toml` in `dir`, so that settings are never lost:
+    /// - a good file is copied to `config.backup.toml` (the last settings that worked) and to
+    ///   `backups/` (one copy a day, the last 14, and one before each new version, the last 10);
+    /// - a file that can't be read is kept as `config.unreadable-<time>.toml`, and the newest
+    ///   copy that reads takes its place; only without any the app starts from defaults.
+    fn load_from(dir: &std::path::Path) -> Config {
+        let path = dir.join("config.toml");
+        let Ok(text) = std::fs::read_to_string(&path) else { return Config::default() };
         match toml::from_str(&text) {
             Ok(cfg) => {
-                let _ = std::fs::write(Self::dir().join("config.backup.toml"), &text);
+                keep_copies(dir, &text);
                 cfg
             }
             Err(e) => {
-                let aside = Self::dir().join(format!("config.unreadable-{}.toml", now()));
+                let aside = dir.join(format!("config.unreadable-{}.toml", now()));
                 let _ = std::fs::write(&aside, &text);
                 crate::log(&format!("config: can't read it ({}); kept as {}", e.message(), aside.display()));
+                for copy in copies_newest_first(dir) {
+                    let Ok(text) = std::fs::read_to_string(&copy) else { continue };
+                    if let Ok(cfg) = toml::from_str::<Config>(&text) {
+                        crate::log(&format!("config: restored from {}", copy.display()));
+                        write_atomically(&path, &text);
+                        return cfg;
+                    }
+                }
                 Config::default()
             }
         }
@@ -485,7 +574,7 @@ impl Config {
     pub fn save(&self) {
         let _ = std::fs::create_dir_all(Self::dir());
         if let Ok(s) = toml::to_string_pretty(self) {
-            let _ = std::fs::write(Self::path(), s);
+            write_atomically(&Self::path(), &s);
         }
     }
 
@@ -720,6 +809,61 @@ mod tests {
         // Files from before the option follow the display.
         assert!(old.follow_display);
         assert!(old.check_updates);
+    }
+
+    /// A fresh empty folder for files of one test.
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("rgbtray-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn broken_settings_come_back_from_the_last_good_copy() {
+        let dir = temp_dir("restore");
+        let good = "[[presets]]\nname = \"Night\"\nbrightness = 10\n[presets.devices]\n";
+        std::fs::write(dir.join("config.toml"), good).unwrap();
+        // A good start keeps copies: the last good one, today's and this version's.
+        assert_eq!(Config::load_from(&dir).presets[0].name, "Night");
+        assert!(dir.join("config.backup.toml").exists());
+        let copies: Vec<String> = std::fs::read_dir(dir.join("backups")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(copies.len(), 2, "{copies:?}");
+
+        // Broken (cut in the middle): the presets come back, the broken file is kept aside.
+        std::fs::write(dir.join("config.toml"), "[[presets]]\nname = \"Ni").unwrap();
+        assert_eq!(Config::load_from(&dir).presets[0].name, "Night");
+        assert_eq!(std::fs::read_to_string(dir.join("config.toml")).unwrap(), good);
+        assert!(std::fs::read_dir(&dir).unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("config.unreadable-")));
+
+        // Nothing to restore from: defaults, without a crash.
+        let empty = temp_dir("nothing");
+        std::fs::write(empty.join("config.toml"), "not toml [").unwrap();
+        assert!(Config::load_from(&empty).presets.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&empty);
+    }
+
+    #[test]
+    fn old_copies_are_pruned() {
+        let dir = temp_dir("prune");
+        for d in 1..=20 {
+            std::fs::write(dir.join(format!("config-2026-01-{d:02}.toml")), "").unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        prune(&dir, "config-2", DAILY_COPIES);
+        let mut left: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        left.sort();
+        assert_eq!(left.len(), DAILY_COPIES);
+        assert_eq!(left[0], "config-2026-01-07.toml");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dates_of_copies() {
+        assert_eq!(date(0), "1970-01-01");
+        assert_eq!(date(1_791_720_000), "2026-10-11");
+        assert_eq!(date(951_782_400), "2000-02-29");
     }
 
     #[test]
