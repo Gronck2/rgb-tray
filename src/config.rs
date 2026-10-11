@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::devices::{kind_of, Effect, Rgb, KINDS, NORMAL_SPEED};
+use crate::devices::{kind_of, kinds, Effect, Rgb, NORMAL_SPEED};
 
 /// Settings of one device (by device id: "naga-123456H246", "logitech-1A2B3C4D", ...).
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -411,7 +411,7 @@ impl Config {
 
     /// The look of the first configured device, for a newly connected one.
     fn inherited(&self) -> DeviceConfig {
-        KINDS
+        kinds()
             .iter()
             .find_map(|k| self.devices.iter().find(|(id, _)| kind_of(id).key == k.key).map(|(_, d)| d))
             .map(|d| DeviceConfig { effect: d.effect, color: d.color.clone(), ..DeviceConfig::default() })
@@ -429,7 +429,7 @@ impl Config {
     /// Device ids in panel order: by model, then by name.
     pub fn sorted(&self, ids: impl IntoIterator<Item = String>) -> Vec<String> {
         let mut v: Vec<String> = ids.into_iter().collect();
-        let rank = |id: &String| KINDS.iter().position(|k| k.key == kind_of(id).key).unwrap_or(usize::MAX);
+        let rank = |id: &String| kinds().iter().position(|k| k.key == kind_of(id).key).unwrap_or(usize::MAX);
         v.sort_by(|a, b| rank(a).cmp(&rank(b)).then_with(|| self.display_name(a).cmp(&self.display_name(b))));
         v
     }

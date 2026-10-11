@@ -1,0 +1,10 @@
+# Razer Mouse Dock Pro (the charging dock of the Naga V2 Pro and other mice).
+key = "dock"
+name = "Razer Mouse Dock Pro"
+class = "other"
+icon = "dock"
+
+[razer]
+pids = [0x00A4]
+transaction_id = 0xFF
+leds = [0x00]

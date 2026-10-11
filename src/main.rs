@@ -620,6 +620,11 @@ fn diagnose_report() -> String {
     if found.found.is_empty() && found.no_link.is_empty() && found.no_link_kinds.is_empty() {
         let _ = writeln!(s, "  none found");
     }
+    let profiles: Vec<&str> = devices::kinds().iter().filter(|k| !matches!(k.protocol, devices::Protocol::Native)).map(|k| k.key).collect();
+    let _ = writeln!(s, "Device profiles: {} (own ones in {})", profiles.join(", "), devices::profile::user_dir().display());
+    for (file, e) in devices::PROFILE_ERRORS.lock().unwrap().iter() {
+        let _ = writeln!(s, "  {file}: {e}");
+    }
     let lamparray = if services::interferes(services::LOGI_LAMPARRAY) { "running (makes the G915 hang)" } else { "disabled or absent" };
     let _ = writeln!(s, "Logitech LampArray service: {lamparray}");
 

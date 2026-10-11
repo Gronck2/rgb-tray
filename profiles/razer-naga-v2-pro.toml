@@ -1,0 +1,21 @@
+# Razer Naga V2 Pro: wireless (HyperSpeed dongle) and wired.
+key = "naga"
+name = "Razer Naga V2 Pro"
+class = "mouse"
+
+# Separately colored zones on the panel. The scroll wheel (LED 0x01) follows the whole mouse.
+[[zones]]
+led = 0x04
+name = "Logo"
+name_ru = "Логотип"
+
+[[zones]]
+led = 0x05
+name = "Side panel"
+name_ru = "Боковая панель"
+
+[razer]
+pids = [0x00A8, 0x00A7]
+transaction_id = 0x1F
+leds = [0x01, 0x04, 0x05]
+battery = true

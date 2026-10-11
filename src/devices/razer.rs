@@ -8,29 +8,34 @@ use crate::hid::{self, Hid};
 const VID: u16 = 0x1532;
 const VARSTORE: u8 = 0x01;
 
-struct Model {
-    pid: u16,
-    key: &'static str,
-    transaction_id: u8,
-    leds: &'static [u8],
-    has_battery: bool,
+/// Parameters of a Razer model, from its profile (`profiles/razer-*.toml`).
+#[derive(Debug)]
+pub struct RazerModel {
+    /// USB product ids, e.g. wireless and wired.
+    pub pids: &'static [u16],
+    pub transaction_id: u8,
+    /// LED ids lit as "the whole device".
+    pub leds: &'static [u8],
+    pub battery: bool,
+}
+
+/// The model (its id prefix and parameters) of a Razer product id.
+fn model_of(pid: u16) -> Option<(&'static str, &'static RazerModel)> {
+    super::kinds().iter().find_map(|k| match k.protocol {
+        super::Protocol::Razer(m) if m.pids.contains(&pid) => Some((k.key, m)),
+        _ => None,
+    })
 }
 
 /// A Razer product id this app drives.
 pub fn is_supported(pid: u16) -> bool {
-    MODELS.iter().any(|m| m.pid == pid)
+    model_of(pid).is_some()
 }
-
-const MODELS: &[Model] = &[
-    // Naga V2 Pro: wireless (HyperSpeed) and wired PIDs. 0x01 scroll wheel, 0x04 logo, 0x05 side.
-    Model { pid: 0x00A8, key: "naga", transaction_id: 0x1F, leds: &[0x01, 0x04, 0x05], has_battery: true },
-    Model { pid: 0x00A7, key: "naga", transaction_id: 0x1F, leds: &[0x01, 0x04, 0x05], has_battery: true },
-    Model { pid: 0x00A4, key: "dock", transaction_id: 0xFF, leds: &[0x00], has_battery: false },
-];
 
 pub struct Razer {
     hid: Hid,
-    model: &'static Model,
+    key: &'static str,
+    model: &'static RazerModel,
     /// Unique id ("<kind>-<serial>"); None when a wireless device doesn't answer (no link),
     /// so its serial can't be read.
     pub id: Option<String>,
@@ -42,17 +47,17 @@ impl Razer {
             .into_iter()
             .filter(|i| i.usage_page == 0x0001 && i.usage == 0x0002 && i.feature_len == 91)
             .filter_map(|i| {
-                let model = MODELS.iter().find(|m| m.pid == i.pid)?;
+                let (key, model) = model_of(i.pid)?;
                 // Mouse collections can't be opened for read/write, but feature reports work.
-                let mut d = Razer { hid: Hid::open(&i.path, false, false)?, model, id: None };
+                let mut d = Razer { hid: Hid::open(&i.path, false, false)?, key, model, id: None };
                 d.id = match d.command(0x00, 0x82, &[]) {
                     Ok(r) => {
                         let serial: String = r[9..9 + 22].iter().take_while(|&&b| b != 0).filter(|b| b.is_ascii_alphanumeric()).map(|&b| b as char).collect();
                         let serial = if serial.is_empty() { super::path_hash(&i.path) } else { serial };
-                        Some(format!("{}-{serial}", model.key))
+                        Some(format!("{}-{serial}", key))
                     }
                     Err(e) if e == super::NO_LINK => None,
-                    Err(_) => Some(format!("{}-{}", model.key, super::path_hash(&i.path))),
+                    Err(_) => Some(format!("{}-{}", key, super::path_hash(&i.path))),
                 };
                 Some(d)
             })
@@ -60,7 +65,7 @@ impl Razer {
     }
 
     pub fn key(&self) -> &'static str {
-        self.model.key
+        self.key
     }
 
     /// Sends a command and returns the device's response report.
@@ -131,7 +136,7 @@ impl Device for Razer {
     }
 
     fn battery(&self) -> Option<Battery> {
-        if !self.model.has_battery {
+        if !self.model.battery {
             return None;
         }
         let level = self.command(0x07, 0x80, &[0, 0]).ok()?[10];

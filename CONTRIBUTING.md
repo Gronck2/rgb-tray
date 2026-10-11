@@ -64,11 +64,11 @@ If the report marks your device as one of these but something doesn't work, open
 
 ### 2. A new model of a protocol we know
 
-- **Razer:** add a line to `MODELS` in `src/devices/razer.rs` (product id, transaction id, LED ids, battery). OpenRazer's device list is a good source for these values. A model that isn't a Naga or the dock also needs its own `Kind` in `KINDS` (name, icon, zones, effects, speed, class).
+- **Razer:** write a profile: a small TOML file in `profiles/` (built in) or `%APPDATA%\rgbtray\devices\` (your own, no compiling). [docs/profiles.md](docs/profiles.md) describes the format; OpenRazer is a good source for the values. Add the file to `BUILT_IN` in `src/devices/profile.rs` to build it in.
 - **QMK/VIA with a known firmware effect:** add a line to `MODELS` in `src/devices/via.rs`. Without a line the keyboard still works; the app draws breathing and spectrum itself.
 - **Logitech HID++ 2.0** keyboards with the 0x8071/0x8081 features are close to the G915. The receiver ids and the layout (`src/keymap.rs`) are the parts that differ.
 
-Device profiles in TOML, which add a model of a known protocol without compiling, are planned (see `ROADMAP.md`).
+Profiles for the other known protocols (Logitech, ASUS Aura, QMK/VIA) are planned (see `ROADMAP.md`).
 
 ### 3. A new protocol: write a driver
 

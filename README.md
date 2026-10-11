@@ -28,6 +28,8 @@ Other models that speak the same protocols may work but are untested.
 
 Right-click the tray icon → **Request device support…**. RGB Tray lists your HID devices, marks the ones that may have controllable lighting, copies the report to the clipboard and opens the [request form](../../issues/new?template=device-request.yml). Enter the model and paste the report. Serial numbers in the report are shortened.
 
+A Razer device can often be added right away, without a new version: describe it in a small profile file ([docs/profiles.md](docs/profiles.md)).
+
 ## Features
 
 - One panel for all devices: color, effect, brightness — for everything at once or per device.

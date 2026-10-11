@@ -32,7 +32,7 @@ pub const MACROPAD_PID: u16 = 0xA372;
 struct Model {
     vid: u16,
     pid: u16,
-    /// Device id prefix (its kind in KINDS).
+    /// Device id prefix (its kind in `kinds()`).
     key: &'static str,
     /// Firmware effect for "Spectrum", if it has a usable one.
     cycle: Option<u8>,

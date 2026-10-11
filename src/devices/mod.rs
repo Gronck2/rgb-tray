@@ -2,6 +2,7 @@ pub mod animation;
 pub mod asus;
 pub mod lamparray;
 pub mod logitech;
+pub mod profile;
 pub mod razer;
 pub mod via;
 
@@ -134,6 +135,7 @@ pub fn answering() -> Vec<String> {
 }
 
 /// A supported device model.
+#[derive(Clone, Debug)]
 pub struct Kind {
     /// Prefix of device ids and the config key of old (single-device) versions.
     pub key: &'static str,
@@ -153,7 +155,36 @@ pub struct Kind {
     /// How the speed of breathing and spectrum can be set.
     pub speed: Speed,
     pub class: Class,
+    /// How the device is driven: its own Rust driver, or a known protocol with the profile's parameters.
+    pub protocol: Protocol,
 }
+
+#[derive(Clone, Copy, Debug)]
+pub enum Protocol {
+    /// A driver of its own (Logitech, ASUS, QMK/VIA, LampArray), found by its code.
+    Native,
+    Razer(&'static razer::RazerModel),
+}
+
+/// Every model in panel order: the first Rust model (the Logitech keyboard), the profile
+/// models, the other Rust models. Loaded once; profile problems go to the log and `--diagnose`.
+pub fn kinds() -> &'static [Kind] {
+    static KINDS: std::sync::OnceLock<Vec<Kind>> = std::sync::OnceLock::new();
+    KINDS.get_or_init(|| {
+        let (profiles, errors) = profile::load();
+        for (file, e) in &errors {
+            crate::log(&format!("profile {file}: {e}"));
+        }
+        *PROFILE_ERRORS.lock().unwrap() = errors;
+        let mut all: Vec<Kind> = NATIVE[..1].to_vec();
+        all.extend(profiles.into_iter().filter(|p| NATIVE.iter().all(|n| n.key != p.key)));
+        all.extend(NATIVE[1..].iter().cloned());
+        all
+    })
+}
+
+/// Profiles that couldn't be read: (file, why).
+pub static PROFILE_ERRORS: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
 
 impl Kind {
     /// Default name of the model in the interface language.
@@ -218,8 +249,8 @@ pub fn caps(id: &str) -> Caps {
 
 const ALL_EFFECTS: &[Effect] = &Effect::ALL;
 
-/// Every supported model, in panel order.
-pub const KINDS: [Kind; 7] = [
+/// Models written in Rust. The panel order is the first one, then the profile models, then the rest (`kinds`).
+const NATIVE: [Kind; 5] = [
     Kind {
         key: "logitech",
         names: ("Logitech G915 TKL", "Logitech G915 TKL"),
@@ -230,28 +261,7 @@ pub const KINDS: [Kind; 7] = [
         effects: ALL_EFFECTS,
         speed: Speed::Smooth,
         class: Class::Keyboard,
-    },
-    Kind {
-        key: "naga",
-        names: ("Razer Naga V2 Pro", "Razer Naga V2 Pro"),
-        icon: "\u{E962}",
-        zones: &NAGA_ZONES,
-        per_key: false,
-        port_id: false,
-        effects: ALL_EFFECTS,
-        speed: Speed::None,
-        class: Class::Mouse,
-    },
-    Kind {
-        key: "dock",
-        names: ("Razer Mouse Dock Pro", "Razer Mouse Dock Pro"),
-        icon: "\u{E772}",
-        zones: &[],
-        per_key: false,
-        port_id: false,
-        effects: ALL_EFFECTS,
-        speed: Speed::None,
-        class: Class::Other,
+        protocol: Protocol::Native,
     },
     Kind {
         key: "asus",
@@ -263,6 +273,7 @@ pub const KINDS: [Kind; 7] = [
         effects: ALL_EFFECTS,
         speed: Speed::Steps(3),
         class: Class::Keyboard,
+        protocol: Protocol::Native,
     },
     Kind {
         key: "macropad",
@@ -274,6 +285,7 @@ pub const KINDS: [Kind; 7] = [
         effects: ALL_EFFECTS,
         speed: Speed::Smooth,
         class: Class::Keyboard,
+        protocol: Protocol::Native,
     },
     // Any QMK keyboard with VIA support and RGB lighting.
     Kind {
@@ -286,6 +298,7 @@ pub const KINDS: [Kind; 7] = [
         effects: ALL_EFFECTS,
         speed: Speed::Smooth,
         class: Class::Keyboard,
+        protocol: Protocol::Native,
     },
     // Any device with the standard HID LampArray interface and no driver of its own.
     Kind {
@@ -298,6 +311,7 @@ pub const KINDS: [Kind; 7] = [
         effects: ALL_EFFECTS,
         speed: Speed::Smooth,
         class: Class::Other,
+        protocol: Protocol::Native,
     },
 ];
 
@@ -346,9 +360,6 @@ pub fn device_name(info: &crate::hid::HidInfo) -> String {
 pub fn zones_of(id: &str) -> Vec<(u8, String)> {
     caps(id).zones.into_iter().map(|(led, (ru, en))| (led, if crate::i18n::en() { en } else { ru })).collect()
 }
-
-/// Independently lit zones of the Naga V2 Pro: (LED id, name).
-pub const NAGA_ZONES: [(u8, Text); 2] = [(0x04, ("Логотип", "Logo")), (0x05, ("Боковая панель", "Side panel"))];
 
 /// What a HID interface is to this app, for the device report: a supported device, or a
 /// known lighting protocol that a new driver could build on.
@@ -411,7 +422,8 @@ pub const RGB_VENDORS: &[(u16, &str)] = &[
 /// The model of a device id ("naga-123456…" → Naga); unknown ids get the first model.
 pub fn kind_of(id: &str) -> &'static Kind {
     let key = id.split('-').next().unwrap_or(id);
-    KINDS.iter().find(|k| k.key == key).unwrap_or(&KINDS[0])
+    let all = kinds();
+    all.iter().find(|k| k.key == key).unwrap_or(&all[0])
 }
 
 /// Short stable hash of a HID path, for devices without a serial number.
@@ -508,14 +520,14 @@ mod tests {
         assert_eq!(kind_of("asus").key, "asus");
         assert_eq!(kind_of("lamparray-1A2B3C4D").key, "lamparray");
         // Unknown ids fall back to the first model.
-        assert_eq!(kind_of("toaster-1").key, KINDS[0].key);
+        assert_eq!(kind_of("toaster-1").key, kinds()[0].key);
     }
 
     #[test]
     fn kind_keys_are_unique_and_have_no_dash() {
-        for (i, k) in KINDS.iter().enumerate() {
+        for (i, k) in kinds().iter().enumerate() {
             assert!(!k.key.contains('-'), "{}", k.key);
-            assert!(KINDS[i + 1..].iter().all(|o| o.key != k.key), "{}", k.key);
+            assert!(kinds()[i + 1..].iter().all(|o| o.key != k.key), "{}", k.key);
         }
     }
 
@@ -537,7 +549,7 @@ mod tests {
     #[test]
     fn every_model_can_be_switched_off() {
         // "Off" is how the app blanks devices with the display; every model needs it.
-        assert!(KINDS.iter().all(|k| k.effects.contains(&Effect::Off)));
+        assert!(kinds().iter().all(|k| k.effects.contains(&Effect::Off)));
     }
 
     #[test]
