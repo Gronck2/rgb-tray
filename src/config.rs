@@ -231,6 +231,8 @@ pub struct Config {
     pub iso_layout: bool,
     /// The panel is pinned: it stays open and on top when it loses focus.
     pub pinned: bool,
+    /// The lighting dims with the display and goes off while the display is off.
+    pub follow_display: bool,
     /// Interface language "ru" or "en"; not set = follow Windows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
@@ -259,6 +261,7 @@ impl Default for Config {
             schemes: Vec::new(),
             iso_layout: false,
             pinned: false,
+            follow_display: true,
             language: None,
             panel_pos: None,
             presets: Vec::new(),
@@ -669,6 +672,8 @@ mod tests {
         assert_eq!(old.brightness, 50);
         assert_eq!(old.devices["naga"].brightness, 100);
         assert_eq!(old.custom_colors.len(), 16);
+        // Files from before the option follow the display.
+        assert!(old.follow_display);
     }
 
     #[test]

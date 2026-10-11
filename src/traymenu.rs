@@ -32,6 +32,7 @@ enum Item {
     Keys,
     Reapply,
     Autostart,
+    FollowDisplay,
     Language,
     Export,
     Import,
@@ -48,11 +49,12 @@ enum Row {
     Version,
 }
 
-const ROWS: [Row; 13] = [
+const ROWS: [Row; 14] = [
     Row::Item(Item::Open),
     Row::Item(Item::Keys),
     Row::Item(Item::Reapply),
     Row::Item(Item::Autostart),
+    Row::Item(Item::FollowDisplay),
     Row::Item(Item::Language),
     Row::Divider,
     Row::Item(Item::Export),
@@ -106,6 +108,7 @@ struct Menu {
     /// Keyboard whose key editor "Key colors…" opens (None: no such keyboard connected).
     keyboard: Option<String>,
     autostart: bool,
+    follow_display: bool,
 }
 
 thread_local! {
@@ -192,6 +195,7 @@ unsafe fn open() -> windows::core::Result<()> {
         tracking: false,
         keyboard,
         autostart: crate::autostart_enabled(),
+        follow_display: crate::config().follow_display,
     };
     MENU.with(|m| *m.borrow_mut() = Some(menu));
     ShowWindow(hwnd, SW_SHOW);
@@ -280,6 +284,7 @@ impl Menu {
                         Item::Keys => ("\u{E765}", tr!("Цвета клавиш…", "Key colors…")),
                         Item::Reapply => ("\u{E72C}", tr!("Применить заново", "Apply again")),
                         Item::Autostart => ("\u{E823}", tr!("Запускать с Windows", "Start with Windows")),
+                        Item::FollowDisplay => ("\u{E708}", tr!("Гасить вместе с экраном", "Off with the display")),
                         // Names the other language: that is what a click switches to.
                         Item::Language => ("\u{E774}", tr!("Switch to English", "Переключить на русский")),
                         Item::Export => ("\u{E74E}", tr!("Сохранить настройки в файл…", "Save settings to a file…")),
@@ -289,13 +294,18 @@ impl Menu {
                         Item::Exit => ("\u{E7E8}", tr!("Выход", "Exit")),
                     };
                     self.text(rt, icon, &self.fmt.icon, R { x: r.x + 6.0, y: r.y, w: 28.0, h: r.h }, fg);
-                    // Only the autostart row needs room for its switch.
-                    let label_w = if item == Item::Autostart { r.w - 100.0 } else { r.w - 44.0 };
+                    // Only the rows with a switch need room for it.
+                    let switch = match item {
+                        Item::Autostart => Some(self.autostart),
+                        Item::FollowDisplay => Some(self.follow_display),
+                        _ => None,
+                    };
+                    let label_w = if switch.is_some() { r.w - 100.0 } else { r.w - 44.0 };
                     self.text(rt, label, &self.fmt.text, R { x: r.x + 40.0, y: r.y, w: label_w, h: r.h }, fg);
-                    if item == Item::Autostart {
+                    if let Some(on) = switch {
                         // A small switch, like the one in the panel.
                         let sw = R { x: r.x + r.w - 46.0, y: r.cy() - 9.0, w: 36.0, h: 18.0 };
-                        if self.autostart {
+                        if on {
                             self.fill(rt, sw, 9.0, t.accent);
                             self.circle(rt, sw.x + sw.w - 9.0, sw.cy(), 5.0, t.on_accent);
                         } else {
@@ -329,6 +339,7 @@ fn run(item: Item, keyboard: Option<String>) {
         }
         Item::Reapply => crate::apply_all(),
         Item::Autostart => crate::set_autostart(!crate::autostart_enabled()),
+        Item::FollowDisplay => crate::toggle_follow_display(),
         Item::Language => crate::toggle_language(),
         Item::Export => crate::export_settings(),
         Item::Import => crate::import_settings(),
@@ -424,6 +435,7 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Re
             tracking: false,
             keyboard: None,
             autostart: true,
+            follow_display: true,
         };
         m.draw(rt);
         Ok(())

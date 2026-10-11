@@ -50,7 +50,13 @@ const TIMER_REAPPLY_EARLY: usize = 3;
 /// GUID_CONSOLE_DISPLAY_STATE: 0 off, 1 on, 2 dimmed. Modern Standby (S0ix) laptops
 /// send no resume broadcast, so the display turning back on is the wake signal.
 const GUID_CONSOLE_DISPLAY_STATE: windows_sys::core::GUID = windows_sys::core::GUID::from_u128(0x6fe69556_704a_47a0_8f24_c28d936fda47);
-static DISPLAY_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+const DISPLAY_OFF: u8 = 0;
+const DISPLAY_ON: u8 = 1;
+const DISPLAY_DIMMED: u8 = 2;
+static DISPLAY: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(DISPLAY_ON);
+
+/// Brightness of the lighting while the display is dimmed (`Config::follow_display`), percent of what it is set to.
+const DIMMED_BRIGHTNESS: u8 = 30;
 
 fn schedule_wake_reapply(hwnd: HWND) {
     unsafe {
@@ -213,12 +219,22 @@ fn apply_all() {
         }
         let mut status = Vec::new();
         let mut present = Vec::new();
+        // The lighting follows the display: dimmed with it, off while it is off (idle, locked or asleep).
+        let display = if cfg.follow_display { DISPLAY.load(Ordering::Relaxed) } else { DISPLAY_ON };
+        if display != DISPLAY_ON {
+            log(if display == DISPLAY_OFF { "display off: lighting off" } else { "display dimmed: lighting dimmed" });
+        }
         for f in &d.found {
             let dc = cfg.device(&f.id);
-            let brightness = cfg.effective_brightness(&f.id);
+            let mut brightness = cfg.effective_brightness(&f.id);
+            if display == DISPLAY_DIMMED {
+                brightness = (brightness as u32 * DIMMED_BRIGHTNESS as u32 / 100).max(1) as u8;
+            }
             // Devices are applied one at a time (APPLY_LOCK): the driver reads this device's speed.
             devices::set_speed(cfg.effective_speed(&f.id));
-            let res = if devices::has_per_key(&f.id) && dc.per_key {
+            let res = if display == DISPLAY_OFF {
+                f.dev.apply(Effect::Off, dc.rgb(), brightness)
+            } else if devices::has_per_key(&f.id) && dc.per_key {
                 f.dev.apply_keys(&dc.all_keys(), brightness)
             } else if !dc.zones.is_empty() && !devices::zones_of(&f.id).is_empty() {
                 let colors: Vec<(u8, Rgb)> = devices::zones_of(&f.id).iter().map(|&(led, _)| (led, dc.zone_rgb(led))).collect();
@@ -898,6 +914,15 @@ fn import_settings() {
 }
 
 /// Switches the interface between Russian and English and remembers the choice.
+/// Switches whether the lighting dims and goes off with the display.
+fn toggle_follow_display() {
+    let mut cfg = config();
+    cfg.follow_display = !cfg.follow_display;
+    cfg.save();
+    drop(cfg);
+    apply_all();
+}
+
 fn toggle_language() {
     let lang = if i18n::en() { "ru" } else { "en" };
     {
@@ -1104,11 +1129,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let d = &GUID_CONSOLE_DISPLAY_STATE;
                 let same = (g.data1, g.data2, g.data3, g.data4) == (d.data1, d.data2, d.data3, d.data4);
                 if same && s.DataLength >= 1 {
-                    let on = s.Data[0] == 1;
-                    if on && !DISPLAY_ON.swap(true, Ordering::Relaxed) {
+                    let state = s.Data[0];
+                    let was = DISPLAY.swap(state, Ordering::Relaxed);
+                    if state == DISPLAY_ON && was == DISPLAY_OFF {
                         schedule_wake_reapply(hwnd);
-                    } else if !on {
-                        DISPLAY_ON.store(false, Ordering::Relaxed);
+                    } else if state != was && config().follow_display {
+                        // Dimmed, off, or back on after being only dimmed: the lighting follows right away.
+                        apply_all();
                     }
                 }
             }
