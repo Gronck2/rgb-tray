@@ -17,6 +17,7 @@ Protocols profiles support today: **Razer**. Profiles for Logitech HID++, ASUS A
 key = "naga"
 name = "Razer Naga V2 Pro"
 class = "mouse"
+tested = true
 
 [[zones]]
 led = 0x04
@@ -45,9 +46,12 @@ battery = true
 | `class` | yes | `keyboard`, `mouse` or `other`. Picks the icon and wording ("All" of a mouse is "Вся мышь" in Russian). |
 | `icon` | no | `keyboard`, `mouse`, `dock`, `laptop`, `macropad` or `light`. By default it follows `class`. |
 | `effects` | no | Effects the device can show, from `static`, `breathe`, `cycle`, `off`. All four by default; `off` is required. The panel greys out the rest. |
+| `tested` | no | `true` once someone has checked the model on real hardware. Until then its card says "untested", so that its owner knows a report is welcome. |
 | `[[zones]]` | no | Parts the panel can color separately: `led` (an id from the protocol section), `name`, `name_ru`. Without zones, the device has one color. |
 
 Numbers can be written in hex (`0x1F`) or decimal (`31`).
+
+One file can describe several models: put each one in a `[[device]]` section, and its tables become `[[device.zones]]` and `[device.razer]` (see `profiles/razer-mice.toml`).
 
 ## `[razer]`: Razer mice, keyboards and accessories
 

@@ -1916,6 +1916,10 @@ impl Flyout {
         if d.present && d.cfg.speed != NORMAL_SPEED && d.cfg.animated() && crate::devices::caps(&d.id).has_speed() {
             sub.push((ICON_SPEED, speed_label(d.cfg.speed)));
         }
+        // A model nobody has checked yet: a report from its owner is welcome.
+        if d.present && !kind.tested {
+            sub.push(("", tr!("не проверено", "untested").to_string()));
+        }
         if let (true, Some(b)) = (d.present, d.battery) {
             sub.push(("", b.label()));
         }

@@ -1,0 +1,582 @@
+# Razer mice.
+# Data from OpenRazer (driver/razer*_driver.c, master, 2026-10): models it drives with the
+# extended matrix commands (class 0x0F) this app sends. Not checked on hardware: tested = false.
+
+[[device]]
+key = "nagax"
+name = "Razer Naga X"
+class = "mouse"
+
+[[device.zones]]
+led = 0x01
+name = "Scroll wheel"
+name_ru = "Колесо"
+
+[[device.zones]]
+led = 0x11
+name = "Left side"
+name_ru = "Левый бок"
+
+[device.razer]
+pids = [0x0096]
+transaction_id = 0x1F
+leds = [0x01, 0x11]
+
+[[device]]
+key = "nagalefthanded"
+name = "Razer Naga Left-Handed Edition 2020"
+class = "mouse"
+
+[[device.zones]]
+led = 0x04
+name = "Logo"
+name_ru = "Логотип"
+
+[[device.zones]]
+led = 0x01
+name = "Scroll wheel"
+name_ru = "Колесо"
+
+[[device.zones]]
+led = 0x10
+name = "Right side"
+name_ru = "Правый бок"
+
+[device.razer]
+pids = [0x008D]
+transaction_id = 0x1F
+leds = [0x04, 0x01, 0x10]
+
+[[device]]
+key = "basiliskv3"
+name = "Razer Basilisk V3"
+class = "mouse"
+effects = ["static", "cycle", "off"]
+
+[[device.zones]]
+led = 0x04
+name = "Logo"
+name_ru = "Логотип"
+
+[[device.zones]]
+led = 0x01
+name = "Scroll wheel"
+name_ru = "Колесо"
+
+[device.razer]
+pids = [0x0099]
+transaction_id = 0x1F
+leds = [0x00, 0x04, 0x01]
+
+[[device]]
+key = "basiliskv335k"
+name = "Razer Basilisk V3 35K"
+class = "mouse"
+effects = ["static", "cycle", "off"]
+
+[[device.zones]]
+led = 0x04
+name = "Logo"
+name_ru = "Логотип"
+
+[[device.zones]]
+led = 0x01
+name = "Scroll wheel"
+name_ru = "Колесо"
+
+[device.razer]
+pids = [0x00CB]
+transaction_id = 0x1F
+leds = [0x00, 0x04, 0x01]
+
+[[device]]
+key = "basiliskv3pro"
+name = "Razer Basilisk V3 Pro"
+class = "mouse"
+effects = ["static", "cycle", "off"]
+
+[[device.zones]]
+led = 0x04
+name = "Logo"
+name_ru = "Логотип"
+
+[[device.zones]]
+led = 0x01
+name = "Scroll wheel"
+name_ru = "Колесо"
+
+[device.razer]
+pids = [0x00AA, 0x00AB]
+transaction_id = 0x1F
+leds = [0x00, 0x04, 0x01]
+battery = true
+
+[[device]]
+key = "basiliskv3pro35k"
+name = "Razer Basilisk V3 Pro 35K"
+class = "mouse"
+effects = ["static", "cycle", "off"]
+
+[[device.zones]]
+led = 0x04
+name = "Logo"
+name_ru = "Логотип"
+
+[[device.zones]]
+led = 0x01
+name = "Scroll wheel"
+name_ru = "Колесо"
+
+[device.razer]
+pids = [0x00CC, 0x00CD]
+transaction_id = 0x1F
+leds = [0x00, 0x04, 0x01]
+battery = true
+
+[[device]]
+key = "basiliskv3pro35kpg"
+name = "Razer Basilisk V3 Pro 35K Phantom Green Edition"
+class = "mouse"
+effects = ["static", "cycle", "off"]
+
+[device.razer]
+pids = [0x00D6, 0x00D7]
+transaction_id = 0x1F
+leds = [0x00, 0x01]
+battery = true
+
+[[device]]
+key = "basiliskv3x"
+name = "Razer Basilisk V3 X HyperSpeed"
+class = "mouse"
+
+[device.razer]
+pids = [0x00B9]
+transaction_id = 0x1F
+leds = [0x01]
+battery = true
+
+[[device]]
+key = "basiliskv2"
+name = "Razer Basilisk V2"
+class = "mouse"
+
+[[device.zones]]
+led = 0x04
+name = "Logo"
+name_ru = "Логотип"
+
+[[device.zones]]
+led = 0x01
+name = "Scroll wheel"
+name_ru = "Колесо"
+
+[device.razer]
+pids = [0x0085]
+transaction_id = 0x1F
+leds = [0x04, 0x01]
+
+[[device]]
+key = "basiliskultimate"
+name = "Razer Basilisk Ultimate"
+class = "mouse"
+
+[[device.zones]]
+led = 0x04
+name = "Logo"
+name_ru = "Логотип"
+
+[[device.zones]]
+led = 0x01
+name = "Scroll wheel"
+name_ru = "Колесо"
+
+[[device.zones]]
+led = 0x10
+name = "Right side"
+name_ru = "Правый бок"
+
+[[device.zones]]
+led = 0x11
+name = "Left side"
+name_ru = "Левый бок"
+
+[device.razer]
+pids = [0x0086, 0x0088]
+transaction_id = 0x1F
+leds = [0x04, 0x01, 0x11, 0x10]
+battery = true
+
+[[device]]
+key = "basilisk"
+name = "Razer Basilisk"
+class = "mouse"
+
+[[device.zones]]
+led = 0x04
+name = "Logo"
+name_ru = "Логотип"
+
+[[device.zones]]
+led = 0x01
+name = "Scroll wheel"
+name_ru = "Колесо"
+
+[device.razer]
+pids = [0x0064]
+transaction_id = 0x3F
+leds = [0x04, 0x01]
+
+[[device]]
+key = "basiliskessential"
+name = "Razer Basilisk Essential"
+class = "mouse"
+
+[device.razer]
+pids = [0x0065]
+transaction_id = 0x3F
+leds = [0x04]
+
+[[device]]
+key = "cobra"
+name = "Razer Cobra"
+class = "mouse"
+effects = ["static", "cycle", "off"]
+
+[device.razer]
+pids = [0x00A3]
+transaction_id = 0x1F
+leds = [0x04]
+
+[[device]]
+key = "cobrapro"
+name = "Razer Cobra Pro"
+class = "mouse"
+effects = ["static", "cycle", "off"]
+
+[[device.zones]]
+led = 0x04
+name = "Logo"
+name_ru = "Логотип"
+
+[[device.zones]]
+led = 0x01
+name = "Scroll wheel"
+name_ru = "Колесо"
+
+[device.razer]
+pids = [0x00AF, 0x00B0]
+transaction_id = 0x1F
+leds = [0x00, 0x04, 0x01]
+battery = true
+
+[[device]]
+key = "cobrahyperspeed"
+name = "Razer Cobra HyperSpeed"
+class = "mouse"
+effects = ["static", "cycle", "off"]
+
+[device.razer]
+pids = [0x00DA, 0x00DB]
+transaction_id = 0x1F
+leds = [0x00, 0x04]
+battery = true
+
+[[device]]
+key = "proclickv2"
+name = "Razer Pro Click V2"
+class = "mouse"
+effects = ["static", "cycle", "off"]
+
+[device.razer]
+pids = [0x00D0, 0x00D1]
+transaction_id = 0x1F
+leds = [0x00]
+battery = true
+
+[[device]]
+key = "proclickv2vertical"
+name = "Razer Pro Click V2 Vertical Edition"
+class = "mouse"
+effects = ["static", "cycle", "off"]
+
+[device.razer]
+pids = [0x00C7, 0x00C8]
+transaction_id = 0x1F
+leds = [0x00]
+battery = true
+
+[[device]]
+key = "viper"
+name = "Razer Viper"
+class = "mouse"
+
+[device.razer]
+pids = [0x0078]
+transaction_id = 0x3F
+leds = [0x04]
+
+[[device]]
+key = "vipermini"
+name = "Razer Viper Mini"
+class = "mouse"
+
+[device.razer]
+pids = [0x008A]
+transaction_id = 0x3F
+leds = [0x04]
+
+[[device]]
+key = "viperultimate"
+name = "Razer Viper Ultimate"
+class = "mouse"
+
+[device.razer]
+pids = [0x007A, 0x007B]
+transaction_id = 0x3F
+leds = [0x04]
+
+[[device]]
+key = "viper8k"
+name = "Razer Viper 8KHz"
+class = "mouse"
+
+[device.razer]
+pids = [0x0091]
+transaction_id = 0x1F
+leds = [0x04]
+
+[[device]]
+key = "deathadderv2"
+name = "Razer DeathAdder V2"
+class = "mouse"
+
+[[device.zones]]
+led = 0x04
+name = "Logo"
+name_ru = "Логотип"
+
+[[device.zones]]
+led = 0x01
+name = "Scroll wheel"
+name_ru = "Колесо"
+
+[device.razer]
+pids = [0x0084]
+transaction_id = 0x3F
+leds = [0x04, 0x01]
+
+[[device]]
+key = "deathadderv2pro"
+name = "Razer DeathAdder V2 Pro"
+class = "mouse"
+
+[device.razer]
+pids = [0x007C, 0x007D]
+transaction_id = 0x3F
+leds = [0x04]
+battery = true
+
+[[device]]
+key = "deathadderv2mini"
+name = "Razer DeathAdder V2 Mini"
+class = "mouse"
+
+[device.razer]
+pids = [0x008C]
+transaction_id = 0x3F
+leds = [0x04]
+
+[[device]]
+key = "deathadderv2lite"
+name = "Razer DeathAdder V2 Lite"
+class = "mouse"
+
+[device.razer]
+pids = [0x00A1]
+transaction_id = 0x1F
+leds = [0x04]
+
+[[device]]
+key = "deathadderelite"
+name = "Razer DeathAdder Elite"
+class = "mouse"
+
+[[device.zones]]
+led = 0x04
+name = "Logo"
+name_ru = "Логотип"
+
+[[device.zones]]
+led = 0x01
+name = "Scroll wheel"
+name_ru = "Колесо"
+
+[device.razer]
+pids = [0x005C]
+transaction_id = 0x3F
+leds = [0x04, 0x01]
+
+[[device]]
+key = "deathadderessential"
+name = "Razer DeathAdder Essential"
+class = "mouse"
+effects = ["static", "breathe", "off"]
+
+[[device.zones]]
+led = 0x04
+name = "Logo"
+name_ru = "Логотип"
+
+[[device.zones]]
+led = 0x01
+name = "Scroll wheel"
+name_ru = "Колесо"
+
+[device.razer]
+pids = [0x006E, 0x0071]
+transaction_id = 0x3F
+leds = [0x04, 0x01]
+
+[[device]]
+key = "deathadderessential2021"
+name = "Razer DeathAdder Essential 2021"
+class = "mouse"
+effects = ["static", "breathe", "off"]
+
+[device.razer]
+pids = [0x0098]
+transaction_id = 0x3F
+leds = [0x04]
+
+[[device]]
+key = "mambaelite"
+name = "Razer Mamba Elite"
+class = "mouse"
+
+[[device.zones]]
+led = 0x04
+name = "Logo"
+name_ru = "Логотип"
+
+[[device.zones]]
+led = 0x01
+name = "Scroll wheel"
+name_ru = "Колесо"
+
+[[device.zones]]
+led = 0x10
+name = "Right side"
+name_ru = "Правый бок"
+
+[[device.zones]]
+led = 0x11
+name = "Left side"
+name_ru = "Левый бок"
+
+[device.razer]
+pids = [0x006C]
+transaction_id = 0x1F
+leds = [0x04, 0x01, 0x11, 0x10]
+
+[[device]]
+key = "mambawireless"
+name = "Razer Mamba Wireless"
+class = "mouse"
+
+[[device.zones]]
+led = 0x04
+name = "Logo"
+name_ru = "Логотип"
+
+[[device.zones]]
+led = 0x01
+name = "Scroll wheel"
+name_ru = "Колесо"
+
+[device.razer]
+pids = [0x0072, 0x0073]
+transaction_id = 0x3F
+leds = [0x04, 0x01]
+battery = true
+
+[[device]]
+key = "lancehead"
+name = "Razer Lancehead"
+class = "mouse"
+
+[[device.zones]]
+led = 0x04
+name = "Logo"
+name_ru = "Логотип"
+
+[[device.zones]]
+led = 0x01
+name = "Scroll wheel"
+name_ru = "Колесо"
+
+[[device.zones]]
+led = 0x10
+name = "Right side"
+name_ru = "Правый бок"
+
+[[device.zones]]
+led = 0x11
+name = "Left side"
+name_ru = "Левый бок"
+
+[device.razer]
+pids = [0x0059, 0x005A, 0x006F, 0x0070]
+transaction_id = 0x3F
+leds = [0x04, 0x01, 0x11, 0x10]
+battery = true
+
+[[device]]
+key = "lanceheadte"
+name = "Razer Lancehead Tournament Edition"
+class = "mouse"
+
+[[device.zones]]
+led = 0x04
+name = "Logo"
+name_ru = "Логотип"
+
+[[device.zones]]
+led = 0x01
+name = "Scroll wheel"
+name_ru = "Колесо"
+
+[[device.zones]]
+led = 0x10
+name = "Right side"
+name_ru = "Правый бок"
+
+[[device.zones]]
+led = 0x11
+name = "Left side"
+name_ru = "Левый бок"
+
+[device.razer]
+pids = [0x0060]
+transaction_id = 0x3F
+leds = [0x04, 0x01, 0x11, 0x10]
+
+[[device]]
+key = "abyssuselitedva"
+name = "Razer Abyssus Elite D.Va Edition"
+class = "mouse"
+
+[device.razer]
+pids = [0x006A]
+transaction_id = 0x3F
+leds = [0x04]
+
+[[device]]
+key = "abyssusessential"
+name = "Razer Abyssus Essential"
+class = "mouse"
+
+[device.razer]
+pids = [0x006B]
+transaction_id = 0x3F
+leds = [0x04]

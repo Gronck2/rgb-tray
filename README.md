@@ -17,6 +17,7 @@ A tiny Windows tray app that controls RGB lighting of keyboards and mice directl
 | Logitech G915 TKL | LIGHTSPEED receiver | Static, breathing, spectrum, off; per-key colors; battery |
 | Razer Naga V2 Pro | HyperSpeed dongle / dock | Separate logo and scroll wheel zones; effects; battery |
 | Razer Mouse Dock Pro | USB | Static, breathing, spectrum, off |
+| About 90 more Razer mice, keyboards and accessories (Basilisk, DeathAdder, Viper, Cobra, BlackWidow, Huntsman, Ornata, Firefly, Goliathus, Base Station…), from OpenRazer's data — [list](profiles) | USB / dongle | Static, breathing, spectrum, off; zones of mice; battery. **Untested**: the card says so, and a report is welcome. Wireless HyperSpeed keyboards only on cable for now. |
 | ASUS laptop keyboard (Aura) | Built-in | Static, breathing, spectrum, off; keyboard zones and body lamps via LampArray |
 | Geekboard MacroPad v2 (QMK/VIA) | USB | Static, breathing, spectrum, off |
 | Other QMK keyboards with VIA and RGB (Keychron, custom boards…) | USB | Static, breathing, spectrum, off, brightness (breathing and spectrum drawn by the app) |

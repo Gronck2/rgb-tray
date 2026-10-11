@@ -43,25 +43,38 @@ pub struct Razer {
 
 impl Razer {
     pub fn find_all() -> Vec<Razer> {
-        hid::enumerate(VID)
-            .into_iter()
-            .filter(|i| i.usage_page == 0x0001 && i.usage == 0x0002 && i.feature_len == 91)
-            .filter_map(|i| {
-                let (key, model) = model_of(i.pid)?;
-                // Mouse collections can't be opened for read/write, but feature reports work.
-                let mut d = Razer { hid: Hid::open(&i.path, false, false)?, key, model, id: None };
-                d.id = match d.command(0x00, 0x82, &[]) {
-                    Ok(r) => {
-                        let serial: String = r[9..9 + 22].iter().take_while(|&&b| b != 0).filter(|b| b.is_ascii_alphanumeric()).map(|&b| b as char).collect();
-                        let serial = if serial.is_empty() { super::path_hash(&i.path) } else { serial };
-                        Some(format!("{}-{serial}", key))
-                    }
-                    Err(e) if e == super::NO_LINK => None,
-                    Err(_) => Some(format!("{}-{}", key, super::path_hash(&i.path))),
-                };
-                Some(d)
-            })
-            .collect()
+        let infos: Vec<hid::HidInfo> = hid::enumerate(VID).into_iter().filter(|i| i.feature_len == 91 && is_supported(i.pid)).collect();
+        // The control report is on a top-level collection: the mouse one of mice and the
+        // dock, the keyboard one of keyboards, some other one of accessories. Per product id
+        // only the best kind is used, so a device isn't found again through other collections.
+        let rank = |i: &hid::HidInfo| match (i.usage_page, i.usage) {
+            (0x0001, 0x0002) => 0,
+            (0x0001, 0x0006) => 1,
+            _ => 2,
+        };
+        let best: Vec<&hid::HidInfo> = infos.iter().filter(|i| infos.iter().filter(|o| o.pid == i.pid).all(|o| rank(o) >= rank(i))).collect();
+        let mut found: Vec<Razer> = Vec::new();
+        for d in best.into_iter().filter_map(|i| {
+            let (key, model) = model_of(i.pid)?;
+            // Mouse collections can't be opened for read/write, but feature reports work.
+            let mut d = Razer { hid: Hid::open(&i.path, false, false)?, key, model, id: None };
+            d.id = match d.command(0x00, 0x82, &[]) {
+                Ok(r) => {
+                    let serial: String = r[9..9 + 22].iter().take_while(|&&b| b != 0).filter(|b| b.is_ascii_alphanumeric()).map(|&b| b as char).collect();
+                    let serial = if serial.is_empty() { super::path_hash(&i.path) } else { serial };
+                    Some(format!("{}-{serial}", key))
+                }
+                Err(e) if e == super::NO_LINK => None,
+                Err(_) => Some(format!("{}-{}", key, super::path_hash(&i.path))),
+            };
+            Some(d)
+        }) {
+            // One device with several such collections answers with the same serial on each.
+            if d.id.is_none() || !found.iter().any(|f| f.id == d.id) {
+                found.push(d);
+            }
+        }
+        found
     }
 
     pub fn key(&self) -> &'static str {

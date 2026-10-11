@@ -1,0 +1,219 @@
+# Razer accessories: mouse mats, docks, stands, speakers and more (all lighting on LED 0x00).
+# Data from OpenRazer (driver/razer*_driver.c, master, 2026-10): models it drives with the
+# extended matrix commands (class 0x0F) this app sends. Not checked on hardware: tested = false.
+
+[[device]]
+key = "mousedockchroma"
+name = "Razer Mouse Dock Chroma"
+class = "other"
+icon = "dock"
+
+[device.razer]
+pids = [0x007E]
+transaction_id = 0x3F
+leds = [0x00]
+
+[[device]]
+key = "basestationv2"
+name = "Razer Base Station V2 Chroma"
+class = "other"
+icon = "dock"
+
+[device.razer]
+pids = [0x0F20]
+transaction_id = 0x1F
+leds = [0x00]
+
+[[device]]
+key = "bungeev3"
+name = "Razer Mouse Bungee V3 Chroma"
+class = "other"
+icon = "dock"
+
+[device.razer]
+pids = [0x0F1D]
+transaction_id = 0x1F
+leds = [0x00]
+
+[[device]]
+key = "fireflyv2pro"
+name = "Razer Firefly V2 Pro"
+class = "other"
+
+[device.razer]
+pids = [0x0C08]
+transaction_id = 0x3F
+leds = [0x00]
+
+[[device]]
+key = "fireflyv2"
+name = "Razer Firefly V2"
+class = "other"
+
+[device.razer]
+pids = [0x0C04]
+transaction_id = 0x3F
+leds = [0x00]
+
+[[device]]
+key = "fireflyhyperflux"
+name = "Razer Firefly HyperFlux"
+class = "other"
+
+[device.razer]
+pids = [0x0068]
+transaction_id = 0x3F
+leds = [0x00]
+
+[[device]]
+key = "goliathus"
+name = "Razer Goliathus Chroma"
+class = "other"
+
+[device.razer]
+pids = [0x0C01]
+transaction_id = 0x3F
+leds = [0x00]
+
+[[device]]
+key = "goliathusextended"
+name = "Razer Goliathus Extended Chroma"
+class = "other"
+
+[device.razer]
+pids = [0x0C02]
+transaction_id = 0x3F
+leds = [0x00]
+
+[[device]]
+key = "goliathus3xl"
+name = "Razer Goliathus Chroma 3XL"
+class = "other"
+
+[device.razer]
+pids = [0x0C06]
+transaction_id = 0x3F
+leds = [0x00]
+
+[[device]]
+key = "strider"
+name = "Razer Strider Chroma"
+class = "other"
+
+[device.razer]
+pids = [0x0C05]
+transaction_id = 0x3F
+leds = [0x00]
+
+[[device]]
+key = "laptopstand"
+name = "Razer Laptop Stand Chroma"
+class = "other"
+icon = "laptop"
+
+[device.razer]
+pids = [0x0F0D]
+transaction_id = 0x1F
+leds = [0x00]
+
+[[device]]
+key = "laptopstandv2"
+name = "Razer Laptop Stand Chroma V2"
+class = "other"
+icon = "laptop"
+
+[device.razer]
+pids = [0x0F2B]
+transaction_id = 0x1F
+leds = [0x00]
+
+[[device]]
+key = "thunderbolt4dock"
+name = "Razer Thunderbolt 4 Dock Chroma"
+class = "other"
+icon = "dock"
+
+[device.razer]
+pids = [0x0F21]
+transaction_id = 0x1F
+leds = [0x00]
+
+[[device]]
+key = "chromahdk"
+name = "Razer Chroma Hardware Development Kit"
+class = "other"
+
+[device.razer]
+pids = [0x0F09]
+transaction_id = 0x3F
+leds = [0x00]
+
+[[device]]
+key = "nommochroma"
+name = "Razer Nommo Chroma"
+class = "other"
+
+[device.razer]
+pids = [0x0517]
+transaction_id = 0x3F
+leds = [0x00]
+
+[[device]]
+key = "nommopro"
+name = "Razer Nommo Pro"
+class = "other"
+
+[device.razer]
+pids = [0x0518]
+transaction_id = 0x3F
+leds = [0x00]
+
+[[device]]
+key = "krakenkitty"
+name = "Razer Kraken Kitty Edition"
+class = "other"
+
+[device.razer]
+pids = [0x0F19]
+transaction_id = 0x1F
+leds = [0x00]
+
+[[device]]
+key = "raptor27"
+name = "Razer Raptor 27"
+class = "other"
+
+[device.razer]
+pids = [0x0F12]
+transaction_id = 0x1F
+leds = [0x00]
+
+[[device]]
+key = "corex"
+name = "Razer Core X Chroma"
+class = "other"
+
+[device.razer]
+pids = [0x0F1A]
+transaction_id = 0x1F
+leds = [0x00]
+
+[[device]]
+key = "lianlio11"
+name = "Razer Lian Li O11 Dynamic Razer Edition"
+class = "other"
+
+[device.razer]
+pids = [0x0F13]
+transaction_id = 0x1F
+leds = [0x00]
+
+[[device]]
+key = "tomahawkatx"
+name = "Razer Tomahawk ATX"
+class = "other"
+
+[device.razer]
+pids = [0x0F17]
+transaction_id = 0x1F
+leds = [0x00]

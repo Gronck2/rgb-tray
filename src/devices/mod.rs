@@ -157,6 +157,8 @@ pub struct Kind {
     pub class: Class,
     /// How the device is driven: its own Rust driver, or a known protocol with the profile's parameters.
     pub protocol: Protocol,
+    /// Checked on real hardware; an untested model says so on its card, asking for a report.
+    pub tested: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -262,6 +264,7 @@ const NATIVE: [Kind; 5] = [
         speed: Speed::Smooth,
         class: Class::Keyboard,
         protocol: Protocol::Native,
+        tested: true,
     },
     Kind {
         key: "asus",
@@ -274,6 +277,7 @@ const NATIVE: [Kind; 5] = [
         speed: Speed::Steps(3),
         class: Class::Keyboard,
         protocol: Protocol::Native,
+        tested: true,
     },
     Kind {
         key: "macropad",
@@ -286,6 +290,7 @@ const NATIVE: [Kind; 5] = [
         speed: Speed::Smooth,
         class: Class::Keyboard,
         protocol: Protocol::Native,
+        tested: true,
     },
     // Any QMK keyboard with VIA support and RGB lighting.
     Kind {
@@ -299,6 +304,7 @@ const NATIVE: [Kind; 5] = [
         speed: Speed::Smooth,
         class: Class::Keyboard,
         protocol: Protocol::Native,
+        tested: true,
     },
     // Any device with the standard HID LampArray interface and no driver of its own.
     Kind {
@@ -312,6 +318,7 @@ const NATIVE: [Kind; 5] = [
         speed: Speed::Smooth,
         class: Class::Other,
         protocol: Protocol::Native,
+        tested: true,
     },
 ];
 
@@ -367,8 +374,8 @@ pub fn interface_note(i: &crate::hid::HidInfo) -> Option<&'static str> {
     Some(match (i.vid, i.usage_page, i.usage) {
         (0x046D, 0xFF00, 0x0002) if logitech::RECEIVER_PIDS.contains(&i.pid) => "SUPPORTED: Logitech receiver (HID++)",
         (0x046D, 0xFF00, 0x0002) => "Logitech HID++ (protocol known)",
-        // Razer lighting goes through 91-byte feature reports on the first mouse collection.
-        (0x1532, 0x0001, 0x0002) if i.feature_len == 91 && razer::is_supported(i.pid) => "SUPPORTED: Razer",
+        // Razer lighting goes through 91-byte feature reports (the mouse, keyboard or other collection).
+        (0x1532, _, _) if i.feature_len == 91 && razer::is_supported(i.pid) => "SUPPORTED: Razer",
         (0x1532, _, _) if i.feature_len == 91 => "Razer control interface (protocol known)",
         (0x0B05, 0xFF31, 0x0079) => "SUPPORTED: ASUS Aura",
         (via::MACROPAD_VID, 0xFF60, 0x0061) if i.pid == via::MACROPAD_PID => "SUPPORTED: Geekboard MacroPad (VIA)",

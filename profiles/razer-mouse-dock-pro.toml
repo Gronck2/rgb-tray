@@ -3,6 +3,7 @@ key = "dock"
 name = "Razer Mouse Dock Pro"
 class = "other"
 icon = "dock"
+tested = true
 
 [razer]
 pids = [0x00A4]

@@ -2,6 +2,7 @@
 key = "naga"
 name = "Razer Naga V2 Pro"
 class = "mouse"
+tested = true
 
 # Separately colored zones on the panel. The scroll wheel (LED 0x01) follows the whole mouse.
 [[zones]]

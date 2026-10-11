@@ -10,6 +10,9 @@ use serde::Deserialize;
 const BUILT_IN: &[(&str, &str)] = &[
     ("razer-naga-v2-pro.toml", include_str!("../../profiles/razer-naga-v2-pro.toml")),
     ("razer-mouse-dock-pro.toml", include_str!("../../profiles/razer-mouse-dock-pro.toml")),
+    ("razer-mice.toml", include_str!("../../profiles/razer-mice.toml")),
+    ("razer-keyboards.toml", include_str!("../../profiles/razer-keyboards.toml")),
+    ("razer-accessories.toml", include_str!("../../profiles/razer-accessories.toml")),
 ];
 
 #[derive(Deserialize)]
@@ -33,6 +36,9 @@ struct Profile {
     /// The protocol and its parameters: exactly one section.
     #[serde(default)]
     razer: Option<RazerSection>,
+    /// Someone checked the model on real hardware (the card says "untested" otherwise).
+    #[serde(default)]
+    tested: bool,
 }
 
 #[derive(Deserialize)]
@@ -88,7 +94,34 @@ fn icon(name: &str) -> Option<&'static str> {
 
 /// Reads one profile into a model.
 fn parse(text: &str) -> Result<Kind, String> {
-    let p: Profile = toml::from_str(text).map_err(|e| e.message().to_string())?;
+    from_profile(toml::from_str(text).map_err(|e| e.message().to_string())?)
+}
+
+/// All models of a file: one profile, or several as `[[device]]` sections. A broken one
+/// doesn't keep the others out.
+fn parse_file(text: &str) -> Vec<Result<Kind, String>> {
+    let table: toml::Table = match toml::from_str(text) {
+        Ok(t) => t,
+        Err(e) => return vec![Err(e.message().to_string())],
+    };
+    match table.get("device") {
+        Some(toml::Value::Array(devices)) if table.len() == 1 => devices
+            .iter()
+            .enumerate()
+            .map(|(n, d)| {
+                let key = d.get("key").and_then(|k| k.as_str()).unwrap_or("?").to_string();
+                d.clone()
+                    .try_into()
+                    .map_err(|e: toml::de::Error| e.message().to_string())
+                    .and_then(from_profile)
+                    .map_err(|e| format!("device {} ({key}): {e}", n + 1))
+            })
+            .collect(),
+        _ => vec![parse(text)],
+    }
+}
+
+fn from_profile(p: Profile) -> Result<Kind, String> {
     if p.key.is_empty() || !p.key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()) {
         return Err(format!("key \"{}\": only small latin letters and digits", p.key));
     }
@@ -144,6 +177,7 @@ fn parse(text: &str) -> Result<Kind, String> {
         speed,
         class,
         protocol,
+        tested: p.tested,
     })
 }
 
@@ -152,12 +186,16 @@ fn parse(text: &str) -> Result<Kind, String> {
 pub fn load() -> (Vec<Kind>, Vec<(String, String)>) {
     let mut kinds: Vec<Kind> = Vec::new();
     let mut errors = Vec::new();
-    let add = |file: &str, text: &str, kinds: &mut Vec<Kind>, errors: &mut Vec<(String, String)>| match parse(text) {
-        Ok(k) => match kinds.iter().position(|o| o.key == k.key) {
-            Some(i) => kinds[i] = k,
-            None => kinds.push(k),
-        },
-        Err(e) => errors.push((file.to_string(), e)),
+    let add = |file: &str, text: &str, kinds: &mut Vec<Kind>, errors: &mut Vec<(String, String)>| {
+        for res in parse_file(text) {
+            match res {
+                Ok(k) => match kinds.iter().position(|o| o.key == k.key) {
+                    Some(i) => kinds[i] = k,
+                    None => kinds.push(k),
+                },
+                Err(e) => errors.push((file.to_string(), e)),
+            }
+        }
     };
     for (file, text) in BUILT_IN {
         add(file, text, &mut kinds, &mut errors);
@@ -192,7 +230,18 @@ mod tests {
         let (kinds, errors) = load();
         assert!(errors.is_empty(), "{errors:?}");
         let keys: Vec<&str> = kinds.iter().map(|k| k.key).collect();
-        assert_eq!(keys, ["naga", "dock"]);
+        assert_eq!(keys[..2], ["naga", "dock"]);
+        // Every key once, every PID in one model only.
+        for (i, k) in kinds.iter().enumerate() {
+            assert!(kinds[i + 1..].iter().all(|o| o.key != k.key), "{}", k.key);
+            let Protocol::Razer(m) = k.protocol else { continue };
+            for o in &kinds[i + 1..] {
+                if let Protocol::Razer(om) = o.protocol {
+                    assert!(m.pids.iter().all(|p| !om.pids.contains(p)), "{} and {} share a PID", k.key, o.key);
+                }
+            }
+        }
+        assert!(kinds[0].tested && kinds[1].tested);
         let naga = &kinds[0];
         assert_eq!(naga.names, ("Razer Naga V2 Pro", "Razer Naga V2 Pro"));
         assert_eq!(naga.zones, &[(0x04, ("Логотип", "Logo")), (0x05, ("Боковая панель", "Side panel"))]);
@@ -203,6 +252,29 @@ mod tests {
         let Protocol::Razer(d) = kinds[1].protocol else { panic!("dock is not razer") };
         assert_eq!((d.pids, d.transaction_id, d.leds, d.battery), (&[0x00A4][..], 0xFF, &[0x00][..], false));
         assert_eq!(kinds[1].icon, "\u{E772}");
+    }
+
+    #[test]
+    fn several_models_in_one_file() {
+        let text = "[[device]]\nkey = \"a\"\nname = \"A\"\nclass = \"mouse\"\n[device.razer]\npids = [1]\ntransaction_id = 0x1F\nleds = [4]\n\n\
+                    [[device]]\nkey = \"b\"\nname = \"B\"\nclass = \"toaster\"\n[device.razer]\npids = [2]\ntransaction_id = 0x1F\nleds = [4]\n\n\
+                    [[device]]\nkey = \"c\"\nname = \"C\"\nclass = \"other\"\n[device.razer]\npids = [3]\ntransaction_id = 0x3F\nleds = [0]\n";
+        let all = parse_file(text);
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].as_ref().unwrap().key, "a");
+        assert!(all[1].as_ref().unwrap_err().starts_with("device 2 (b): "), "{:?}", all[1].as_ref().err());
+        assert_eq!(all[2].as_ref().unwrap().key, "c");
+        // A single profile is one model.
+        assert_eq!(parse_file(&text.replace("[[device]]", "").split("\n\n").next().unwrap().replace("[device.razer]", "[razer]")).len(), 1);
+    }
+
+    #[test]
+    fn every_profile_file_is_built_in() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("profiles");
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            assert!(BUILT_IN.iter().any(|(f, _)| *f == name), "{name} is not in BUILT_IN");
+        }
     }
 
     #[test]

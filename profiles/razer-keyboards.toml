@@ -1,0 +1,391 @@
+# Razer keyboards and keypads (whole-keyboard effects on the backlight, LED 0x05). Wireless modes of HyperSpeed keyboards use another transaction id (0x9F) and aren't here yet; their cable PIDs are.
+# Data from OpenRazer (driver/razer*_driver.c, master, 2026-10): models it drives with the
+# extended matrix commands (class 0x0F) this app sends. Not checked on hardware: tested = false.
+
+[[device]]
+key = "blackwidowv4"
+name = "Razer BlackWidow V4"
+class = "keyboard"
+
+[device.razer]
+pids = [0x0287]
+transaction_id = 0x1F
+leds = [0x05]
+
+[[device]]
+key = "blackwidowv4pro"
+name = "Razer BlackWidow V4 Pro"
+class = "keyboard"
+
+[device.razer]
+pids = [0x028D]
+transaction_id = 0x1F
+leds = [0x05]
+
+[[device]]
+key = "blackwidowv475"
+name = "Razer BlackWidow V4 75%"
+class = "keyboard"
+
+[device.razer]
+pids = [0x02A5]
+transaction_id = 0x1F
+leds = [0x05]
+
+[[device]]
+key = "blackwidowv4mini"
+name = "Razer BlackWidow V4 Mini HyperSpeed"
+class = "keyboard"
+
+[device.razer]
+pids = [0x02B9]
+transaction_id = 0x1F
+leds = [0x05]
+battery = true
+
+[[device]]
+key = "blackwidowv4tkl"
+name = "Razer BlackWidow V4 TKL HyperSpeed"
+class = "keyboard"
+
+[device.razer]
+pids = [0x02D7]
+transaction_id = 0x1F
+leds = [0x05]
+battery = true
+
+[[device]]
+key = "blackwidowv3"
+name = "Razer BlackWidow V3"
+class = "keyboard"
+
+[device.razer]
+pids = [0x024E]
+transaction_id = 0x3F
+leds = [0x05]
+
+[[device]]
+key = "blackwidowv3tk"
+name = "Razer BlackWidow V3 Tenkeyless"
+class = "keyboard"
+
+[device.razer]
+pids = [0x0A24]
+transaction_id = 0x3F
+leds = [0x05]
+
+[[device]]
+key = "blackwidowv3pro"
+name = "Razer BlackWidow V3 Pro"
+class = "keyboard"
+
+[device.razer]
+pids = [0x025A]
+transaction_id = 0x3F
+leds = [0x05]
+battery = true
+
+[[device]]
+key = "blackwidowv3mini"
+name = "Razer BlackWidow V3 Mini HyperSpeed"
+class = "keyboard"
+
+[device.razer]
+pids = [0x0258]
+transaction_id = 0x1F
+leds = [0x05]
+battery = true
+
+[[device]]
+key = "blackwidowelite"
+name = "Razer BlackWidow Elite"
+class = "keyboard"
+
+[device.razer]
+pids = [0x0228]
+transaction_id = 0x1F
+leds = [0x05]
+
+[[device]]
+key = "blackwidow2019"
+name = "Razer BlackWidow 2019"
+class = "keyboard"
+
+[device.razer]
+pids = [0x0241]
+transaction_id = 0x3F
+leds = [0x05]
+
+[[device]]
+key = "blackwidowessential"
+name = "Razer BlackWidow Essential"
+class = "keyboard"
+effects = ["static", "breathe", "off"]
+
+[device.razer]
+pids = [0x0237]
+transaction_id = 0x3F
+leds = [0x05]
+
+[[device]]
+key = "blackwidowlite"
+name = "Razer BlackWidow Lite"
+class = "keyboard"
+effects = ["static", "breathe", "off"]
+
+[device.razer]
+pids = [0x0235]
+transaction_id = 0x3F
+leds = [0x05]
+
+[[device]]
+key = "huntsmanv3pro"
+name = "Razer Huntsman V3 Pro"
+class = "keyboard"
+
+[device.razer]
+pids = [0x02A6]
+transaction_id = 0x1F
+leds = [0x05]
+
+[[device]]
+key = "huntsmanv3protkl"
+name = "Razer Huntsman V3 Pro TKL"
+class = "keyboard"
+
+[device.razer]
+pids = [0x02A7]
+transaction_id = 0x1F
+leds = [0x05]
+
+[[device]]
+key = "huntsmanv3promini"
+name = "Razer Huntsman V3 Pro Mini"
+class = "keyboard"
+
+[device.razer]
+pids = [0x02B0]
+transaction_id = 0x1F
+leds = [0x05]
+
+[[device]]
+key = "huntsmanv2"
+name = "Razer Huntsman V2"
+class = "keyboard"
+
+[device.razer]
+pids = [0x026C]
+transaction_id = 0x1F
+leds = [0x05]
+
+[[device]]
+key = "huntsmanv2tkl"
+name = "Razer Huntsman V2 Tenkeyless"
+class = "keyboard"
+
+[device.razer]
+pids = [0x026B]
+transaction_id = 0x1F
+leds = [0x05]
+
+[[device]]
+key = "huntsmanv2analog"
+name = "Razer Huntsman V2 Analog"
+class = "keyboard"
+
+[device.razer]
+pids = [0x0266]
+transaction_id = 0x1F
+leds = [0x05]
+
+[[device]]
+key = "huntsmanminianalog"
+name = "Razer Huntsman Mini Analog"
+class = "keyboard"
+
+[device.razer]
+pids = [0x0282]
+transaction_id = 0x1F
+leds = [0x05]
+
+[[device]]
+key = "huntsmanmini"
+name = "Razer Huntsman Mini"
+class = "keyboard"
+
+[device.razer]
+pids = [0x0257, 0x0269]
+transaction_id = 0x3F
+leds = [0x05]
+
+[[device]]
+key = "huntsmanelite"
+name = "Razer Huntsman Elite"
+class = "keyboard"
+
+[device.razer]
+pids = [0x0226]
+transaction_id = 0x3F
+leds = [0x05]
+
+[[device]]
+key = "huntsman"
+name = "Razer Huntsman"
+class = "keyboard"
+
+[device.razer]
+pids = [0x0227]
+transaction_id = 0x3F
+leds = [0x05]
+
+[[device]]
+key = "huntsmante"
+name = "Razer Huntsman Tournament Edition"
+class = "keyboard"
+
+[device.razer]
+pids = [0x0243]
+transaction_id = 0x3F
+leds = [0x05]
+
+[[device]]
+key = "ornatav3"
+name = "Razer Ornata V3"
+class = "keyboard"
+
+[device.razer]
+pids = [0x02A1, 0x028F]
+transaction_id = 0x1F
+leds = [0x05]
+
+[[device]]
+key = "ornatav3x"
+name = "Razer Ornata V3 X"
+class = "keyboard"
+
+[device.razer]
+pids = [0x0294, 0x02A2]
+transaction_id = 0x1F
+leds = [0x05]
+
+[[device]]
+key = "ornatav3tkl"
+name = "Razer Ornata V3 Tenkeyless"
+class = "keyboard"
+
+[device.razer]
+pids = [0x02A3]
+transaction_id = 0x1F
+leds = [0x05]
+
+[[device]]
+key = "ornatav2"
+name = "Razer Ornata V2"
+class = "keyboard"
+
+[device.razer]
+pids = [0x025D]
+transaction_id = 0x1F
+leds = [0x05]
+
+[[device]]
+key = "ornatachroma"
+name = "Razer Ornata Chroma"
+class = "keyboard"
+
+[device.razer]
+pids = [0x021E]
+transaction_id = 0x3F
+leds = [0x05]
+
+[[device]]
+key = "ornata"
+name = "Razer Ornata"
+class = "keyboard"
+effects = ["static", "breathe", "off"]
+
+[device.razer]
+pids = [0x021F]
+transaction_id = 0x3F
+leds = [0x05]
+
+[[device]]
+key = "cynosav2"
+name = "Razer Cynosa V2"
+class = "keyboard"
+
+[device.razer]
+pids = [0x025E]
+transaction_id = 0x1F
+leds = [0x05]
+
+[[device]]
+key = "cynosachroma"
+name = "Razer Cynosa Chroma"
+class = "keyboard"
+
+[device.razer]
+pids = [0x022A]
+transaction_id = 0x3F
+leds = [0x05]
+
+[[device]]
+key = "cynosachromapro"
+name = "Razer Cynosa Chroma Pro"
+class = "keyboard"
+
+[device.razer]
+pids = [0x022C]
+transaction_id = 0x3F
+leds = [0x05]
+
+[[device]]
+key = "cynosalite"
+name = "Razer Cynosa Lite"
+class = "keyboard"
+
+[device.razer]
+pids = [0x023F]
+transaction_id = 0x3F
+leds = [0x05]
+
+[[device]]
+key = "deathstalkerv2"
+name = "Razer DeathStalker V2"
+class = "keyboard"
+
+[device.razer]
+pids = [0x0295]
+transaction_id = 0x3F
+leds = [0x05]
+
+[[device]]
+key = "deathstalkerv2pro"
+name = "Razer DeathStalker V2 Pro"
+class = "keyboard"
+
+[device.razer]
+pids = [0x0292]
+transaction_id = 0x3F
+leds = [0x05]
+
+[[device]]
+key = "deathstalkerv2protkl"
+name = "Razer DeathStalker V2 Pro TKL"
+class = "keyboard"
+
+[device.razer]
+pids = [0x0298]
+transaction_id = 0x3F
+leds = [0x05]
+
+[[device]]
+key = "joro"
+name = "Razer Joro"
+class = "keyboard"
+
+[device.razer]
+pids = [0x02CD]
+transaction_id = 0x1F
+leds = [0x05]
+battery = true
