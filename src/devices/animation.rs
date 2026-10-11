@@ -33,7 +33,7 @@ const CYCLE_PERIOD: f32 = 10.0;
 /// (`super::speed`). It takes the phase of another running animation of the same speed, so
 /// devices with the same speed breathe in step; otherwise it goes on from its own phase.
 pub fn start(path: &[u16], frame: Frame) {
-    let speed = super::speed_factor(super::speed());
+    let speed = super::speed();
     let mut list = ANIMATIONS.lock().unwrap();
     let peer = list.iter().find(|a| a.path != path && a.frame.is_some() && a.speed == speed).map(|a| a.t);
     match list.iter_mut().find(|a| a.path == path) {

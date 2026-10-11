@@ -57,7 +57,7 @@ const RIPPLE_STEP_MS: f32 = 20.0;
 
 /// An effect period at the current speed setting.
 fn period_ms(normal: u16) -> u16 {
-    (normal as f32 / super::speed_factor(super::speed())).round().clamp(500.0, u16::MAX as f32) as u16
+    (normal as f32 / super::speed()).round().clamp(500.0, u16::MAX as f32) as u16
 }
 
 // 0x8081 functions.
@@ -171,6 +171,25 @@ impl Logitech {
         request(&self.hid, self.dev, self.sw, self.feat, func, args)
     }
 
+    /// Sends any firmware effect to a zone with raw parameter bytes, for trying out effects
+    /// and parameter layouts on the hardware (`--logitech-effect-test`). A steady color goes
+    /// first, as in `apply`, since going from one animation straight to another hangs the G915.
+    pub fn raw_effect(&self, zone: usize, effect: u16, params: &[u8; 10]) -> Result<(), String> {
+        let ids = self.zones.get(zone).ok_or(format!("no zone {zone}"))?;
+        let idx = ids.iter().position(|&e| e == effect).ok_or(format!("zone {zone} has no effect {effect:#06X}"))?;
+        self.req(5, &[0x01, 0x01])?;
+        if let Some(st) = ids.iter().position(|&e| e == EFFECT_STATIC) {
+            let mut args = vec![zone as u8, st as u8, params[0], params[1], params[2]];
+            args.extend_from_slice(&[0; 7]);
+            args.push(0x01);
+            self.req(1, &args)?;
+        }
+        let mut args = vec![zone as u8, idx as u8];
+        args.extend_from_slice(params);
+        args.push(0x01);
+        self.req(1, &args).map(|_| ())
+    }
+
     fn req_keys(&self, func: u8, args: &[u8]) -> Result<[u8; 20], String> {
         if self.feat_keys == 0 {
             return Err("the keyboard has no per-key colors".into());
@@ -274,7 +293,7 @@ impl Device for Logitech {
                 (EFFECT_WAVE, [0, 0, 0, 0, 0, 0, pl, 0x01, brightness.clamp(1, 100), ph])
             }
             Effect::Ripple => {
-                let step = (RIPPLE_STEP_MS / super::speed_factor(super::speed())).round().clamp(2.0, 200.0) as u16;
+                let step = (RIPPLE_STEP_MS / super::speed()).round().clamp(2.0, 200.0) as u16;
                 let [sh, sl] = step.to_be_bytes();
                 (EFFECT_RIPPLE, [r, g, b, 0, sh, sl, 0, 0, 0, 0])
             }

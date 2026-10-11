@@ -24,6 +24,12 @@ const UNHANDLED: u8 = 0xFF;
 const EFFECT_OFF: u8 = 0;
 const EFFECT_STATIC: u8 = 1;
 
+/// QMK effect speed (0..=255, about 128 normal) of a speed factor (¼..4 over the range).
+fn qmk_speed(factor: f32) -> u8 {
+    let s = (50.0 + 25.0 * factor.max(1e-3).log2()).clamp(0.0, 100.0);
+    (s * 255.0 / 100.0) as u8
+}
+
 /// What is known about a particular keyboard beyond the protocol, from its profile
 /// (`profiles/*.toml`, section `[via]`). Keyboards without one work as the generic model.
 #[derive(Debug)]
@@ -234,7 +240,7 @@ impl Device for Via {
             Effect::Cycle if self.cycle.is_some() => {
                 self.set(Value::Effect, &[self.cycle.unwrap_or(EFFECT_STATIC)])?;
                 // QMK effect speed 0..=255, about 128 normal. Not every firmware has it, so a refusal is ignored.
-                let _ = self.set(Value::Speed, &[(super::speed() as u32 * 255 / 100) as u8]);
+                let _ = self.set(Value::Speed, &[qmk_speed(super::speed())]);
                 let (h, s) = hue_sat(color);
                 self.set(Value::Color, &[h, s])?;
                 return self.set(Value::Brightness, &[value_of(color, brightness)]);
@@ -263,6 +269,15 @@ mod tests {
         assert_eq!(hue_sat(Rgb(255, 128, 128)), (0, 127));
         assert_eq!(hue_sat(Rgb(128, 128, 128)), (0, 0));
         assert_eq!(hue_sat(Rgb(0, 0, 0)), (0, 0));
+    }
+
+    #[test]
+    fn qmk_speeds() {
+        assert_eq!(qmk_speed(1.0), 127);
+        assert_eq!(qmk_speed(0.25), 0);
+        assert_eq!(qmk_speed(4.0), 255);
+        assert_eq!(qmk_speed(16.0), 255);
+        assert!(qmk_speed(0.5) < qmk_speed(2.0));
     }
 
     #[test]

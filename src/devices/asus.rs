@@ -9,6 +9,15 @@ const AURA_REPORT: u8 = 0x5D;
 const KBD_REPORT: u8 = 0x5A;
 /// Aura effect speeds: slow, medium, fast (as in asusctl).
 const SPEEDS: [u8; 3] = [0xE1, 0xEB, 0xF5];
+
+/// The Aura speed (index in SPEEDS) nearest a speed factor: the thirds of the slider range.
+fn speed_step(factor: f32) -> usize {
+    match factor {
+        f if f < 0.63 => 0,
+        f if f > 1.59 => 2,
+        _ => 1,
+    }
+}
 /// Device id of the laptop keyboard.
 const ID: &str = "asus";
 
@@ -74,7 +83,7 @@ impl Device for Asus {
         };
         let Rgb(r, g, b) = color;
         let breathe = (effect == Effect::Breathe) as u8;
-        Self::send(&self.aura, &[AURA_REPORT, 0xB3, 0x00, mode, r, g, b, SPEEDS[(super::speed() as usize * 3 / 101).min(2)], 0x00, breathe])?;
+        Self::send(&self.aura, &[AURA_REPORT, 0xB3, 0x00, mode, r, g, b, SPEEDS[speed_step(super::speed())], 0x00, breathe])?;
         Self::send(&self.aura, &[AURA_REPORT, 0xB5, 0, 0, 0])?;
         Self::send(&self.aura, &[AURA_REPORT, 0xB4])
     }
@@ -85,5 +94,19 @@ impl Device for Asus {
             Some(la) if matches!(effect, Effect::Static | Effect::Breathe) => la.apply_zone_colors(ID, effect, zones, brightness),
             _ => self.apply(effect, zones.first().map_or(Rgb(255, 255, 255), |z| z.1), brightness),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aura_speed_steps() {
+        assert_eq!(speed_step(1.0), 1);
+        assert_eq!(speed_step(0.25), 0);
+        assert_eq!(speed_step(4.0), 2);
+        assert_eq!(speed_step(16.0), 2);
+        assert_eq!(speed_step(1.0 / 16.0), 0);
     }
 }

@@ -64,18 +64,20 @@ impl Effect {
     }
 }
 
-/// Speed of breathing and spectrum, 0..=100; 50 is the normal speed.
-static SPEED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(NORMAL_SPEED);
+/// Speed of breathing and spectrum of the device being applied: how many times faster than
+/// normal (f32 bits). Settings use 0..=100 (`speed_factor`); this is their product.
+static SPEED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3F80_0000); // 1.0
 pub const NORMAL_SPEED: u8 = 50;
 
-/// Sets the speed of breathing and spectrum for the device applied next (the apply loop sets
-/// each device's own before applying it).
-pub fn set_speed(speed: u8) {
-    SPEED.store(speed.min(100), std::sync::atomic::Ordering::Relaxed);
+/// Sets the speed factor of breathing and spectrum for the device applied next (the apply
+/// loop sets each device's own before applying it).
+pub fn set_speed(factor: f32) {
+    SPEED.store(factor.to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
-pub fn speed() -> u8 {
-    SPEED.load(std::sync::atomic::Ordering::Relaxed)
+/// How many times faster than normal the device being applied animates (1 = normal).
+pub fn speed() -> f32 {
+    f32::from_bits(SPEED.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 /// How many times faster than normal: 1/4 at speed 0, 1 at 50, 4 at 100.

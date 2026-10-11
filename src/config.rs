@@ -344,10 +344,11 @@ impl Config {
         b.max(1) as u8
     }
 
-    /// The speed a device's breathing and spectrum run at: the overall speed shifted by its own
-    /// (speeds add up on the log scale of `devices::speed_factor`, so the factors multiply).
-    pub fn effective_speed(&self, id: &str) -> u8 {
-        (self.speed as i32 + self.device(id).speed.min(100) as i32 - NORMAL_SPEED as i32).clamp(0, 100) as u8
+    /// How many times faster than normal a device's breathing and spectrum run: the overall
+    /// factor times its own. Not cut at the overall range, so a device's own slider works
+    /// both ways even with the overall one at an end; the hardware sets the real limits.
+    pub fn effective_speed(&self, id: &str) -> f32 {
+        crate::devices::speed_factor(self.speed) * crate::devices::speed_factor(self.device(id).speed)
     }
 
     /// The device's name on the panel.
@@ -597,12 +598,16 @@ mod tests {
     fn device_speed_shifts_the_overall_one() {
         let mut cfg = Config::default();
         cfg.devices.insert("naga-A".into(), DeviceConfig { speed: 75, ..DeviceConfig::default() });
-        assert_eq!(cfg.effective_speed("naga-A"), 75);
-        assert_eq!(cfg.effective_speed("naga-B"), NORMAL_SPEED);
-        cfg.speed = 40;
-        assert_eq!(cfg.effective_speed("naga-A"), 65);
-        cfg.speed = 90;
-        assert_eq!(cfg.effective_speed("naga-A"), 100);
+        assert_eq!(cfg.effective_speed("naga-A"), 2.0);
+        assert_eq!(cfg.effective_speed("naga-B"), 1.0);
+        cfg.speed = 25;
+        assert_eq!(cfg.effective_speed("naga-A"), 1.0);
+        // With the overall speed at its fastest, the device's own still makes it faster or slower.
+        cfg.speed = 100;
+        assert_eq!(cfg.effective_speed("naga-A"), 8.0);
+        cfg.devices.get_mut("naga-A").unwrap().speed = 25;
+        assert_eq!(cfg.effective_speed("naga-A"), 2.0);
+        cfg.devices.get_mut("naga-A").unwrap().speed = 75;
         // A device's own speed is part of its lighting, and matters only while it animates.
         let p = cfg.snapshot("P".into());
         cfg.devices.get_mut("naga-A").unwrap().speed = 20;

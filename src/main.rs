@@ -712,6 +712,40 @@ fn diagnose_report() -> String {
     s
 }
 
+/// `--logitech-effect-test`: plays firmware effect variants on the keys of the Logitech
+/// keyboard, each after 2 s of dark, for someone watching it to say what each did: breathing
+/// with its period in either byte order (does the speed change?) and the undocumented effect
+/// 0x000C. Every step is logged with its time.
+fn logitech_effect_test() {
+    let Some(kb) = devices::logitech::Logitech::find_all(devices::logitech::SW_ID_POLL).into_iter().next() else {
+        log("effect test: no Logitech keyboard answers");
+        return;
+    };
+    const STATIC: u16 = 0x0001;
+    const BREATHE: u16 = 0x000A;
+    const UNKNOWN: u16 = 0x000C;
+    let g = [0x00, 0xFF, 0x00];
+    let steps: [(&str, u16, [u8; 10], u64); 6] = [
+        ("1 breathe, period 1000 ms big-endian", BREATHE, [g[0], g[1], g[2], 0x03, 0xE8, 0, 100, 0, 0, 0], 12),
+        ("2 breathe, period 10000 ms big-endian", BREATHE, [g[0], g[1], g[2], 0x27, 0x10, 0, 100, 0, 0, 0], 12),
+        ("3 breathe, period 1000 ms little-endian", BREATHE, [g[0], g[1], g[2], 0xE8, 0x03, 0, 100, 0, 0, 0], 12),
+        ("4 breathe, period 10000 ms little-endian", BREATHE, [g[0], g[1], g[2], 0x10, 0x27, 0, 100, 0, 0, 0], 12),
+        ("5 effect 0x000C, all parameters 0", UNKNOWN, [0; 10], 15),
+        ("6 effect 0x000C, red, 5000 ms, intensity 100", UNKNOWN, [0xFF, 0x00, 0x00, 0x13, 0x88, 0, 100, 0, 0, 0], 15),
+    ];
+    for (name, effect, params, secs) in steps {
+        let _ = kb.raw_effect(1, STATIC, &[0; 10]);
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        log(&format!("effect test: {name}"));
+        if let Err(e) = kb.raw_effect(1, effect, &params) {
+            log(&format!("effect test: {name}: {e}"));
+        }
+        std::thread::sleep(std::time::Duration::from_secs(secs));
+    }
+    let _ = kb.raw_effect(1, STATIC, &[0; 10]);
+    log("effect test: done");
+}
+
 fn lamparray_test(args: &[String]) {
     use std::fmt::Write as _;
     let out = args.first().cloned().unwrap_or_else(|| "lamparray.txt".into());
@@ -1228,6 +1262,10 @@ fn main() {
     }
     // `--lamparray-test <out.txt> <rrggbb> <seconds>`: takes over every LampArray device,
     // fills it with the color, writes what the devices report, and hands them back.
+    if args.iter().any(|a| a == "--logitech-effect-test") {
+        logitech_effect_test();
+        return;
+    }
     if let Some(i) = args.iter().position(|a| a == "--lamparray-test") {
         lamparray_test(&args[i + 1..]);
         return;
