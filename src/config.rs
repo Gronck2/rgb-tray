@@ -11,6 +11,7 @@ pub struct DeviceConfig {
     /// Name given by the user or to tell identical devices apart; empty = the model name.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
+    #[serde(deserialize_with = "lenient_effect")]
     pub effect: Effect,
     /// "#RRGGBB"
     pub color: String,
@@ -31,6 +32,16 @@ pub struct DeviceConfig {
     /// When the device was last connected (Unix seconds).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub last_seen: u64,
+}
+
+/// An effect this version doesn't know (saved by a newer or an older one) reads as steady:
+/// one strange value must not make the whole settings file unreadable (0.6.24 lost the
+/// owner's presets that way after 0.6.23 had saved "experimental").
+fn lenient_effect<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Effect, D::Error> {
+    use serde::de::IntoDeserializer;
+    let name = String::deserialize(d)?;
+    let known: Result<Effect, serde::de::value::Error> = Effect::deserialize(name.as_str().into_deserializer());
+    Ok(known.unwrap_or(Effect::Static))
 }
 
 fn full_brightness() -> u8 {
@@ -452,8 +463,23 @@ impl Config {
         Self::dir().join("config.toml")
     }
 
+    /// Reads the settings. A file that can't be read is copied aside before anything can
+    /// overwrite it (`config.unreadable-<time>.toml`) and the app starts from defaults; a good
+    /// one is copied to `config.backup.toml`, the last settings that worked.
     pub fn load() -> Config {
-        std::fs::read_to_string(Self::path()).ok().and_then(|s| toml::from_str(&s).ok()).unwrap_or_default()
+        let Ok(text) = std::fs::read_to_string(Self::path()) else { return Config::default() };
+        match toml::from_str(&text) {
+            Ok(cfg) => {
+                let _ = std::fs::write(Self::dir().join("config.backup.toml"), &text);
+                cfg
+            }
+            Err(e) => {
+                let aside = Self::dir().join(format!("config.unreadable-{}.toml", now()));
+                let _ = std::fs::write(&aside, &text);
+                crate::log(&format!("config: can't read it ({}); kept as {}", e.message(), aside.display()));
+                Config::default()
+            }
+        }
     }
 
     pub fn save(&self) {
@@ -694,6 +720,21 @@ mod tests {
         // Files from before the option follow the display.
         assert!(old.follow_display);
         assert!(old.check_updates);
+    }
+
+    #[test]
+    fn unknown_effect_keeps_the_rest_of_the_file() {
+        // An effect of another version, on a device and in a preset: the presets survive.
+        let text = "[devices.logitech-A]\neffect = \"experimental\"\ncolor = \"#FF0000\"\n\n\
+                    [[presets]]\nname = \"Night\"\nbrightness = 10\n[presets.devices.logitech-A]\neffect = \"sparkle\"\ncolor = \"#0000FF\"\n";
+        let cfg: Config = toml::from_str(text).unwrap();
+        assert_eq!(cfg.devices["logitech-A"].effect, Effect::Static);
+        assert_eq!(cfg.devices["logitech-A"].rgb(), Rgb(255, 0, 0));
+        assert_eq!(cfg.presets[0].name, "Night");
+        assert_eq!(cfg.presets[0].devices["logitech-A"].effect, Effect::Static);
+        // Known ones read as they are.
+        let cfg: Config = toml::from_str("[devices.a]\neffect = \"ripple\"\ncolor = \"#000000\"\n").unwrap();
+        assert_eq!(cfg.devices["a"].effect, Effect::Ripple);
     }
 
     #[test]
