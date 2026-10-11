@@ -299,7 +299,7 @@ impl Menu {
                         // Names the other language: that is what a click switches to.
                         Item::Language => ("\u{E774}", tr!("Switch to English", "Переключить на русский")),
                         Item::Export => ("\u{E74E}", tr!("Сохранить настройки в файл…", "Save settings to a file…")),
-                        Item::Import => ("\u{E8E5}", tr!("Загрузить настройки из файла…", "Load settings from a file…")),
+                        Item::Import => ("\u{E8E5}", tr!("Загрузить настройки или пресет…", "Load settings or a preset…")),
                         Item::Diagnose => ("\u{E9D9}", tr!("Отчёт об устройствах…", "Device report…")),
                         Item::RequestDevice => ("\u{E710}", tr!("Запросить поддержку устройства…", "Request device support…")),
                         Item::Exit => ("\u{E7E8}", tr!("Выход", "Exit")),

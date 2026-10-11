@@ -89,6 +89,7 @@ const ICON_SPEED: &str = "\u{EC4A}";
 const ICON_SAVE: &str = "\u{E74E}";
 const ICON_PLAY: &str = "\u{E768}";
 const ICON_RENAME: &str = "\u{E70F}";
+const ICON_SHARE: &str = "\u{E72D}";
 const ICON_DELETE: &str = "\u{E74D}";
 const ICON_KEYBOARD: &str = "\u{E765}";
 const ICON_DOWNLOAD: &str = "\u{E896}";
@@ -641,6 +642,8 @@ enum MenuItem {
     Apply,
     Overwrite,
     Rename,
+    /// Save the preset to a file to share.
+    Export,
     /// F13 + n, or None to remove the hotkey.
     Hotkey(Option<u32>),
     /// Record any key combination.
@@ -691,14 +694,14 @@ fn menu_preset() -> Option<usize> {
 fn menu_layout() -> Option<(R, Vec<(R, MenuItem)>)> {
     let (_, ax, ay, _) = (*MENU.lock().unwrap())?;
     let key_rows = 12 / MENU_KEY_COLS + 1;
-    let h = 6.0 + MENU_HEADER_H + 3.0 * MENU_ITEM_H + MENU_GAP + MENU_LABEL_H + (key_rows + 1) as f32 * MENU_KEY_STEP + MENU_GAP + MENU_ITEM_H + 6.0;
+    let h = 6.0 + MENU_HEADER_H + 4.0 * MENU_ITEM_H + MENU_GAP + MENU_LABEL_H + (key_rows + 1) as f32 * MENU_KEY_STEP + MENU_GAP + MENU_ITEM_H + 6.0;
     let x = ax.clamp(8.0, W - 8.0 - MENU_W);
     let y = if ay + h <= panel_h() - 8.0 { ay } else { (ay - h).max(8.0) };
     let panel = R { x, y, w: MENU_W, h };
     let mut items = Vec::new();
     let row = |y: f32| R { x: x + 4.0, y, w: MENU_W - 8.0, h: MENU_ITEM_H };
     let mut cy = y + 6.0 + MENU_HEADER_H;
-    for item in [MenuItem::Apply, MenuItem::Overwrite, MenuItem::Rename] {
+    for item in [MenuItem::Apply, MenuItem::Overwrite, MenuItem::Rename, MenuItem::Export] {
         items.push((row(cy), item));
         cy += MENU_ITEM_H;
     }
@@ -753,6 +756,7 @@ unsafe fn menu_action(hwnd: HWND, i: usize, item: MenuItem) {
             }
         }
         MenuItem::Rename => start_rename(i),
+        MenuItem::Export => crate::export_preset(i),
         MenuItem::Hotkey(None) => crate::set_preset_hotkey(i, None),
         MenuItem::Hotkey(Some(n)) => crate::set_preset_hotkey(i, Some(crate::config::Hotkey { mods, vk: VK_F13 + n })),
         MenuItem::Combo => {
@@ -2045,7 +2049,7 @@ impl Flyout {
         for &(r, item) in &items {
             let h = Hit::Menu(item);
             match item {
-                MenuItem::Apply | MenuItem::Overwrite | MenuItem::Rename | MenuItem::Delete => {
+                MenuItem::Apply | MenuItem::Overwrite | MenuItem::Rename | MenuItem::Export | MenuItem::Delete => {
                     let disabled = item == MenuItem::Overwrite && same;
                     if hover(h) && !disabled {
                         self.fill(rt, r, 4.0, t.card_hover);
@@ -2061,6 +2065,7 @@ impl Flyout {
                             },
                         ),
                         MenuItem::Rename => (ICON_RENAME, tr!("Переименовать", "Rename")),
+                        MenuItem::Export => (ICON_SHARE, tr!("Сохранить в файл…", "Save to a file…")),
                         _ => (ICON_DELETE, tr!("Удалить", "Delete")),
                     };
                     let mut fg = t.text;
@@ -2070,7 +2075,7 @@ impl Flyout {
                     }
                     self.text(rt, icon, &f.icon_small, R { x: r.x + 6.0, y: r.y, w: 28.0, h: r.h }, fg);
                     self.text(rt, label, &f.sub, R { x: r.x + 40.0, y: r.y, w: r.w - 44.0, h: r.h }, fg);
-                    if item == MenuItem::Rename {
+                    if item == MenuItem::Export {
                         line_after_actions = r.y + r.h;
                     }
                     if item == MenuItem::Delete {

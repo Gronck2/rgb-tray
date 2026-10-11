@@ -905,10 +905,12 @@ fn request_device_support() {
 
 // ---------------------------------------------------------------- export / import
 
-/// Asks for a settings file to save to (`save`) or open; None when cancelled.
-unsafe fn settings_file_dialog(save: bool) -> Option<std::path::PathBuf> {
+/// Asks for a file to save to (`save`, suggesting `name`) or to open; None when cancelled.
+unsafe fn settings_file_dialog(save: bool, name: &str) -> Option<std::path::PathBuf> {
     let mut buf = [0u16; 1024];
-    let name = wide("rgbtray-settings.toml");
+    // Characters Windows doesn't allow in file names.
+    let name: String = name.chars().map(|c| if r#"<>:"/\|?*"#.contains(c) { '_' } else { c }).collect();
+    let name = wide(&name);
     if save {
         buf[..name.len()].copy_from_slice(&name);
     }
@@ -936,7 +938,7 @@ unsafe fn message(text: &str, error: bool) {
 /// Saves all settings (colors, presets, key colors, devices) to a file of the user's choice.
 fn export_settings() {
     unsafe {
-        let Some(path) = settings_file_dialog(true) else { return };
+        let Some(path) = settings_file_dialog(true, "rgbtray-settings.toml") else { return };
         let text = toml::to_string_pretty(&*config()).unwrap_or_default();
         if let Err(e) = std::fs::write(&path, text) {
             message(&format!("{}\n{e}", tr!("Не удалось сохранить настройки:", "Could not save the settings:")), true);
@@ -944,36 +946,71 @@ fn export_settings() {
     }
 }
 
-/// Replaces all settings with a saved file; the current ones are kept as a backup next to
-/// the config.
-fn import_settings() {
+/// Saves preset `i` to a file to share; it goes without its hotkey.
+fn export_preset(i: usize) {
     unsafe {
-        let Some(path) = settings_file_dialog(false) else { return };
-        let loaded = std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|s| toml::from_str::<Config>(&s).map_err(|e| e.to_string()));
-        let new = match loaded {
-            Ok(c) => c,
-            Err(e) => {
-                message(&format!("{}\n{e}", tr!("Это не файл настроек RGB Tray:", "This is not an RGB Tray settings file:")), true);
-                return;
-            }
+        let (name, text) = {
+            let cfg = config();
+            (cfg.presets.get(i).map(|p| p.name.clone()).unwrap_or_default(), cfg.preset_file(i))
         };
-        let _ = std::fs::copy(Config::dir().join("config.toml"), Config::dir().join("config.before-import.toml"));
-        {
-            let mut cfg = config();
-            *cfg = new;
-            cfg.save();
+        let Some(text) = text else { return };
+        let Some(path) = settings_file_dialog(true, &format!("{name}.toml")) else { return };
+        if let Err(e) = std::fs::write(&path, text) {
+            message(&format!("{}\n{e}", tr!("Не удалось сохранить пресет:", "Could not save the preset:")), true);
         }
-        ui::PINNED.store(config().pinned, Ordering::Relaxed);
-        i18n::set(config().language.as_deref());
-        register_hotkeys();
-        apply_all();
-        update_tray(HWND_MAIN.load(Ordering::Relaxed) as HWND, NIM_MODIFY);
-        ui::refresh();
     }
 }
 
-/// Switches the interface between Russian and English and remembers the choice.
-/// Switches whether the lighting dims and goes off with the display.
+/// Loads a file: a shared preset is added to the presets; a settings file replaces all
+/// settings (the current ones are kept next to the config); anything else changes nothing.
+fn import_settings() {
+    unsafe {
+        let Some(path) = settings_file_dialog(false, "") else { return };
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                message(&format!("{}\n{e}", tr!("Не удалось прочитать файл:", "Could not read the file:")), true);
+                return;
+            }
+        };
+        match Config::file_kind(&text) {
+            config::FileKind::Preset => {
+                let added = {
+                    let mut cfg = config();
+                    let added = cfg.import_preset(&text);
+                    if added.is_ok() {
+                        cfg.save();
+                    }
+                    added
+                };
+                ui::refresh();
+                match added {
+                    Ok(name) => message(&format!("{} «{name}».", tr!("Добавлен пресет", "Added the preset")), false),
+                    Err(e) => message(&format!("{}\n{e}", tr!("Не удалось прочитать пресет:", "Could not read the preset:")), true),
+                }
+            }
+            config::FileKind::Settings => {
+                let Ok(new) = toml::from_str::<Config>(&text) else { return };
+                let _ = std::fs::copy(Config::dir().join("config.toml"), Config::dir().join("config.before-import.toml"));
+                {
+                    let mut cfg = config();
+                    *cfg = new;
+                    cfg.save();
+                }
+                ui::PINNED.store(config().pinned, Ordering::Relaxed);
+                i18n::set(config().language.as_deref());
+                register_hotkeys();
+                apply_all();
+                update_tray(HWND_MAIN.load(Ordering::Relaxed) as HWND, NIM_MODIFY);
+                ui::refresh();
+            }
+            config::FileKind::Other => {
+                message(tr!("Это не файл настроек и не пресет RGB Tray.", "This is neither an RGB Tray settings file nor a preset."), true);
+            }
+        }
+    }
+}
+
 /// Switches the daily update check; switching it on checks right away.
 fn toggle_check_updates() {
     let mut cfg = config();
@@ -987,6 +1024,7 @@ fn toggle_check_updates() {
     post(WM_APPLIED);
 }
 
+/// Switches whether the lighting dims and goes off with the display.
 fn toggle_follow_display() {
     let mut cfg = config();
     cfg.follow_display = !cfg.follow_display;
@@ -995,6 +1033,7 @@ fn toggle_follow_display() {
     apply_all();
 }
 
+/// Switches the interface between Russian and English and remembers the choice.
 fn toggle_language() {
     let lang = if i18n::en() { "ru" } else { "en" };
     {

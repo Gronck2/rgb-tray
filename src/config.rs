@@ -213,6 +213,20 @@ impl Hotkey {
     }
 }
 
+/// A preset in a file of its own, to share (`Config::preset_file`).
+#[derive(Serialize, Deserialize)]
+struct PresetFile {
+    rgbtray_preset: Preset,
+}
+
+/// What a file chosen to load holds (`Config::file_kind`).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum FileKind {
+    Preset,
+    Settings,
+    Other,
+}
+
 /// Snapshot of all lighting settings, switchable in one click or by hotkey.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Preset {
@@ -382,6 +396,56 @@ fn copies_newest_first(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 }
 
 impl Config {
+    /// Preset `i` as a file to share: its lighting, without the hotkey (it would clash with
+    /// the receiver's own).
+    pub fn preset_file(&self, i: usize) -> Option<String> {
+        let preset = Preset { hotkey: None, ..self.presets.get(i)?.clone() };
+        let body = toml::to_string_pretty(&PresetFile { rgbtray_preset: preset }).ok()?;
+        Some(format!("# RGB Tray preset. To add it: tray icon → Load settings or a preset…\n# Пресет RGB Tray. Чтобы добавить: значок в трее → Загрузить настройки или пресет…\n\n{body}"))
+    }
+
+    /// Adds a shared preset (`preset_file`); returns its name. Devices of the file that aren't
+    /// here go to a device of the same model (another person's G915 → this G915), others
+    /// are left out; a name already taken gets a number.
+    pub fn import_preset(&mut self, text: &str) -> Result<String, String> {
+        let file: PresetFile = toml::from_str(text).map_err(|e| e.message().to_string())?;
+        let mut preset = file.rgbtray_preset;
+        // Devices that are here keep theirs first, then the others take a free one of their model.
+        let (mine, foreign): (Vec<_>, Vec<_>) = std::mem::take(&mut preset.devices).into_iter().partition(|(id, _)| self.devices.contains_key(id));
+        let mut devices: BTreeMap<String, DeviceConfig> = mine.into_iter().collect();
+        // By the id's model prefix itself: `kind_of` takes an unknown model for the first one.
+        let model = |id: &str| id.split('-').next().unwrap_or(id).to_string();
+        for (id, d) in foreign {
+            if let Some(local) = self.devices.keys().find(|k| model(k) == model(&id) && !devices.contains_key(*k)).cloned() {
+                devices.insert(local, d);
+            }
+        }
+        preset.devices = devices;
+        preset.hotkey = None;
+        let base = preset.name.clone();
+        let mut n = 2;
+        while self.presets.iter().any(|p| p.name == preset.name) {
+            preset.name = format!("{base} ({n})");
+            n += 1;
+        }
+        let name = preset.name.clone();
+        self.presets.push(preset);
+        Ok(name)
+    }
+
+    /// What a file to load is: a shared preset, all settings, or neither. A settings file must
+    /// have some settings in it: almost any TOML reads as a `Config` of defaults.
+    pub fn file_kind(text: &str) -> FileKind {
+        let Ok(table) = toml::from_str::<toml::Table>(text) else { return FileKind::Other };
+        if table.contains_key("rgbtray_preset") {
+            FileKind::Preset
+        } else if ["devices", "presets", "brightness"].iter().any(|k| table.contains_key(*k)) && toml::from_str::<Config>(text).is_ok() {
+            FileKind::Settings
+        } else {
+            FileKind::Other
+        }
+    }
+
     pub fn snapshot(&self, name: String) -> Preset {
         Preset {
             name,
@@ -857,6 +921,45 @@ mod tests {
         assert_eq!(left.len(), DAILY_COPIES);
         assert_eq!(left[0], "config-2026-01-07.toml");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shared_preset_goes_to_the_same_models() {
+        // The sender: a G915, a Naga and a mouse the receiver doesn't have, a preset with a hotkey.
+        let mut theirs = Config::default();
+        for id in ["logitech-AAAA", "naga-BBBB", "basiliskv3-CCCC"] {
+            theirs.devices.insert(id.into(), device(Effect::Static, "#000000"));
+        }
+        theirs.devices.get_mut("logitech-AAAA").unwrap().effect = Effect::Wave;
+        theirs.devices.get_mut("naga-BBBB").unwrap().set_rgb(Rgb(255, 0, 0));
+        theirs.presets.push(Preset { hotkey: Some(Hotkey { mods: 0, vk: 0x7C }), ..theirs.snapshot("Night".into()) });
+        let file = theirs.preset_file(0).unwrap();
+        assert!(!file.contains("hotkey"));
+        assert_eq!(Config::file_kind(&file), FileKind::Preset);
+
+        // The receiver: their own G915 and Naga, and already a preset called "Night".
+        let mut mine = Config::default();
+        mine.devices.insert("logitech-1111".into(), device(Effect::Static, "#FFFFFF"));
+        mine.devices.insert("naga-2222".into(), device(Effect::Static, "#FFFFFF"));
+        mine.presets.push(mine.snapshot("Night".into()));
+        assert_eq!(mine.import_preset(&file).unwrap(), "Night (2)");
+        let p = &mine.presets[1];
+        assert!(p.hotkey.is_none());
+        let ids: Vec<&String> = p.devices.keys().collect();
+        assert_eq!(ids, ["logitech-1111", "naga-2222"]);
+        assert_eq!(p.devices["logitech-1111"].effect, Effect::Wave);
+        assert_eq!(p.devices["naga-2222"].rgb(), Rgb(255, 0, 0));
+        mine.load_preset(&mine.presets[1].clone());
+        assert_eq!(mine.devices["naga-2222"].rgb(), Rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn only_real_settings_replace_the_settings() {
+        assert_eq!(Config::file_kind(&toml::to_string(&Config::default()).unwrap()), FileKind::Settings);
+        // Any other TOML would read as a Config of defaults and wipe everything.
+        assert_eq!(Config::file_kind("[package]\nname = \"x\"\n"), FileKind::Other);
+        assert_eq!(Config::file_kind("not toml ["), FileKind::Other);
+        assert_eq!(Config::file_kind(""), FileKind::Other);
     }
 
     #[test]

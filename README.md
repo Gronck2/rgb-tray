@@ -48,7 +48,7 @@ A Razer device can often be added right away, without a new version: describe it
 - Low battery alerts at 10% and 5%.
 - The tray icon shows the current color.
 - Pinned mode: the panel stays open on top and can be dragged by its header.
-- Export and import of all settings to a file.
+- Export and import of all settings to a file. Presets can be shared one by one: right-click a preset → Save to a file…, and the receiver loads it with Load settings or a preset… in the tray menu; it goes to their devices of the same models.
 - English and Russian interface: Russian when Windows or one of its keyboard layouts is Russian, English otherwise; switchable in the tray menu.
 - Light and dark theme following Windows.
 
