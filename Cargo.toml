@@ -1,6 +1,6 @@
 [package]
 name = "rgbtray"
-version = "0.6.12"
+version = "0.6.13"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Tiny tray app controlling Logitech G915, Razer and ASUS Aura lighting directly over HID"
@@ -8,6 +8,7 @@ description = "Tiny tray app controlling Logitech G915, Razer and ASUS Aura ligh
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+serde_json = "1"
 
 [dependencies.windows]
 version = "0.58"
@@ -40,6 +41,7 @@ features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Registry",
     "Win32_System_Power",
+    "Win32_Networking_WinHttp",
     "Win32_Devices_HumanInterfaceDevice",
     "Win32_Devices_DeviceAndDriverInstallation",
     "Win32_Graphics_Gdi",

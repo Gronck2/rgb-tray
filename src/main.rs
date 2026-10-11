@@ -13,6 +13,7 @@ mod keymap;
 mod services;
 mod traymenu;
 mod ui;
+mod update;
 
 use std::io::Write as _;
 use std::mem::{size_of, zeroed};
@@ -121,6 +122,13 @@ fn dynamic_lighting_on() -> bool {
 }
 
 /// Opens Windows Settings at Dynamic Lighting.
+/// Opens a web page in the default browser.
+fn open_url(url: &str) {
+    unsafe {
+        ShellExecuteW(null_mut(), wide("open").as_ptr(), wide(url).as_ptr(), null(), null(), SW_SHOWNORMAL);
+    }
+}
+
 fn open_dynamic_lighting_settings() {
     unsafe {
         ShellExecuteW(null_mut(), wide("open").as_ptr(), wide("ms-settings:personalization-lighting").as_ptr(), null(), null(), SW_SHOWNORMAL);
@@ -915,6 +923,19 @@ fn import_settings() {
 
 /// Switches the interface between Russian and English and remembers the choice.
 /// Switches whether the lighting dims and goes off with the display.
+/// Switches the daily update check; switching it on checks right away.
+fn toggle_check_updates() {
+    let mut cfg = config();
+    cfg.check_updates = !cfg.check_updates;
+    let on = cfg.check_updates;
+    cfg.save();
+    drop(cfg);
+    if on {
+        std::thread::spawn(update::check_now);
+    }
+    post(WM_APPLIED);
+}
+
 fn toggle_follow_display() {
     let mut cfg = config();
     cfg.follow_display = !cfg.follow_display;
@@ -1220,6 +1241,9 @@ fn main() {
         if std::env::var_os("RGBTRAY_DEMO_WARN").is_some() {
             LAMPARRAY_WARN.store(true, Ordering::Relaxed);
         }
+        if let Ok(spec) = std::env::var("RGBTRAY_DEMO_UPDATE") {
+            update::demo(&spec);
+        }
         if std::env::var_os("RGBTRAY_DEMO_DYNLIGHT").is_some() {
             DYNAMIC_LIGHTING_WARN.store(true, Ordering::Relaxed);
         }
@@ -1283,6 +1307,7 @@ fn main() {
         devices::logitech::spawn_watcher(|| post(WM_REAPPLY_SOON));
         spawn_battery_poller();
         spawn_link_watch();
+        update::spawn_checker();
         if std::env::args().any(|a| a == "--show") {
             ui::PINNED.store(true, Ordering::Relaxed);
             ui::toggle();

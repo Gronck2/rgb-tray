@@ -39,6 +39,7 @@ Right-click the tray icon → **Request device support…**. RGB Tray lists your
 - Disconnected devices are kept in an archive with their settings and come back when reconnected.
 - "No link" status when a wireless device is asleep or off; colors are re-applied when it wakes.
 - Re-applies lighting after sleep (including Modern Standby) and when devices are plugged in.
+- Updates: once a day the app asks GitHub for the latest release; a newer version shows a card on the panel that installs it in one click. The check can be switched off in the tray menu.
 - Follows the display: the lighting dims when Windows dims the screen and goes off while the screen is off (idle, locked, asleep). Can be switched off in the tray menu.
 - Low battery alerts at 10% and 5%.
 - The tray icon shows the current color.

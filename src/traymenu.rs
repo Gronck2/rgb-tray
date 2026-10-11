@@ -33,6 +33,7 @@ enum Item {
     Reapply,
     Autostart,
     FollowDisplay,
+    CheckUpdates,
     Language,
     Export,
     Import,
@@ -49,12 +50,13 @@ enum Row {
     Version,
 }
 
-const ROWS: [Row; 14] = [
+const ROWS: [Row; 15] = [
     Row::Item(Item::Open),
     Row::Item(Item::Keys),
     Row::Item(Item::Reapply),
     Row::Item(Item::Autostart),
     Row::Item(Item::FollowDisplay),
+    Row::Item(Item::CheckUpdates),
     Row::Item(Item::Language),
     Row::Divider,
     Row::Item(Item::Export),
@@ -109,6 +111,7 @@ struct Menu {
     keyboard: Option<String>,
     autostart: bool,
     follow_display: bool,
+    check_updates: bool,
 }
 
 thread_local! {
@@ -196,6 +199,7 @@ unsafe fn open() -> windows::core::Result<()> {
         keyboard,
         autostart: crate::autostart_enabled(),
         follow_display: crate::config().follow_display,
+        check_updates: crate::config().check_updates,
     };
     MENU.with(|m| *m.borrow_mut() = Some(menu));
     ShowWindow(hwnd, SW_SHOW);
@@ -285,6 +289,7 @@ impl Menu {
                         Item::Reapply => ("\u{E72C}", tr!("Применить заново", "Apply again")),
                         Item::Autostart => ("\u{E823}", tr!("Запускать с Windows", "Start with Windows")),
                         Item::FollowDisplay => ("\u{E708}", tr!("Гасить вместе с экраном", "Off with the display")),
+                        Item::CheckUpdates => ("\u{E895}", tr!("Проверять обновления", "Check for updates")),
                         // Names the other language: that is what a click switches to.
                         Item::Language => ("\u{E774}", tr!("Switch to English", "Переключить на русский")),
                         Item::Export => ("\u{E74E}", tr!("Сохранить настройки в файл…", "Save settings to a file…")),
@@ -298,6 +303,7 @@ impl Menu {
                     let switch = match item {
                         Item::Autostart => Some(self.autostart),
                         Item::FollowDisplay => Some(self.follow_display),
+                        Item::CheckUpdates => Some(self.check_updates),
                         _ => None,
                     };
                     let label_w = if switch.is_some() { r.w - 100.0 } else { r.w - 44.0 };
@@ -340,6 +346,7 @@ fn run(item: Item, keyboard: Option<String>) {
         Item::Reapply => crate::apply_all(),
         Item::Autostart => crate::set_autostart(!crate::autostart_enabled()),
         Item::FollowDisplay => crate::toggle_follow_display(),
+        Item::CheckUpdates => crate::toggle_check_updates(),
         Item::Language => crate::toggle_language(),
         Item::Export => crate::export_settings(),
         Item::Import => crate::import_settings(),
@@ -436,6 +443,7 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Re
             keyboard: None,
             autostart: true,
             follow_display: true,
+            check_updates: true,
         };
         m.draw(rt);
         Ok(())

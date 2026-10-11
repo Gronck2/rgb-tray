@@ -91,6 +91,8 @@ const ICON_PLAY: &str = "\u{E768}";
 const ICON_RENAME: &str = "\u{E70F}";
 const ICON_DELETE: &str = "\u{E74D}";
 const ICON_KEYBOARD: &str = "\u{E765}";
+const ICON_DOWNLOAD: &str = "\u{E896}";
+const ICON_OPEN: &str = "\u{E8A7}";
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
@@ -131,6 +133,10 @@ enum Hit {
     IgnoreApp(usize),
     /// The gear button on the warning about Windows Dynamic Lighting.
     LightingSettings,
+    /// The main button of the update card: download and install (or open the release page).
+    UpdateInstall,
+    /// The close button of the update card: skip this version.
+    UpdateSkip,
     /// Keeps the panel open when it loses focus.
     Pin,
     /// The page switch of the device list: previous, next, a page's dot.
@@ -148,6 +154,8 @@ enum Row {
     LightingWarning,
     /// A vendor program drives the lighting of these devices too (`conflicts::App::key`).
     AppWarning(&'static str),
+    /// A newer version is out (`update::offered`).
+    Update,
     All,
     /// Connected device, or one without a link.
     Device(String),
@@ -194,6 +202,9 @@ fn rows() -> Vec<(R, Row)> {
     }
     for c in crate::CONFLICTS.lock().unwrap().iter() {
         push(WARNING_H, Row::AppWarning(c.app.key));
+    }
+    if crate::update::offered().is_some() {
+        push(WARNING_H, Row::Update);
     }
     push(CARD_H, Row::All);
     let pages = list_pages(active, archived);
@@ -415,6 +426,12 @@ fn pencil_rect(card: R, row: &Row, name: &str) -> R {
 fn warning_button_rect(card: R) -> R {
     R { x: card.x + card.w - 12.0 - 36.0, y: card.y + (card.h - 32.0) / 2.0, w: 36.0, h: 32.0 }
 }
+
+/// The "skip this version" button of the update card, left of its main button.
+fn update_skip_rect(card: R) -> R {
+    let b = warning_button_rect(card);
+    R { x: b.x - 6.0 - b.w, ..b }
+}
 /// The "forget" button of a disconnected device's card, left of its color dot.
 fn forget_button_rect(card: R) -> R {
     R { x: card.x + card.w - 44.0 - 82.0, y: card.y + 5.0, w: 82.0, h: 22.0 }
@@ -452,6 +469,10 @@ fn card_layout(rows: &[(R, Row)]) -> Vec<(R, Hit)> {
             Row::ServiceWarning => v.push((warning_button_rect(*r), Hit::DisableService)),
             Row::LightingWarning => v.push((warning_button_rect(*r), Hit::LightingSettings)),
             Row::AppWarning(_) => v.push((warning_button_rect(*r), Hit::IgnoreApp(i))),
+            Row::Update if !matches!(crate::update::offered(), Some(crate::update::State::Downloading(_))) => {
+                v.push((warning_button_rect(*r), Hit::UpdateInstall));
+                v.push((update_skip_rect(*r), Hit::UpdateSkip));
+            }
             _ => {}
         }
         if let Row::Device(id) | Row::Archived(id) = row {
@@ -1681,6 +1702,57 @@ impl Flyout {
         let f = &self.fmt;
         let hover = |h: Hit| self.hover == Some(h);
 
+        if let Row::Update = row {
+            use crate::update::State;
+            let current = env!("CARGO_PKG_VERSION");
+            // (title, line 1, line 2, main button icon); no buttons while downloading.
+            let (title, line1, line2, button) = match crate::update::offered() {
+                Some(State::Downloading(r)) => (
+                    format!("{} {}…", tr!("Загружается версия", "Downloading version"), r.version),
+                    tr!("Приложение закроется и", "The app will close and").to_string(),
+                    tr!("запустится уже новым", "start again updated").to_string(),
+                    None,
+                ),
+                Some(State::Failed(r)) => (
+                    format!("{} {}", tr!("Не удалось скачать", "Could not download"), r.version),
+                    tr!("Скачайте установщик", "Download the installer").to_string(),
+                    tr!("на странице релиза", "from the release page").to_string(),
+                    Some(ICON_OPEN),
+                ),
+                Some(State::Available(r)) => (
+                    format!("{} {}", tr!("Вышла версия", "Version"), r.version) + tr!("", " is out"),
+                    format!("{} {current}", tr!("Сейчас установлена", "Installed:")),
+                    if r.has_setup() {
+                        tr!("Обновление — пара секунд", "Updating takes seconds")
+                    } else {
+                        tr!("Скачайте на странице релиза", "Get it from the release page")
+                    }
+                    .to_string(),
+                    Some(if r.has_setup() { ICON_DOWNLOAD } else { ICON_OPEN }),
+                ),
+                _ => return,
+            };
+            self.fill(rt, r, 6.0, t.card);
+            self.fill(rt, r, 6.0, D2D1_COLOR_F { a: 0.14, ..t.accent });
+            self.stroke(rt, r, 6.0, t.accent, 1.0);
+            self.text(rt, ICON_DOWNLOAD, &f.icon, R { x: r.x + 10.0, y: r.y, w: 32.0, h: r.h }, t.accent);
+            let b = warning_button_rect(r);
+            let text_w = if button.is_some() { update_skip_rect(r).x } else { b.x + b.w } - r.x - 58.0;
+            self.text(rt, &title, &f.name, R { x: r.x + 50.0, y: r.y + 10.0, w: text_w, h: 20.0 }, t.text);
+            self.text(rt, &line1, &f.sub, R { x: r.x + 50.0, y: r.y + 30.0, w: text_w, h: 16.0 }, t.text2);
+            self.text(rt, &line2, &f.sub, R { x: r.x + 50.0, y: r.y + 44.0, w: text_w, h: 16.0 }, t.text2);
+            if let Some(icon) = button {
+                self.fill(rt, b, 4.0, if hover(Hit::UpdateInstall) { D2D1_COLOR_F { a: 0.85, ..t.accent } } else { t.accent });
+                self.text(rt, icon, &f.icon_small, b, t.on_accent);
+                let s = update_skip_rect(r);
+                if hover(Hit::UpdateSkip) {
+                    self.fill(rt, s, 4.0, t.card_hover);
+                }
+                self.text(rt, ICON_CLOSE, &f.icon_small, s, t.text2);
+            }
+            return;
+        }
+
         // Accent-tinted card: something in Windows is fighting over the lighting.
         let warning: Option<(String, String, String, &str, Hit)> = match row {
             Row::ServiceWarning => Some((
@@ -2218,12 +2290,17 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
                     PAGE.store(p, Ordering::Relaxed);
                 }
             }
-            Some(Row::ServiceWarning | Row::LightingWarning | Row::AppWarning(_) | Row::Pager(..) | Row::Spacer) | None => {}
+            Some(Row::ServiceWarning | Row::LightingWarning | Row::AppWarning(_) | Row::Update | Row::Pager(..) | Row::Spacer) | None => {}
         },
         Hit::PagePrev => turn_page(-1),
         Hit::PageNext => turn_page(1),
         Hit::Page(k) => PAGE.store(k, Ordering::Relaxed),
         Hit::LightingSettings => crate::open_dynamic_lighting_settings(),
+        Hit::UpdateInstall => match crate::update::offered() {
+            Some(crate::update::State::Available(r)) if r.has_setup() => crate::update::install(),
+            _ => crate::update::open_page(),
+        },
+        Hit::UpdateSkip => crate::update::skip(),
         Hit::IgnoreApp(i) => {
             if let Some((_, Row::AppWarning(key))) = rows().get(i).cloned() {
                 crate::ignore_app(key);

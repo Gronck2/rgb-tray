@@ -233,6 +233,11 @@ pub struct Config {
     pub pinned: bool,
     /// The lighting dims with the display and goes off while the display is off.
     pub follow_display: bool,
+    /// Look for a new version on GitHub once a day.
+    pub check_updates: bool,
+    /// A version the user chose not to install (`update::skip`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped_version: Option<String>,
     /// Interface language "ru" or "en"; not set = follow Windows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
@@ -262,6 +267,8 @@ impl Default for Config {
             iso_layout: false,
             pinned: false,
             follow_display: true,
+            check_updates: true,
+            skipped_version: None,
             language: None,
             panel_pos: None,
             presets: Vec::new(),
@@ -674,6 +681,7 @@ mod tests {
         assert_eq!(old.custom_colors.len(), 16);
         // Files from before the option follow the display.
         assert!(old.follow_display);
+        assert!(old.check_updates);
     }
 
     #[test]
