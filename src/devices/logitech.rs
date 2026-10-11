@@ -47,6 +47,8 @@ const EFFECT_BREATHE: u16 = 0x000A;
 // Byte layouts as in OpenRGB (LogitechG915Controller) and g810-led, which agree on them.
 const EFFECT_WAVE: u16 = 0x0004;
 const EFFECT_RIPPLE: u16 = 0x000B;
+/// Listed by the G915 but described nowhere; sent like breathing (color, period, intensity).
+const EFFECT_0C: u16 = 0x000C;
 
 /// Effect periods at normal speed.
 const BREATHE_PERIOD_MS: u16 = 4000;
@@ -297,6 +299,10 @@ impl Device for Logitech {
                 let [sh, sl] = step.to_be_bytes();
                 (EFFECT_RIPPLE, [r, g, b, 0, sh, sl, 0, 0, 0, 0])
             }
+            Effect::Experimental => {
+                let [ph, pl] = period_ms(BREATHE_PERIOD_MS).to_be_bytes();
+                (EFFECT_0C, [r, g, b, ph, pl, 0, brightness.clamp(1, 100), 0, 0, 0])
+            }
             // Not in this firmware (the panel doesn't offer them): the color, steadily.
             Effect::Reactive | Effect::Starlight => (EFFECT_STATIC, [r, g, b, 0, 0, 0, 0, 0, 0, 0]),
         };
@@ -312,6 +318,7 @@ impl Device for Logitech {
                 // A zone without wave (the logo) cycles along; one without ripple shows the color.
                 (_, EFFECT_WAVE) if !ids.contains(&EFFECT_WAVE) => (EFFECT_CYCLE, [0, 0, 0, 0, 0, ch, cl, brightness.clamp(1, 100), 0, 0]),
                 (_, EFFECT_RIPPLE) if !ids.contains(&EFFECT_RIPPLE) => (EFFECT_STATIC, [r, g, b, 0, 0, 0, 0, 0, 0, 0]),
+                (_, EFFECT_0C) if !ids.contains(&EFFECT_0C) => (EFFECT_STATIC, [r, g, b, 0, 0, 0, 0, 0, 0, 0]),
                 _ => (id, params),
             };
             // Going straight from one animation to another (breathing → spectrum) also hangs the

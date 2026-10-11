@@ -79,7 +79,7 @@ impl Device for Asus {
             // RainbowWave in asusctl; not every laptop has it (an unknown mode is ignored).
             Effect::Wave => 3,
             // Not in this firmware (the panel doesn't offer them): the color, steadily.
-            Effect::Ripple | Effect::Reactive | Effect::Starlight => 0,
+            Effect::Ripple | Effect::Reactive | Effect::Starlight | Effect::Experimental => 0,
         };
         let Rgb(r, g, b) = color;
         let breathe = (effect == Effect::Breathe) as u8;

@@ -23,13 +23,15 @@ pub enum Effect {
     Reactive,
     /// Keys twinkle at random (Razer firmware).
     Starlight,
+    /// The G915's undocumented firmware effect 0x000C, offered to find out what it does.
+    Experimental,
 }
 
 impl Effect {
     /// The effects every device has, on the panel's buttons.
     pub const ALL: [Effect; 4] = [Effect::Static, Effect::Breathe, Effect::Cycle, Effect::Off];
     /// Effects only some firmware has, under "More" on the panel.
-    pub const EXTRA: [Effect; 4] = [Effect::Wave, Effect::Ripple, Effect::Reactive, Effect::Starlight];
+    pub const EXTRA: [Effect; 5] = [Effect::Wave, Effect::Ripple, Effect::Reactive, Effect::Starlight, Effect::Experimental];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -41,6 +43,7 @@ impl Effect {
             Effect::Ripple => tr!("Рябь от нажатий", "Ripple"),
             Effect::Reactive => tr!("Отклик на нажатия", "Reactive"),
             Effect::Starlight => tr!("Звёзды", "Starlight"),
+            Effect::Experimental => tr!("Эффект 0x0C (опыт)", "Effect 0x0C (trial)"),
         }
     }
 
@@ -49,6 +52,7 @@ impl Effect {
         match self {
             Effect::Ripple => tr!("Рябь", "Ripple"),
             Effect::Reactive => tr!("Отклик", "Reactive"),
+            Effect::Experimental => tr!("0x0C (опыт)", "0x0C (trial)"),
             e => e.label(),
         }
     }
@@ -60,7 +64,7 @@ impl Effect {
 
     /// Shows the chosen color (the others are rainbow or dark).
     pub fn colored(self) -> bool {
-        matches!(self, Effect::Static | Effect::Breathe | Effect::Ripple | Effect::Reactive | Effect::Starlight)
+        matches!(self, Effect::Static | Effect::Breathe | Effect::Ripple | Effect::Reactive | Effect::Starlight | Effect::Experimental)
     }
 }
 
@@ -311,7 +315,7 @@ const NATIVE: [Kind; 4] = [
         zones: &[],
         layout: Some(crate::keymap::G915_TKL),
         port_id: false,
-        effects: &[Effect::Static, Effect::Breathe, Effect::Cycle, Effect::Off, Effect::Wave, Effect::Ripple],
+        effects: &[Effect::Static, Effect::Breathe, Effect::Cycle, Effect::Off, Effect::Wave, Effect::Ripple, Effect::Experimental],
         speed: Speed::Smooth,
         class: Class::Keyboard,
         protocol: Protocol::Native,
