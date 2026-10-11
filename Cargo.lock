@@ -56,7 +56,7 @@ dependencies = [
 
 [[package]]
 name = "rgbtray"
-version = "0.6.23"
+version = "0.6.24"
 dependencies = [
  "serde",
  "serde_json",

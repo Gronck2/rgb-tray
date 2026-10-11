@@ -132,7 +132,7 @@ impl Razer {
                 Effect::Reactive => self.command(0x0F, 0x02, &[VARSTORE, led, 0x05, 0, 0x02, 0x01, r, g, b]),
                 Effect::Starlight => self.command(0x0F, 0x02, &[VARSTORE, led, 0x07, 0, 0x02, 0x01, r, g, b]),
                 // No ripple in Razer firmware: the color, steadily.
-                Effect::Ripple | Effect::Experimental => self.command(0x0F, 0x02, &[VARSTORE, led, 0x01, 0, 0, 0x01, r, g, b]),
+                Effect::Ripple => self.command(0x0F, 0x02, &[VARSTORE, led, 0x01, 0, 0, 0x01, r, g, b]),
             });
             match res {
                 Ok(_) => any_ok = true,
