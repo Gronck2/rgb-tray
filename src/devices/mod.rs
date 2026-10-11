@@ -34,8 +34,8 @@ impl Effect {
 static SPEED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(NORMAL_SPEED);
 pub const NORMAL_SPEED: u8 = 50;
 
-/// Sets the speed of breathing and spectrum for the next applies (one for all devices, so
-/// their breathing stays in step).
+/// Sets the speed of breathing and spectrum for the device applied next (the apply loop sets
+/// each device's own before applying it).
 pub fn set_speed(speed: u8) {
     SPEED.store(speed.min(100), std::sync::atomic::Ordering::Relaxed);
 }

@@ -23,7 +23,7 @@ use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFEC
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use crate::devices::{kind_of, Effect, Rgb};
+use crate::devices::{kind_of, speed_factor, Effect, Rgb, NORMAL_SPEED};
 
 // ---------------------------------------------------------------- layout (in DIPs)
 
@@ -85,6 +85,7 @@ const ICON_ADD: &str = "\u{E710}";
 const ICON_POWER: &str = "\u{E7E8}";
 const ICON_CLOSE: &str = "\u{E711}";
 const ICON_BRIGHTNESS: &str = "\u{E706}";
+const ICON_SPEED: &str = "\u{EC4A}";
 const ICON_SAVE: &str = "\u{E74E}";
 const ICON_PLAY: &str = "\u{E768}";
 const ICON_RENAME: &str = "\u{E70F}";
@@ -349,14 +350,12 @@ fn speed_rect() -> R {
 /// Margin between a slider's ends and its track: the thumb's radius.
 const SPEED_THUMB: f32 = 7.0;
 
-/// The speed slider is shown while a device on the panel breathes or cycles.
+/// The speed slider is shown while the selected device (or, with "All devices", any device on
+/// the panel) breathes or cycles.
 fn speed_shown() -> bool {
-    let active = crate::active_ids();
+    let ids = selected().map_or_else(crate::active_ids, |id| vec![id]);
     let cfg = crate::config();
-    active.iter().any(|id| {
-        let d = cfg.device(id).visible();
-        !d.per_key && matches!(d.effect, Effect::Breathe | Effect::Cycle)
-    })
+    ids.iter().any(|id| cfg.device(id).visible().animated())
 }
 
 /// Height of the header strip by which a pinned panel can be dragged.
@@ -1281,7 +1280,8 @@ fn view() -> View {
         devices,
         // The slider edits the overall brightness, or the selected device's share of it.
         brightness: selected.as_ref().map_or(cfg.brightness, |id| cfg.device(id).brightness),
-        speed: cfg.speed,
+        // Like brightness: the overall speed, or the selected device's shift from it.
+        speed: selected.as_ref().map_or(cfg.speed, |id| cfg.device(id).speed),
         speed_shown,
         selected,
         lower_y,
@@ -1536,8 +1536,11 @@ impl Flyout {
         }
         if v.speed_shown {
             let s = speed_rect();
-            self.text(rt, tr!("Скорость", "Speed"), &f.sub_right, R { x: s.x - 96.0, y: EFFECT_LABEL_Y, w: 90.0, h: 20.0 }, t.text2);
+            let label = if v.selected.is_none() { tr!("Скорость", "Speed") } else { tr!("Скорость устройства", "Device speed") };
+            self.text(rt, label, &f.sub_right, R { x: s.x - 166.0, y: EFFECT_LABEL_Y, w: 160.0, h: 20.0 }, t.text2);
             let speed = self.drag_speed.unwrap_or(v.speed);
+            // Normal speed (for a device: the same as the overall one) in the middle.
+            self.fill(rt, R { x: s.x + s.w / 2.0 - 1.0, y: s.y + s.h / 2.0 - 5.0, w: 2.0, h: 10.0 }, 1.0, t.text2);
             self.slider(rt, s, speed, SPEED_THUMB, self.drag_speed.is_some(), hover(Hit::Speed));
         }
 
@@ -1825,6 +1828,9 @@ impl Flyout {
         if d.present && d.cfg.brightness < 100 && d.cfg.effect != Effect::Off {
             sub.push((ICON_BRIGHTNESS, format!("{}%", d.cfg.brightness)));
         }
+        if d.present && d.cfg.speed != NORMAL_SPEED && d.cfg.animated() {
+            sub.push((ICON_SPEED, speed_label(d.cfg.speed)));
+        }
         if let (true, Some(b)) = (d.present, d.battery) {
             sub.push(("", b.label()));
         }
@@ -2060,6 +2066,13 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32, card: usize, zone: u
                 d.1.brightness = 30;
             }
         }
+        if std::env::var_os("RGBTRAY_DEMO_SPEED").is_some() {
+            if let Some(d) = cfg.devices.iter_mut().find(|(id, _)| id.starts_with("logitech")) {
+                d.1.effect = Effect::Breathe;
+                d.1.per_key = false;
+                d.1.speed = 75;
+            }
+        }
 
         if cfg.presets.is_empty() {
             let mut a = cfg.snapshot(tr!("Работа", "Work").into());
@@ -2168,10 +2181,23 @@ fn slider_value(x: f32) -> u8 {
     (((x - x0) / (x1 - x0)).clamp(0.0, 1.0) * 100.0).round().max(5.0) as u8
 }
 
+/// A device's own speed as a factor of the overall one: "×2", "×0.5", "×1.3".
+fn speed_label(speed: u8) -> String {
+    let f = speed_factor(speed);
+    let s = if f < 1.0 { format!("{f:.2}") } else { format!("{f:.1}") };
+    format!("×{}", s.trim_end_matches('0').trim_end_matches('.'))
+}
+
 fn speed_value(x: f32) -> u8 {
     let s = speed_rect();
     let (x0, x1) = (s.x + SPEED_THUMB, s.x + s.w - SPEED_THUMB);
-    (((x - x0) / (x1 - x0)).clamp(0.0, 1.0) * 100.0).round() as u8
+    let v = (((x - x0) / (x1 - x0)).clamp(0.0, 1.0) * 100.0).round() as u8;
+    // The normal speed is easy to hit again.
+    if v.abs_diff(NORMAL_SPEED) <= 3 {
+        NORMAL_SPEED
+    } else {
+        v
+    }
 }
 
 /// Runs a click action. No RefCell borrow may be held here: the color dialog and
@@ -2397,7 +2423,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 invalidate();
             } else if let Some(s) = drag_speed {
                 ReleaseCapture();
-                crate::set_speed(s);
+                crate::set_speed(selected().as_deref(), s);
                 invalidate();
             } else if let Some(h) = hit {
                 // Clicking the chip that is being renamed keeps editing instead of applying it.
@@ -2536,5 +2562,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             0
         }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn speed_labels() {
+        assert_eq!(speed_label(100), "×4");
+        assert_eq!(speed_label(75), "×2");
+        assert_eq!(speed_label(25), "×0.5");
+        assert_eq!(speed_label(0), "×0.25");
+        assert_eq!(speed_label(60), "×1.3");
     }
 }

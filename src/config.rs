@@ -20,6 +20,9 @@ pub struct DeviceConfig {
     /// Brightness relative to the overall one, percent (devices differ a lot in how bright they are).
     #[serde(default = "full_brightness", skip_serializing_if = "is_full_brightness")]
     pub brightness: u8,
+    /// Speed of breathing and spectrum relative to the overall one, 0..=100; NORMAL_SPEED = the same.
+    #[serde(default = "normal_speed", skip_serializing_if = "is_normal_speed")]
+    pub speed: u8,
     /// The keyboard shows `keys` instead of its effect.
     #[serde(default, skip_serializing_if = "is_false")]
     pub per_key: bool,
@@ -54,6 +57,7 @@ impl Default for DeviceConfig {
             color: "#FFFFFF".into(),
             zones: BTreeMap::new(),
             brightness: 100,
+            speed: NORMAL_SPEED,
             per_key: false,
             keys: KeyColors::new(),
             last_seen: 0,
@@ -130,8 +134,18 @@ impl DeviceConfig {
         }
     }
 
+    /// Breathes or cycles: the speed matters.
+    pub fn animated(&self) -> bool {
+        !self.per_key && matches!(self.effect, Effect::Breathe | Effect::Cycle)
+    }
+
     fn same_lighting(&self, other: &DeviceConfig) -> bool {
-        let (a, b) = (self.visible().lighting(), other.visible().lighting());
+        // The speed matters only while the device breathes or cycles.
+        let norm = |d: &DeviceConfig| {
+            let d = d.visible().lighting();
+            DeviceConfig { speed: if d.animated() { d.speed } else { NORMAL_SPEED }, ..d }
+        };
+        let (a, b) = (norm(self), norm(other));
         // Per-key colors matter only while they are shown; compared key by key, since an off
         // key may be stored as black or (older versions) left out.
         let keys_equal = !a.per_key && !b.per_key || a.all_keys() == b.all_keys();
@@ -294,7 +308,7 @@ impl Config {
     /// Whether the current lighting is exactly this preset.
     pub fn matches(&self, p: &Preset) -> bool {
         // The speed shows only while something breathes or cycles.
-        let animated = self.devices.values().any(|d| matches!(d.visible().effect, Effect::Breathe | Effect::Cycle) && !d.per_key);
+        let animated = self.devices.values().any(|d| d.visible().animated());
         self.brightness == p.brightness
             && (self.speed == p.speed || !animated)
             && self.devices.iter().all(|(id, d)| p.devices.get(id).is_none_or(|pd| d.same_lighting(pd)))
@@ -312,6 +326,12 @@ impl Config {
     pub fn effective_brightness(&self, id: &str) -> u8 {
         let b = self.brightness as u32 * self.device(id).brightness.min(100) as u32 / 100;
         b.max(1) as u8
+    }
+
+    /// The speed a device's breathing and spectrum run at: the overall speed shifted by its own
+    /// (speeds add up on the log scale of `devices::speed_factor`, so the factors multiply).
+    pub fn effective_speed(&self, id: &str) -> u8 {
+        (self.speed as i32 + self.device(id).speed.min(100) as i32 - NORMAL_SPEED as i32).clamp(0, 100) as u8
     }
 
     /// The device's name on the panel.
@@ -554,6 +574,28 @@ mod tests {
         assert_eq!(cfg.effective_brightness("naga-A"), 40);
         cfg.brightness = 1;
         assert_eq!(cfg.effective_brightness("naga-A"), 1);
+    }
+
+    #[test]
+    fn device_speed_shifts_the_overall_one() {
+        let mut cfg = Config::default();
+        cfg.devices.insert("naga-A".into(), DeviceConfig { speed: 75, ..DeviceConfig::default() });
+        assert_eq!(cfg.effective_speed("naga-A"), 75);
+        assert_eq!(cfg.effective_speed("naga-B"), NORMAL_SPEED);
+        cfg.speed = 40;
+        assert_eq!(cfg.effective_speed("naga-A"), 65);
+        cfg.speed = 90;
+        assert_eq!(cfg.effective_speed("naga-A"), 100);
+        // A device's own speed is part of its lighting, and matters only while it animates.
+        let p = cfg.snapshot("P".into());
+        cfg.devices.get_mut("naga-A").unwrap().speed = 20;
+        assert!(cfg.matches(&p));
+        cfg.devices.get_mut("naga-A").unwrap().effect = Effect::Cycle;
+        let p = cfg.snapshot("P".into());
+        cfg.devices.get_mut("naga-A").unwrap().speed = 60;
+        assert!(!cfg.matches(&p));
+        cfg.load_preset(&p);
+        assert_eq!(cfg.device("naga-A").speed, 20);
     }
 
     #[test]

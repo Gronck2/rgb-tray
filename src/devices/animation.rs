@@ -9,8 +9,18 @@ use std::time::{Duration, Instant};
 /// ends; the next apply starts it again).
 pub type Frame = Box<dyn FnMut(f32) -> bool + Send>;
 
-/// Running animations, by HID path of their device.
-static ANIMATIONS: Mutex<Vec<(Vec<u16>, Frame)>> = Mutex::new(Vec::new());
+/// The animation of one device (by HID path). Each runs on its own effect time: real time
+/// scaled by its device's speed, accumulated frame by frame so a speed change goes on smoothly
+/// from the current phase. A stopped one keeps its time for the next start, so re-applying
+/// the same effect doesn't jump.
+struct Animation {
+    path: Vec<u16>,
+    speed: f32,
+    t: f32,
+    frame: Option<Frame>,
+}
+
+static ANIMATIONS: Mutex<Vec<Animation>> = Mutex::new(Vec::new());
 static THREAD: std::sync::Once = std::sync::Once::new();
 
 /// About 60 frames a second: LEDs take whole brightness steps, and small steps at a high
@@ -19,11 +29,21 @@ const FRAME: Duration = Duration::from_millis(16);
 const BREATHE_PERIOD: f32 = 4.0;
 const CYCLE_PERIOD: f32 = 10.0;
 
-/// Starts (or replaces) the animation of the device at `path`.
+/// Starts (or replaces) the animation of the device at `path`, at the speed set for it
+/// (`super::speed`). It takes the phase of another running animation of the same speed, so
+/// devices with the same speed breathe in step; otherwise it goes on from its own phase.
 pub fn start(path: &[u16], frame: Frame) {
+    let speed = super::speed_factor(super::speed());
     let mut list = ANIMATIONS.lock().unwrap();
-    list.retain(|(p, _)| p != path);
-    list.push((path.to_vec(), frame));
+    let peer = list.iter().find(|a| a.path != path && a.frame.is_some() && a.speed == speed).map(|a| a.t);
+    match list.iter_mut().find(|a| a.path == path) {
+        Some(a) => {
+            a.t = peer.unwrap_or(a.t);
+            a.speed = speed;
+            a.frame = Some(frame);
+        }
+        None => list.push(Animation { path: path.to_vec(), speed, t: peer.unwrap_or(0.0), frame: Some(frame) }),
+    }
     drop(list);
     THREAD.call_once(|| {
         std::thread::spawn(run);
@@ -32,7 +52,9 @@ pub fn start(path: &[u16], frame: Frame) {
 
 /// Stops the animation of the device at `path`, if any.
 pub fn stop(path: &[u16]) {
-    ANIMATIONS.lock().unwrap().retain(|(p, _)| p != path);
+    if let Some(a) = ANIMATIONS.lock().unwrap().iter_mut().find(|a| a.path == path) {
+        a.frame = None;
+    }
 }
 
 /// Lowest breathing level. The darkest part is where LEDs show their brightness steps the
@@ -50,16 +72,18 @@ pub fn cycle_hue(t: f32) -> f32 {
     t / CYCLE_PERIOD * 360.0
 }
 
-/// Frames get effect time: real time scaled by the speed setting, accumulated frame by frame
-/// so a speed change goes on smoothly from the current phase.
 fn run() {
     let mut last = Instant::now();
-    let mut t = 0.0;
     loop {
         let now = Instant::now();
-        t += (now - last).as_secs_f32() * super::speed_factor(super::speed());
+        let dt = (now - last).as_secs_f32();
         last = now;
-        ANIMATIONS.lock().unwrap().retain_mut(|(_, frame)| frame(t));
+        for a in ANIMATIONS.lock().unwrap().iter_mut() {
+            a.t += dt * a.speed;
+            if a.frame.as_mut().is_some_and(|frame| !frame(a.t)) {
+                a.frame = None;
+            }
+        }
         std::thread::sleep(FRAME);
     }
 }
