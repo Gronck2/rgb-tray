@@ -257,6 +257,17 @@ impl Device for Via {
     }
 }
 
+/// How the app finds QMK/VIA keyboards (see `devices::DRIVERS`).
+pub const DRIVER: super::Driver = super::Driver {
+    discover: |d| d.found.extend(find_all().into_iter().map(|v| super::Found { id: v.id.clone(), dev: Box::new(v) })),
+    note: |i| match (i.usage_page, i.usage) {
+        (0xFF60, 0x0061) if model_of(i.vid, i.pid).is_some() => Some("SUPPORTED: QMK/VIA keyboard with a profile"),
+        (0xFF60, 0x0061) => Some("SUPPORTED: QMK/VIA keyboard (if it has RGB lighting)"),
+        _ => None,
+    },
+    ..super::Driver::NONE
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;

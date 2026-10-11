@@ -145,28 +145,39 @@ impl Battery {
 pub const LOW_BATTERY: u8 = 10;
 pub const CRITICAL_BATTERY: u8 = 5;
 
+/// A driver: how its devices are found, polled and described. Each is listed once in `DRIVERS`.
+pub struct Driver {
+    /// Adds its connected devices to the search result (and the ones whose receiver or dock
+    /// is plugged in but which don't answer).
+    pub discover: fn(&mut Discovery),
+    /// Battery levels of its wireless devices, by id; cheap enough to poll.
+    pub batteries: fn() -> Vec<(String, Battery)>,
+    /// Ids of its wireless devices that answer right now; no lighting is sent.
+    pub answering: fn() -> Vec<String>,
+    /// One of its keyboards opened for the key editor; None when the id isn't its.
+    pub open_for_keys: fn(&str) -> Option<Box<dyn Device>>,
+    /// What a HID interface is to this driver, for the device report.
+    pub note: fn(&crate::hid::HidInfo) -> Option<&'static str>,
+}
+
+impl Driver {
+    /// A driver that does nothing: the base of the `DRIVER` of each module (`..Driver::NONE`).
+    pub const NONE: Driver = Driver { discover: |_| {}, batteries: Vec::new, answering: Vec::new, open_for_keys: |_| None, note: |_| None };
+}
+
+/// Every driver. A native driver comes before the generic LampArray and QMK/VIA ones:
+/// `discover()` keeps the first device with a given id.
+pub const DRIVERS: &[Driver] = &[logitech::DRIVER, razer::DRIVER, asus::DRIVER, via::DRIVER, lamparray::DRIVER];
+
 /// Battery levels of all connected wireless devices, by device id. Opens only devices that
 /// have a battery, so it is cheap enough to run periodically.
 pub fn batteries() -> Vec<(String, Battery)> {
-    let mut out = Vec::new();
-    for kb in logitech::Logitech::find_all(logitech::SW_ID_POLL) {
-        if let Some(b) = kb.battery() {
-            out.push((kb.id.clone(), b));
-        }
-    }
-    for d in razer::Razer::find_all() {
-        if let (Some(id), Some(b)) = (d.id.clone(), d.battery()) {
-            out.push((id, b));
-        }
-    }
-    out
+    DRIVERS.iter().flat_map(|d| (d.batteries)()).collect()
 }
 
 /// Ids of wireless devices that answer right now (cheap: no lighting is sent).
 pub fn answering() -> Vec<String> {
-    let mut ids: Vec<String> = logitech::Logitech::find_all(logitech::SW_ID_POLL).into_iter().map(|k| k.id).collect();
-    ids.extend(razer::Razer::find_all().into_iter().filter_map(|d| d.id));
-    ids
+    DRIVERS.iter().flat_map(|d| (d.answering)()).collect()
 }
 
 /// A supported device model.
@@ -362,11 +373,7 @@ const NATIVE: [Kind; 4] = [
 
 /// Opens a keyboard for the key editor, by id.
 pub fn open_for_keys(id: &str) -> Option<Box<dyn Device>> {
-    match kind_of(id).key {
-        "logitech" => logitech::Logitech::find_id(logitech::SW_ID_EDITOR, id).map(|k| Box::new(k) as Box<dyn Device>),
-        "lamparray" => lamparray::find_all().into_iter().find(|d| d.id == id).map(|d| Box::new(d) as Box<dyn Device>),
-        _ => None,
-    }
+    DRIVERS.iter().find_map(|d| (d.open_for_keys)(id))
 }
 
 /// Names devices report about themselves, by id: the default name of devices of a generic
@@ -409,19 +416,7 @@ pub fn zones_of(id: &str) -> Vec<(u8, String)> {
 /// What a HID interface is to this app, for the device report: a supported device, or a
 /// known lighting protocol that a new driver could build on.
 pub fn interface_note(i: &crate::hid::HidInfo) -> Option<&'static str> {
-    Some(match (i.vid, i.usage_page, i.usage) {
-        (0x046D, 0xFF00, 0x0002) if logitech::RECEIVER_PIDS.contains(&i.pid) => "SUPPORTED: Logitech receiver (HID++)",
-        (0x046D, 0xFF00, 0x0002) => "Logitech HID++ (protocol known)",
-        // Razer lighting goes through 91-byte feature reports (the mouse, keyboard or other collection).
-        (0x1532, _, _) if i.feature_len == 91 && razer::is_supported(i.pid) => "SUPPORTED: Razer",
-        (0x1532, _, _) if i.feature_len == 91 => "Razer control interface (protocol known)",
-        (0x0B05, 0xFF31, 0x0079) => "SUPPORTED: ASUS Aura",
-        (_, 0xFF60, 0x0061) if via::model_of(i.vid, i.pid).is_some() => "SUPPORTED: QMK/VIA keyboard with a profile",
-        (_, 0xFF60, 0x0061) => "SUPPORTED: QMK/VIA keyboard (if it has RGB lighting)",
-        (_, 0x0059, 0x0001) => "HID LampArray (Windows Dynamic Lighting standard)",
-        (_, page, _) if page >= 0xFF00 => "vendor-specific",
-        _ => return None,
-    })
+    DRIVERS.iter().find_map(|d| (d.note)(i)).or((i.usage_page >= 0xFF00).then_some("vendor-specific"))
 }
 
 /// Plain name of a standard HID usage, to make the report readable.
@@ -501,41 +496,18 @@ pub struct Discovery {
 
 /// Finds every supported device.
 pub fn discover() -> Discovery {
-    let mut found: Vec<Found> = Vec::new();
-    let mut no_link_kinds = Vec::new();
-    for kb in logitech::Logitech::find_all(logitech::SW_ID_APPLY) {
-        found.push(Found { id: kb.id.clone(), dev: Box::new(kb) });
-    }
-    let ids: Vec<String> = found.iter().map(|f| f.id.clone()).collect();
-    let no_link = logitech::Logitech::no_link(&ids);
-    // Asleep already when the app started: which keyboard isn't known yet.
-    if no_link.is_empty() && logitech::Logitech::receiver_silent() {
-        no_link_kinds.push("logitech");
-    }
-    for d in razer::Razer::find_all() {
-        match d.id.clone() {
-            Some(id) if !found.iter().any(|f| f.id == id) => found.push(Found { id, dev: Box::new(d) }),
-            Some(_) => {}
-            None => no_link_kinds.push(d.key()),
-        }
-    }
-    if let Some(d) = asus::Asus::find() {
-        found.push(Found { id: "asus".into(), dev: Box::new(d) });
-    }
-    for d in via::find_all() {
-        found.push(Found { id: d.id.clone(), dev: Box::new(d) });
-    }
-    for d in lamparray::find_all() {
-        found.push(Found { id: d.id.clone(), dev: Box::new(d) });
+    let mut d = Discovery { found: Vec::new(), no_link: Vec::new(), no_link_kinds: Vec::new() };
+    for driver in DRIVERS {
+        (driver.discover)(&mut d);
     }
     // One device reachable two ways (e.g. a keyboard on cable and receiver) is driven once.
     let mut seen = Vec::new();
-    found.retain(|f| {
+    d.found.retain(|f| {
         let first = !seen.contains(&f.id);
         seen.push(f.id.clone());
         first
     });
-    Discovery { found, no_link, no_link_kinds }
+    d
 }
 
 #[cfg(test)]

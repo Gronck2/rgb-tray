@@ -48,7 +48,7 @@ target\release\rgbtray.exe --snapshot panel.png [dark|light] [card] [zone]
 | `src/config.rs` | Настройки TOML в `%APPDATA%\rgbtray\config.toml`, пресеты |
 | `src/i18n.rs` | Строки интерфейса: `tr!("русский", "English")` прямо в коде |
 | `src/hid.rs` | Минимальный слой Win32 HID: перечисление, открытие, feature/output/input-отчёты |
-| `src/devices/mod.rs` | Трейт `Device`, `KINDS` (все модели), `discover()`, `interface_note()` |
+| `src/devices/mod.rs` | Трейт `Device`, `kinds()` (все модели), `DRIVERS` (все драйверы), `discover()` |
 | `src/devices/*.rs` | Драйверы: `logitech` (HID++), `razer`, `asus` (Aura), `via` (QMK/VIA), `lamparray` (HID LampArray), `animation` (эффекты, которые рисует приложение) |
 
 ## Как добавить устройство
@@ -109,10 +109,25 @@ target\release\rgbtray.exe --snapshot panel.png [dark|light] [card] [zone]
 
    У `apply_zones`, `apply_keys`/`update_keys` и `battery` есть реализации по умолчанию. Переопределите их, если у устройства есть зоны, цвета клавиш или батарея. Если в прошивке нет дыхания или спектра, играйте их через `animation::start`, как в `lamparray.rs` и `via.rs`. Беспроводное устройство, которое выключено, хотя приёмник подключён, возвращает `Err(NO_LINK)`.
 
-2. Добавьте `pub mod <имя>;` и `Kind` в `KINDS` в `src/devices/mod.rs`. Ключ — это начало id, в нём не должно быть `-`. Добавьте название на двух языках, значок из Segoe Fluent Icons и то, что умеет модель: зоны, цвета клавиш, эффекты, скорость (`Speed::None`, `Steps(n)` или `Smooth`) и тип (клавиатура, мышь, другое). Панель показывает только то, что они разрешают (`devices::caps`). То, что может сообщить только само устройство (например, зоны и клавиши LampArray), драйвер регистрирует, когда находит устройство.
-3. Подключите драйвер в `discover()`. Если устройство беспроводное, ещё в `batteries()` и `answering()`. Свой драйвер должен идти раньше общих `lamparray`/`via`: `discover()` оставляет первое устройство с данным id.
-4. Добавьте строку в `interface_note()`, чтобы `--diagnose` отмечал устройство как поддерживаемое.
-5. Добавьте устройство в таблицы `README.md` и `README.ru.md`.
+2. Добавьте `pub mod <имя>;` и `Kind` в `NATIVE` в `src/devices/mod.rs`. Ключ — это начало id, в нём не должно быть `-`. Добавьте название на двух языках, значок из Segoe Fluent Icons и то, что умеет модель: зоны, цвета клавиш, эффекты, скорость (`Speed::None`, `Steps(n)` или `Smooth`) и тип (клавиатура, мышь, другое). Панель показывает только то, что они разрешают (`devices::caps`). То, что может сообщить только само устройство (например, зоны и клавиши LampArray), драйвер регистрирует, когда находит устройство.
+3. Опишите драйвер в одном месте — `DRIVER` в конце своего модуля — и добавьте его в `DRIVERS` в `src/devices/mod.rs`. Свой драйвер должен идти раньше общих `lamparray`/`via`: `discover()` оставляет первое устройство с данным id. Что драйвер не заполнил, ничего не делает (`..Driver::NONE`):
+
+   ```rust
+   pub const DRIVER: super::Driver = super::Driver {
+       // Every device it finds goes to the panel; d.no_link holds ids of wireless devices whose receiver is plugged in but which don't answer.
+       discover: |d| d.found.extend(find_all().into_iter().map(|m| super::Found { id: m.id.clone(), dev: Box::new(m) })),
+       // Wireless only: battery levels, and which devices answer (both are polled, so keep them cheap).
+       batteries: || find_all().into_iter().filter_map(|m| Some((m.id.clone(), m.battery()?))).collect(),
+       answering: || find_all().into_iter().map(|m| m.id).collect(),
+       // How --diagnose marks the interface.
+       note: |i| (i.vid == 0x1234 && i.usage_page == 0xFF00).then_some("SUPPORTED: My device"),
+       ..super::Driver::NONE
+   };
+   ```
+
+   Клавиатура с цветами клавиш заполняет ещё `open_for_keys` (см. `logitech.rs`).
+
+4. Добавьте устройство в таблицы `README.md` и `README.ru.md`.
 
 Что важно помнить:
 

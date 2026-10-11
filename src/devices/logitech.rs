@@ -471,6 +471,36 @@ pub fn spawn_watcher(on_change: impl Fn() + Send + Sync + 'static) {
     });
 }
 
+/// How the app finds Logitech keyboards (see `devices::DRIVERS`).
+pub const DRIVER: super::Driver = super::Driver {
+    discover,
+    batteries: || Logitech::find_all(SW_ID_POLL).into_iter().filter_map(|kb| Some((kb.id.clone(), kb.battery()?))).collect(),
+    answering: || Logitech::find_all(SW_ID_POLL).into_iter().map(|k| k.id).collect(),
+    open_for_keys: |id| match id.starts_with("logitech-") {
+        true => Logitech::find_id(SW_ID_EDITOR, id).map(|k| Box::new(k) as Box<dyn Device>),
+        false => None,
+    },
+    note: |i| match (i.vid, i.usage_page, i.usage) {
+        (VID, 0xFF00, 0x0002) if RECEIVER_PIDS.contains(&i.pid) => Some("SUPPORTED: Logitech receiver (HID++)"),
+        (VID, 0xFF00, 0x0002) => Some("Logitech HID++ (protocol known)"),
+        _ => None,
+    },
+};
+
+fn discover(d: &mut super::Discovery) {
+    let mut ids = Vec::new();
+    for kb in Logitech::find_all(SW_ID_APPLY) {
+        ids.push(kb.id.clone());
+        d.found.push(super::Found { id: kb.id.clone(), dev: Box::new(kb) });
+    }
+    let no_link = Logitech::no_link(&ids);
+    // Asleep already when the app started: which keyboard isn't known yet.
+    if no_link.is_empty() && Logitech::receiver_silent() {
+        d.no_link_kinds.push("logitech");
+    }
+    d.no_link.extend(no_link);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

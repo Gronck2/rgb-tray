@@ -48,7 +48,7 @@ This renders a view to a PNG. The file name picks the view: `*editor*` is the ke
 | `src/config.rs` | TOML settings in `%APPDATA%\rgbtray\config.toml`, presets |
 | `src/i18n.rs` | UI strings: `tr!("русский", "English")` in place |
 | `src/hid.rs` | Minimal Win32 HID layer: enumerate, open, feature/output/input reports |
-| `src/devices/mod.rs` | The `Device` trait, `KINDS` (every model), `discover()`, `interface_note()` |
+| `src/devices/mod.rs` | The `Device` trait, `kinds()` (every model), `DRIVERS` (every driver), `discover()` |
 | `src/devices/*.rs` | Drivers: `logitech` (HID++), `razer`, `asus` (Aura), `via` (QMK/VIA), `lamparray` (HID LampArray), `animation` (effects drawn by the app) |
 
 ## Adding a device
@@ -109,10 +109,25 @@ Logitech HID++ and ASUS Aura models are still in code: their drivers find what a
 
    `apply_zones`, `apply_keys`/`update_keys` and `battery` have defaults; implement them if the device has zones, per-key lighting or a battery. If the firmware has no breathing or spectrum, play them with `animation::start` the way `lamparray.rs` and `via.rs` do. A wireless device that is off but whose receiver is plugged in returns `Err(NO_LINK)`.
 
-2. Add `pub mod <name>;` and a `Kind` to `KINDS` in `src/devices/mod.rs`. The key is the id prefix and must not contain `-`. Add the name in both languages, a Segoe Fluent Icons glyph and what the model can do: zones, per-key colors, effects, speed (`Speed::None`, `Steps(n)` or `Smooth`) and class (keyboard, mouse, other). The panel shows only the controls these allow (`devices::caps`). What only the device itself can tell (like LampArray zones and keys) the driver registers when it finds the device.
-3. Hook the driver into `discover()`. If the device is wireless, also hook it into `batteries()` and `answering()`. A native driver must come before the generic `lamparray`/`via` ones, because `discover()` keeps the first device with a given id.
-4. Add a line to `interface_note()` so `--diagnose` marks the device as supported.
-5. Add the device to the tables in `README.md` and `README.ru.md`.
+2. Add `pub mod <name>;` and a `Kind` to `NATIVE` in `src/devices/mod.rs`. The key is the id prefix and must not contain `-`. Add the name in both languages, a Segoe Fluent Icons glyph and what the model can do: zones, per-key colors, effects, speed (`Speed::None`, `Steps(n)` or `Smooth`) and class (keyboard, mouse, other). The panel shows only the controls these allow (`devices::caps`). What only the device itself can tell (like LampArray zones and keys) the driver registers when it finds the device.
+3. Describe the driver in one place, a `DRIVER` at the end of your module, and add it to `DRIVERS` in `src/devices/mod.rs`. A native driver must come before the generic `lamparray`/`via` ones, because `discover()` keeps the first device with a given id. What the driver doesn't fill in does nothing (`..Driver::NONE`):
+
+   ```rust
+   pub const DRIVER: super::Driver = super::Driver {
+       // Every device it finds goes to the panel; d.no_link holds ids of wireless devices whose receiver is plugged in but which don't answer.
+       discover: |d| d.found.extend(find_all().into_iter().map(|m| super::Found { id: m.id.clone(), dev: Box::new(m) })),
+       // Wireless only: battery levels, and which devices answer (both are polled, so keep them cheap).
+       batteries: || find_all().into_iter().filter_map(|m| Some((m.id.clone(), m.battery()?))).collect(),
+       answering: || find_all().into_iter().map(|m| m.id).collect(),
+       // How --diagnose marks the interface.
+       note: |i| (i.vid == 0x1234 && i.usage_page == 0xFF00).then_some("SUPPORTED: My device"),
+       ..super::Driver::NONE
+   };
+   ```
+
+   A keyboard with per-key colors also fills in `open_for_keys` (see `logitech.rs`).
+
+4. Add the device to the tables in `README.md` and `README.ru.md`.
 
 Some things to keep in mind:
 

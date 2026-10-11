@@ -702,6 +702,20 @@ pub fn describe(info: &HidInfo) -> String {
     }
 }
 
+/// How the app finds HID LampArray devices without a driver of their own (see `devices::DRIVERS`).
+pub const DRIVER: super::Driver = super::Driver {
+    discover: |d| d.found.extend(find_all().into_iter().map(|l| super::Found { id: l.id.clone(), dev: Box::new(l) })),
+    open_for_keys: |id| match id.starts_with("lamparray-") {
+        true => find_all().into_iter().find(|d| d.id == id).map(|d| Box::new(d) as Box<dyn Device>),
+        false => None,
+    },
+    note: |i| match (i.usage_page, i.usage) {
+        (0x0059, 0x0001) => Some("HID LampArray (Windows Dynamic Lighting standard)"),
+        _ => None,
+    },
+    ..super::Driver::NONE
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;

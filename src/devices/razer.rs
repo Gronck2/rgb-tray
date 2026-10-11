@@ -165,3 +165,24 @@ impl Device for Razer {
         Some(Battery { percent: (level as u32 * 100 / 255) as u8, charging })
     }
 }
+
+/// How the app finds Razer devices (see `devices::DRIVERS`).
+pub const DRIVER: super::Driver = super::Driver {
+    discover: |d| {
+        for r in Razer::find_all() {
+            match r.id.clone() {
+                Some(id) => d.found.push(super::Found { id, dev: Box::new(r) }),
+                None => d.no_link_kinds.push(r.key()),
+            }
+        }
+    },
+    batteries: || Razer::find_all().into_iter().filter_map(|d| Some((d.id.clone()?, d.battery()?))).collect(),
+    answering: || Razer::find_all().into_iter().filter_map(|d| d.id).collect(),
+    // Lighting goes through 91-byte feature reports (the mouse, keyboard or other collection).
+    note: |i| match i.vid {
+        VID if i.feature_len == 91 && is_supported(i.pid) => Some("SUPPORTED: Razer"),
+        VID if i.feature_len == 91 => Some("Razer control interface (protocol known)"),
+        _ => None,
+    },
+    ..super::Driver::NONE
+};

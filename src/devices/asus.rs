@@ -97,6 +97,20 @@ impl Device for Asus {
     }
 }
 
+/// How the app finds the ASUS laptop keyboard (see `devices::DRIVERS`).
+pub const DRIVER: super::Driver = super::Driver {
+    discover: |d| {
+        if let Some(a) = Asus::find() {
+            d.found.push(super::Found { id: ID.into(), dev: Box::new(a) });
+        }
+    },
+    note: |i| match (i.vid, i.usage_page, i.usage) {
+        (VID, 0xFF31, 0x0079) => Some("SUPPORTED: ASUS Aura"),
+        _ => None,
+    },
+    ..super::Driver::NONE
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
