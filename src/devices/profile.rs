@@ -3,6 +3,7 @@
 //! `%APPDATA%\rgbtray\devices\*.toml`. A profile becomes a `Kind`, like a model written in Rust.
 
 use super::razer::RazerModel;
+use super::via::ViaModel;
 use super::{Class, Effect, Kind, Protocol, Speed};
 use serde::Deserialize;
 
@@ -13,6 +14,7 @@ const BUILT_IN: &[(&str, &str)] = &[
     ("razer-mice.toml", include_str!("../../profiles/razer-mice.toml")),
     ("razer-keyboards.toml", include_str!("../../profiles/razer-keyboards.toml")),
     ("razer-accessories.toml", include_str!("../../profiles/razer-accessories.toml")),
+    ("geekboard-macropad.toml", include_str!("../../profiles/geekboard-macropad.toml")),
 ];
 
 #[derive(Deserialize)]
@@ -36,6 +38,8 @@ struct Profile {
     /// The protocol and its parameters: exactly one section.
     #[serde(default)]
     razer: Option<RazerSection>,
+    #[serde(default)]
+    via: Option<ViaSection>,
     /// Someone checked the model on real hardware (the card says "untested" otherwise).
     #[serde(default)]
     tested: bool,
@@ -56,6 +60,18 @@ struct Zone {
     name: String,
     #[serde(default)]
     name_ru: Option<String>,
+}
+
+/// A QMK keyboard with VIA (raw HID FF60:0061); without a profile such a keyboard still works
+/// as the generic model, and the app draws breathing and spectrum.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ViaSection {
+    vid: u16,
+    pid: u16,
+    /// Firmware effect number for "Spectrum", if the firmware has a usable one.
+    #[serde(default)]
+    cycle_effect: Option<u8>,
 }
 
 /// The 90-byte Razer report (as documented by OpenRazer).
@@ -142,8 +158,8 @@ fn from_profile(p: Profile) -> Result<Kind, String> {
     if !effects.contains(&Effect::Off) {
         return Err("effects must include \"off\"".into());
     }
-    let (protocol, speed) = match p.razer {
-        Some(r) => {
+    let (protocol, speed, port_id) = match (p.razer, p.via) {
+        (Some(r), None) => {
             if r.pids.is_empty() || r.leds.is_empty() {
                 return Err("[razer]: pids and leds must not be empty".into());
             }
@@ -151,10 +167,19 @@ fn from_profile(p: Profile) -> Result<Kind, String> {
                 return Err(format!("zone {:#04x} is not one of [razer] leds", z.led));
             }
             let model = RazerModel { pids: leak_slice(r.pids), transaction_id: r.transaction_id, leds: leak_slice(r.leds), battery: r.battery };
-            // The Razer report has no effect speed.
-            (Protocol::Razer(Box::leak(Box::new(model))), Speed::None)
+            // The Razer report has no effect speed; the device reports a serial number.
+            (Protocol::Razer(Box::leak(Box::new(model))), Speed::None, false)
         }
-        None => return Err("no protocol section (e.g. [razer])".into()),
+        (None, Some(v)) => {
+            if !p.zones.is_empty() {
+                return Err("[via] keyboards have no zones".into());
+            }
+            let model = ViaModel { vid: v.vid, pid: v.pid, cycle: v.cycle_effect };
+            // QMK has no serial number: the id comes from the USB port.
+            (Protocol::Via(Box::leak(Box::new(model))), Speed::Smooth, true)
+        }
+        (None, None) => return Err("no protocol section ([razer] or [via])".into()),
+        (Some(_), Some(_)) => return Err("more than one protocol section".into()),
     };
     let name = leak(p.name);
     let zones = p
@@ -171,8 +196,7 @@ fn from_profile(p: Profile) -> Result<Kind, String> {
         icon,
         zones: leak_slice(zones),
         layout: None,
-        // The protocols profiles describe report a serial number.
-        port_id: false,
+        port_id,
         effects: leak_slice(effects),
         speed,
         class,
@@ -266,6 +290,19 @@ mod tests {
         assert_eq!(all[2].as_ref().unwrap().key, "c");
         // A single profile is one model.
         assert_eq!(parse_file(&text.replace("[[device]]", "").split("\n\n").next().unwrap().replace("[device.razer]", "[razer]")).len(), 1);
+    }
+
+    #[test]
+    fn via_profile() {
+        let (kinds, _) = load();
+        let pad = kinds.iter().find(|k| k.key == "macropad").unwrap();
+        let Protocol::Via(m) = pad.protocol else { panic!("macropad is not via") };
+        assert_eq!((m.vid, m.pid, m.cycle), (0x0483, 0xA372, Some(6)));
+        // QMK has no serial: the id comes from the port; the app sets any speed.
+        assert!(pad.port_id && pad.speed == Speed::Smooth && pad.tested);
+        assert_eq!(pad.icon, "\u{E92E}");
+        let both = "key = \"x\"\nname = \"X\"\nclass = \"keyboard\"\n[via]\nvid = 1\npid = 2\n[razer]\npids = [1]\ntransaction_id = 0x1F\nleds = [5]\n";
+        assert!(parse(both).unwrap_err().contains("more than one"));
     }
 
     #[test]

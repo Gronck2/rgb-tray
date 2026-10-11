@@ -1,0 +1,12 @@
+# Geekboard MacroPad v2 (QMK with VIA).
+key = "macropad"
+name = "Geekboard MacroPad"
+class = "keyboard"
+icon = "macropad"
+tested = true
+
+[via]
+vid = 0x0483
+pid = 0xA372
+# Mode 6 is a rainbow; its modes 2-5 blink single keys instead of breathing.
+cycle_effect = 6

@@ -24,24 +24,23 @@ const UNHANDLED: u8 = 0xFF;
 const EFFECT_OFF: u8 = 0;
 const EFFECT_STATIC: u8 = 1;
 
-/// Geekboard MacroPad v2.
-pub const MACROPAD_VID: u16 = 0x0483;
-pub const MACROPAD_PID: u16 = 0xA372;
-
-/// What is known about a particular keyboard beyond the protocol.
-struct Model {
-    vid: u16,
-    pid: u16,
-    /// Device id prefix (its kind in `kinds()`).
-    key: &'static str,
-    /// Firmware effect for "Spectrum", if it has a usable one.
-    cycle: Option<u8>,
+/// What is known about a particular keyboard beyond the protocol, from its profile
+/// (`profiles/*.toml`, section `[via]`). Keyboards without one work as the generic model.
+#[derive(Debug)]
+pub struct ViaModel {
+    pub vid: u16,
+    pub pid: u16,
+    /// Firmware effect for "Spectrum", if it has a usable one (otherwise the app draws it).
+    pub cycle: Option<u8>,
 }
 
-const MODELS: &[Model] = &[
-    // Mode 6 is a rainbow; its modes 2-5 blink single keys instead of breathing.
-    Model { vid: MACROPAD_VID, pid: MACROPAD_PID, key: "macropad", cycle: Some(6) },
-];
+/// The model (its id prefix and parameters) of a keyboard with a profile.
+pub fn model_of(vid: u16, pid: u16) -> Option<(&'static str, &'static ViaModel)> {
+    super::kinds().iter().find_map(|k| match k.protocol {
+        super::Protocol::Via(m) if m.vid == vid && m.pid == pid => Some((k.key, m)),
+        _ => None,
+    })
+}
 
 /// How lighting values are addressed.
 #[derive(Clone, Copy, Debug)]
@@ -100,14 +99,14 @@ pub fn find_all() -> Vec<Via> {
     let mut out = Vec::new();
     for info in hid::enumerate_all().into_iter().filter(|i| i.usage_page == USAGE_PAGE && i.usage == USAGE) {
         let Some(hid) = Hid::open(&info.path, true, true) else { continue };
-        let model = MODELS.iter().find(|m| m.vid == info.vid && m.pid == info.pid);
+        let model = model_of(info.vid, info.pid);
         let Some(channel) = probe(&hid) else { continue };
-        let key = model.map_or("via", |m| m.key);
+        let key = model.map_or("via", |m| m.0);
         let id = format!("{key}-{}", super::path_hash(&info.path));
         if model.is_none() {
             super::set_name(&id, &super::device_name(&info));
         }
-        out.push(Via { id, path: info.path.clone(), hid, channel, cycle: model.and_then(|m| m.cycle) });
+        out.push(Via { id, path: info.path.clone(), hid, channel, cycle: model.and_then(|m| m.1.cycle) });
     }
     out
 }

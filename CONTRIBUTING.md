@@ -65,10 +65,10 @@ If the report marks your device as one of these but something doesn't work, open
 ### 2. A new model of a protocol we know
 
 - **Razer:** write a profile: a small TOML file in `profiles/` (built in) or `%APPDATA%\rgbtray\devices\` (your own, no compiling). [docs/profiles.md](docs/profiles.md) describes the format; OpenRazer is a good source for the values. Add the file to `BUILT_IN` in `src/devices/profile.rs` to build it in.
-- **QMK/VIA with a known firmware effect:** add a line to `MODELS` in `src/devices/via.rs`. Without a line the keyboard still works; the app draws breathing and spectrum itself.
-- **Logitech HID++ 2.0** keyboards with the 0x8071/0x8081 features are close to the G915. The receiver ids and the layout (`src/keymap.rs`) are the parts that differ.
+- **QMK/VIA with a known firmware effect:** write a profile with a `[via]` section (see [docs/profiles.md](docs/profiles.md)). Without one the keyboard still works; the app draws breathing and spectrum itself.
+- **Logitech HID++ 2.0** keyboards with the 0x8071/0x8081 features are close to the G915. The receiver ids and the layout (`layouts/*.toml`, see `src/keymap.rs`) are the parts that differ.
 
-Profiles for the other known protocols (Logitech, ASUS Aura, QMK/VIA) are planned (see `ROADMAP.md`).
+Logitech HID++ and ASUS Aura models are still in code: their drivers find what a device can do by themselves, and a profile would only matter once there's a second model to tell apart (see `ROADMAP.md`).
 
 ### 3. A new protocol: write a driver
 

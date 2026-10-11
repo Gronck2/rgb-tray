@@ -166,10 +166,11 @@ pub enum Protocol {
     /// A driver of its own (Logitech, ASUS, QMK/VIA, LampArray), found by its code.
     Native,
     Razer(&'static razer::RazerModel),
+    Via(&'static via::ViaModel),
 }
 
-/// Every model in panel order: the first Rust model (the Logitech keyboard), the profile
-/// models, the other Rust models. Loaded once; profile problems go to the log and `--diagnose`.
+/// Every model in panel order: the Rust models, with the profile models by their protocol
+/// (see below). Loaded once; profile problems go to the log and `--diagnose`.
 pub fn kinds() -> &'static [Kind] {
     static KINDS: std::sync::OnceLock<Vec<Kind>> = std::sync::OnceLock::new();
     KINDS.get_or_init(|| {
@@ -178,9 +179,20 @@ pub fn kinds() -> &'static [Kind] {
             crate::log(&format!("profile {file}: {e}"));
         }
         *PROFILE_ERRORS.lock().unwrap() = errors;
-        let mut all: Vec<Kind> = NATIVE[..1].to_vec();
-        all.extend(profiles.into_iter().filter(|p| NATIVE.iter().all(|n| n.key != p.key)));
-        all.extend(NATIVE[1..].iter().cloned());
+        // Profile models sit by their protocol: Razer ones after the Logitech keyboard, QMK/VIA
+        // ones before the generic QMK/VIA model.
+        let profiles: Vec<Kind> = profiles.into_iter().filter(|p| NATIVE.iter().all(|n| n.key != p.key)).collect();
+        let of = |via: bool| profiles.iter().filter(move |p| matches!(p.protocol, Protocol::Via(_)) == via).cloned();
+        let mut all = Vec::new();
+        for n in NATIVE.iter() {
+            if n.key == "via" {
+                all.extend(of(true));
+            }
+            all.push(n.clone());
+            if n.key == "logitech" {
+                all.extend(of(false));
+            }
+        }
         all
     })
 }
@@ -255,8 +267,8 @@ pub fn caps(id: &str) -> Caps {
 
 const ALL_EFFECTS: &[Effect] = &Effect::ALL;
 
-/// Models written in Rust. The panel order is the first one, then the profile models, then the rest (`kinds`).
-const NATIVE: [Kind; 5] = [
+/// Models written in Rust, in panel order (profile models are placed among them by `kinds`).
+const NATIVE: [Kind; 4] = [
     Kind {
         key: "logitech",
         names: ("Logitech G915 TKL", "Logitech G915 TKL"),
@@ -279,19 +291,6 @@ const NATIVE: [Kind; 5] = [
         port_id: false,
         effects: ALL_EFFECTS,
         speed: Speed::Steps(3),
-        class: Class::Keyboard,
-        protocol: Protocol::Native,
-        tested: true,
-    },
-    Kind {
-        key: "macropad",
-        names: ("Geekboard MacroPad", "Geekboard MacroPad"),
-        icon: "\u{E92E}",
-        zones: &[],
-        layout: None,
-        port_id: true,
-        effects: ALL_EFFECTS,
-        speed: Speed::Smooth,
         class: Class::Keyboard,
         protocol: Protocol::Native,
         tested: true,
@@ -382,7 +381,7 @@ pub fn interface_note(i: &crate::hid::HidInfo) -> Option<&'static str> {
         (0x1532, _, _) if i.feature_len == 91 && razer::is_supported(i.pid) => "SUPPORTED: Razer",
         (0x1532, _, _) if i.feature_len == 91 => "Razer control interface (protocol known)",
         (0x0B05, 0xFF31, 0x0079) => "SUPPORTED: ASUS Aura",
-        (via::MACROPAD_VID, 0xFF60, 0x0061) if i.pid == via::MACROPAD_PID => "SUPPORTED: Geekboard MacroPad (VIA)",
+        (_, 0xFF60, 0x0061) if via::model_of(i.vid, i.pid).is_some() => "SUPPORTED: QMK/VIA keyboard with a profile",
         (_, 0xFF60, 0x0061) => "SUPPORTED: QMK/VIA keyboard (if it has RGB lighting)",
         (_, 0x0059, 0x0001) => "HID LampArray (Windows Dynamic Lighting standard)",
         (_, page, _) if page >= 0xFF00 => "vendor-specific",
@@ -555,6 +554,14 @@ mod tests {
         // A LampArray device not found in this run has no zones or keys yet.
         let la = caps("lamparray-DEADBEEF");
         assert!(la.zones.is_empty() && !la.per_key && la.speed == Speed::Smooth);
+    }
+
+    #[test]
+    fn panel_order_of_the_owners_devices() {
+        // Profiles sit by their protocol, so moving models to profiles keeps the panel order.
+        let pos = |key: &str| kinds().iter().position(|k| k.key == key).unwrap();
+        let order = ["logitech", "naga", "dock", "asus", "macropad", "via", "lamparray"].map(pos);
+        assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}");
     }
 
     #[test]

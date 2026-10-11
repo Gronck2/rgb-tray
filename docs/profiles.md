@@ -8,7 +8,7 @@ The built-in profiles are in [`profiles/`](../profiles) in the repository. A fil
 
 If a file has a mistake, RGB Tray skips it and says why in the device report (tray icon → Device report…, the "Device profiles" line) and in `%APPDATA%\rgbtray\rgbtray.log`.
 
-Protocols profiles support today: **Razer**. Profiles for Logitech HID++, ASUS Aura and QMK/VIA are planned.
+Protocols profiles support today: **Razer** and **QMK/VIA**.
 
 ## Example
 
@@ -65,3 +65,14 @@ Most Razer devices use the 90-byte control report that [OpenRazer](https://githu
 | `battery` | no | `true` if the device reports its battery level (wireless mice). |
 
 The Razer report has no effect speed, so the panel shows no speed slider for these devices.
+
+## `[via]`: QMK keyboards with VIA
+
+Any QMK keyboard with VIA and RGB lighting already works without a profile: the app finds it, and draws breathing and spectrum itself. A profile gives it a name, an icon and, if its firmware has a good rainbow effect, uses that for "Spectrum".
+
+| Field | Required | What it is |
+|---|---|---|
+| `vid`, `pid` | yes | USB vendor and product id of the keyboard (in the device report). |
+| `cycle_effect` | no | Number of the firmware effect to use for "Spectrum" (QMK RGB Matrix / RGBLight mode). Without it the app draws the spectrum. |
+
+QMK has no serial number, so a keyboard's settings are tied to its USB port. `[[zones]]` aren't supported for VIA keyboards. Example: [`profiles/geekboard-macropad.toml`](../profiles/geekboard-macropad.toml).
