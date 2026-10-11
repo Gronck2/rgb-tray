@@ -44,10 +44,16 @@ const EFFECT_OFF: u16 = 0x0000;
 const EFFECT_STATIC: u16 = 0x0001;
 const EFFECT_CYCLE: u16 = 0x0003;
 const EFFECT_BREATHE: u16 = 0x000A;
+// Byte layouts as in OpenRGB (LogitechG915Controller) and g810-led, which agree on them.
+const EFFECT_WAVE: u16 = 0x0004;
+const EFFECT_RIPPLE: u16 = 0x000B;
 
 /// Effect periods at normal speed.
 const BREATHE_PERIOD_MS: u16 = 4000;
 const CYCLE_PERIOD_MS: u16 = 10000;
+const WAVE_PERIOD_MS: u16 = 5000;
+/// Ripple speed: ms per step, 2 (fast) ..= 200 (slow).
+const RIPPLE_STEP_MS: f32 = 20.0;
 
 /// An effect period at the current speed setting.
 fn period_ms(normal: u16) -> u16 {
@@ -262,7 +268,20 @@ impl Device for Logitech {
                 let [ph, pl] = period_ms(CYCLE_PERIOD_MS).to_be_bytes();
                 (EFFECT_CYCLE, [0, 0, 0, 0, 0, ph, pl, brightness.clamp(1, 100), 0, 0])
             }
+            Effect::Wave => {
+                // Period low byte, direction (1 = horizontal), intensity, period high byte.
+                let [ph, pl] = period_ms(WAVE_PERIOD_MS).to_be_bytes();
+                (EFFECT_WAVE, [0, 0, 0, 0, 0, 0, pl, 0x01, brightness.clamp(1, 100), ph])
+            }
+            Effect::Ripple => {
+                let step = (RIPPLE_STEP_MS / super::speed_factor(super::speed())).round().clamp(2.0, 200.0) as u16;
+                let [sh, sl] = step.to_be_bytes();
+                (EFFECT_RIPPLE, [r, g, b, 0, sh, sl, 0, 0, 0, 0])
+            }
+            // Not in this firmware (the panel doesn't offer them): the color, steadily.
+            Effect::Reactive | Effect::Starlight => (EFFECT_STATIC, [r, g, b, 0, 0, 0, 0, 0, 0, 0]),
         };
+        let [ch, cl] = period_ms(CYCLE_PERIOD_MS).to_be_bytes();
         for (zone, ids) in self.zones.iter().enumerate() {
             // G915 firmware bug: breathing on the logo (zone 0), or the firmware "off" effect on
             // any zone, now and then makes the keyboard ignore every later effect until it is
@@ -271,6 +290,9 @@ impl Device for Logitech {
             let (id, params) = match (zone, id) {
                 (0, EFFECT_BREATHE) => (EFFECT_STATIC, [r, g, b, 0, 0, 0, 0, 0, 0, 0]),
                 (_, EFFECT_OFF) => (EFFECT_STATIC, [0; 10]),
+                // A zone without wave (the logo) cycles along; one without ripple shows the color.
+                (_, EFFECT_WAVE) if !ids.contains(&EFFECT_WAVE) => (EFFECT_CYCLE, [0, 0, 0, 0, 0, ch, cl, brightness.clamp(1, 100), 0, 0]),
+                (_, EFFECT_RIPPLE) if !ids.contains(&EFFECT_RIPPLE) => (EFFECT_STATIC, [r, g, b, 0, 0, 0, 0, 0, 0, 0]),
                 _ => (id, params),
             };
             // Going straight from one animation to another (breathing → spectrum) also hangs the

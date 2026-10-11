@@ -290,7 +290,7 @@ fn set_color(ids: &[String], c: Rgb) {
         dc.zones.clear();
         dc.per_key = false;
         // Picking a color while the light is off or cycling means "show this color".
-        if matches!(dc.effect, Effect::Off | Effect::Cycle) {
+        if !dc.effect.colored() {
             dc.effect = Effect::Static;
         }
     }
@@ -305,7 +305,7 @@ fn set_zone_color(id: &str, led: u8, c: Rgb) {
     let dc = cfg.device_mut(id);
     let leds: Vec<u8> = devices::zones_of(id).iter().map(|z| z.0).collect();
     dc.set_zone(led, c, &leds);
-    if matches!(dc.effect, Effect::Off | Effect::Cycle) {
+    if !dc.effect.colored() {
         dc.effect = Effect::Static;
     }
     cfg.save();

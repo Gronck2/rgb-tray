@@ -125,6 +125,14 @@ impl Razer {
                 Effect::Static => self.command(0x0F, 0x02, &[VARSTORE, led, 0x01, 0, 0, 0x01, r, g, b]),
                 Effect::Breathe => self.command(0x0F, 0x02, &[VARSTORE, led, 0x02, 0x01, 0, 0x01, r, g, b]),
                 Effect::Cycle => self.command(0x0F, 0x02, &[VARSTORE, led, 0x03, 0, 0, 0]),
+                // Only for models whose profile lists them (as OpenRazer drives them; untested).
+                // Wave: direction 1, speed 0x28 (OpenRazer's normal; lower is faster).
+                Effect::Wave => self.command(0x0F, 0x02, &[VARSTORE, led, 0x04, 0x01, 0x28, 0]),
+                // Reactive: speed 1..=4; starlight: speed 1..=3; both in the chosen color.
+                Effect::Reactive => self.command(0x0F, 0x02, &[VARSTORE, led, 0x05, 0, 0x02, 0x01, r, g, b]),
+                Effect::Starlight => self.command(0x0F, 0x02, &[VARSTORE, led, 0x07, 0, 0x02, 0x01, r, g, b]),
+                // No ripple in Razer firmware: the color, steadily.
+                Effect::Ripple => self.command(0x0F, 0x02, &[VARSTORE, led, 0x01, 0, 0, 0x01, r, g, b]),
             });
             match res {
                 Ok(_) => any_ok = true,

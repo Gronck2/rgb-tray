@@ -181,6 +181,14 @@ fn from_profile(p: Profile) -> Result<Kind, String> {
         (None, None) => return Err("no protocol section ([razer] or [via])".into()),
         (Some(_), Some(_)) => return Err("more than one protocol section".into()),
     };
+    // Effects beyond the basic four that the protocol's driver can send.
+    let extra: &[Effect] = match protocol {
+        Protocol::Razer(_) => &[Effect::Wave, Effect::Reactive, Effect::Starlight],
+        _ => &[],
+    };
+    if let Some(e) = effects.iter().find(|e| !Effect::ALL.contains(e) && !extra.contains(e)) {
+        return Err(format!("effect {e:?} is not available for this protocol"));
+    }
     let name = leak(p.name);
     let zones = p
         .zones
@@ -326,6 +334,10 @@ mod tests {
         assert!(err(&ok.replace("class = \"mouse\"", "class = \"toaster\"")).contains("toaster"));
         assert!(err(&ok.replace("leds = [0x01, 0x04]", "leds = []")).contains("leds"));
         assert!(err(&format!("effects = [\"static\"]\n{ok}")).contains("off"));
+        // Razer firmware has wave, reactive and starlight, but no ripple.
+        let k = parse(&format!("effects = [\"static\", \"wave\", \"reactive\", \"starlight\", \"off\"]\n{ok}")).unwrap();
+        assert!(k.effects.contains(&Effect::Wave) && k.effects.contains(&Effect::Starlight));
+        assert!(err(&format!("effects = [\"ripple\", \"off\"]\n{ok}")).contains("Ripple"));
         assert!(err(&format!("{ok}\n[[zones]]\nled = 0x09\nname = \"Wheel\"\n")).contains("zone"));
         assert!(err("key = \"x\"\nname = \"X\"\nclass = \"other\"\n").contains("protocol"));
     }

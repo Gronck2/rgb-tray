@@ -598,6 +598,12 @@ impl Device for LampArray {
             }
             // The standard has no effects: the app plays them frame by frame.
             Effect::Breathe | Effect::Cycle => self.start_animation(effect, color, Vec::new(), brightness),
+            // Not offered for LampArray: the nearest one the app draws.
+            Effect::Wave => self.start_animation(Effect::Cycle, color, Vec::new(), brightness),
+            Effect::Ripple | Effect::Reactive | Effect::Starlight => {
+                animation::stop(&self.path);
+                self.fill(color.scaled(brightness))
+            }
         };
         if ok {
             Ok(())

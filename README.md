@@ -36,6 +36,7 @@ A Razer device can often be added right away, without a new version: describe it
 - One panel for all devices: color, effect, brightness — for everything at once or per device.
 - Global brightness plus a per-device brightness on top of it.
 - Speed of breathing and spectrum, global and per device.
+- Firmware effects beyond the basic four under "More": wave and ripple on the Logitech G915, wave on ASUS laptop keyboards; Razer profiles can add wave, reactive and starlight.
 - Per-key editor for the Logitech keyboard: brush, eyedropper, rainbow, two-color gradient, WASD and letters-only presets, highlighting a word, saved schemes, ANSI/ISO layouts.
 - Presets with global hotkeys (including F13–F24 with Ctrl/Alt/Shift/Win).
 - Multiple identical devices with separate settings; devices are recognised by serial number.

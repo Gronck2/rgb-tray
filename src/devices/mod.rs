@@ -8,7 +8,6 @@ pub mod via;
 
 use crate::i18n::Text;
 use serde::{Deserialize, Serialize};
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Effect {
@@ -16,10 +15,21 @@ pub enum Effect {
     Breathe,
     Cycle,
     Off,
+    /// A rainbow running across the keyboard (firmware).
+    Wave,
+    /// Rings spreading from pressed keys (Logitech firmware).
+    Ripple,
+    /// Pressed keys light up and fade (Razer firmware).
+    Reactive,
+    /// Keys twinkle at random (Razer firmware).
+    Starlight,
 }
 
 impl Effect {
+    /// The effects every device has, on the panel's buttons.
     pub const ALL: [Effect; 4] = [Effect::Static, Effect::Breathe, Effect::Cycle, Effect::Off];
+    /// Effects only some firmware has, under "More" on the panel.
+    pub const EXTRA: [Effect; 4] = [Effect::Wave, Effect::Ripple, Effect::Reactive, Effect::Starlight];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -27,7 +37,30 @@ impl Effect {
             Effect::Breathe => tr!("Дыхание", "Breathing"),
             Effect::Cycle => tr!("Смена цветов", "Color cycle"),
             Effect::Off => tr!("Выключено", "Off"),
+            Effect::Wave => tr!("Волна", "Wave"),
+            Effect::Ripple => tr!("Рябь от нажатий", "Ripple"),
+            Effect::Reactive => tr!("Отклик на нажатия", "Reactive"),
+            Effect::Starlight => tr!("Звёзды", "Starlight"),
         }
+    }
+
+    /// The name on the panel's narrow "More" button.
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Effect::Ripple => tr!("Рябь", "Ripple"),
+            Effect::Reactive => tr!("Отклик", "Reactive"),
+            e => e.label(),
+        }
+    }
+
+    /// Moves over time: the speed setting matters.
+    pub fn animated(self) -> bool {
+        !matches!(self, Effect::Static | Effect::Off)
+    }
+
+    /// Shows the chosen color (the others are rainbow or dark).
+    pub fn colored(self) -> bool {
+        matches!(self, Effect::Static | Effect::Breathe | Effect::Ripple | Effect::Reactive | Effect::Starlight)
     }
 }
 
@@ -276,7 +309,7 @@ const NATIVE: [Kind; 4] = [
         zones: &[],
         layout: Some(crate::keymap::G915_TKL),
         port_id: false,
-        effects: ALL_EFFECTS,
+        effects: &[Effect::Static, Effect::Breathe, Effect::Cycle, Effect::Off, Effect::Wave, Effect::Ripple],
         speed: Speed::Smooth,
         class: Class::Keyboard,
         protocol: Protocol::Native,
@@ -289,7 +322,7 @@ const NATIVE: [Kind; 4] = [
         zones: &[],
         layout: None,
         port_id: false,
-        effects: ALL_EFFECTS,
+        effects: &[Effect::Static, Effect::Breathe, Effect::Cycle, Effect::Off, Effect::Wave],
         speed: Speed::Steps(3),
         class: Class::Keyboard,
         protocol: Protocol::Native,
@@ -549,7 +582,13 @@ mod tests {
         assert_eq!(naga.zones[0].1 .1, "Logo");
         assert!(!naga.has_speed() && !naga.per_key && naga.class == Class::Mouse);
         assert!(Effect::ALL.iter().all(|&e| naga.has_effect(e)));
-        assert!(caps("logitech-1A2B3C4D").per_key);
+        let g915 = caps("logitech-1A2B3C4D");
+        assert!(g915.per_key && g915.has_effect(Effect::Wave) && g915.has_effect(Effect::Ripple) && !g915.has_effect(Effect::Starlight));
+        assert!(caps("asus").has_effect(Effect::Wave) && !caps("asus").has_effect(Effect::Ripple));
+        // Extra effects are opt-in per profile: none for the Naga.
+        assert!(Effect::EXTRA.iter().all(|&e| !naga.has_effect(e)));
+        // Settings files spell them in lower case.
+        assert_eq!(toml::to_string(&std::collections::BTreeMap::from([("e", Effect::Starlight)])).unwrap().trim(), "e = \"starlight\"");
         assert_eq!(caps("asus").speed, Speed::Steps(3));
         // A LampArray device not found in this run has no zones or keys yet.
         let la = caps("lamparray-DEADBEEF");

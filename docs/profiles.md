@@ -45,7 +45,7 @@ battery = true
 | `name_ru` | no | Name in Russian, if it differs. |
 | `class` | yes | `keyboard`, `mouse` or `other`. Picks the icon and wording ("All" of a mouse is "Вся мышь" in Russian). |
 | `icon` | no | `keyboard`, `mouse`, `dock`, `laptop`, `macropad` or `light`. By default it follows `class`. |
-| `effects` | no | Effects the device can show, from `static`, `breathe`, `cycle`, `off`. All four by default; `off` is required. The panel greys out the rest. |
+| `effects` | no | Effects the device can show, from `static`, `breathe`, `cycle`, `off`, and for `[razer]` also `wave`, `reactive` (keys light up when pressed), `starlight` (keys twinkle). The basic four by default; `off` is required. The panel greys out the rest; the extra ones are under "More". Add extra effects only for a model that has them in its firmware (OpenRazer's `razerkbd_driver.c` shows which keyboards get wave, reactive and starlight). |
 | `tested` | no | `true` once someone has checked the model on real hardware. Until then its card says "untested", so that its owner knows a report is welcome. |
 | `[[zones]]` | no | Parts the panel can color separately: `led` (an id from the protocol section), `name`, `name_ru`. Without zones, the device has one color. |
 

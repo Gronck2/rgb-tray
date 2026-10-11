@@ -142,7 +142,7 @@ impl DeviceConfig {
 
     /// Breathes or cycles: the speed matters.
     pub fn animated(&self) -> bool {
-        !self.per_key && matches!(self.effect, Effect::Breathe | Effect::Cycle)
+        !self.per_key && self.effect.animated()
     }
 
     fn same_lighting(&self, other: &DeviceConfig) -> bool {
@@ -334,7 +334,7 @@ impl Config {
     pub fn uniform_color(&self, ids: &[String]) -> Option<Rgb> {
         let devices: Vec<DeviceConfig> = ids.iter().map(|id| self.device(id).visible()).collect();
         let first = devices.first()?;
-        let single = |d: &DeviceConfig| matches!(d.effect, Effect::Static | Effect::Breathe) && !d.per_key && d.zones.is_empty() && d.color == first.color;
+        let single = |d: &DeviceConfig| d.effect.colored() && !d.per_key && d.zones.is_empty() && d.color == first.color;
         devices.iter().all(single).then(|| first.rgb())
     }
 

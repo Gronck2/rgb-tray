@@ -93,6 +93,7 @@ const ICON_DELETE: &str = "\u{E74D}";
 const ICON_KEYBOARD: &str = "\u{E765}";
 const ICON_DOWNLOAD: &str = "\u{E896}";
 const ICON_OPEN: &str = "\u{E8A7}";
+const ICON_CHECK: &str = "\u{E73E}";
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
@@ -115,6 +116,10 @@ enum Hit {
     /// Lighting zone of the selected device (0 = whole device).
     Zone(usize),
     Effect(usize),
+    /// The "More" effect button: opens the list of effects only some firmware has.
+    MoreEffects,
+    /// An item of that list (index in `Effect::EXTRA`).
+    ExtraEffect(usize),
     Slider,
     /// The speed slider of breathing and spectrum.
     Speed,
@@ -493,9 +498,11 @@ fn lower_layout() -> Vec<(R, Hit)> {
         v.push((swatch_rect(i), Hit::Swatch(i)));
     }
     v.push((swatch_rect(PALETTE.len()), Hit::Custom));
-    let seg_w = (W - 2.0 * PAD) / 4.0;
     for i in (0..4).filter(|&i| effect_enabled(Effect::ALL[i])) {
-        v.push((R { x: PAD + i as f32 * seg_w, y: SEG_Y, w: seg_w, h: SEG_H }, Hit::Effect(i)));
+        v.push((effect_slot(slot_of(i)), Hit::Effect(i)));
+    }
+    if !extra_effects().is_empty() {
+        v.push((effect_slot(3), Hit::MoreEffects));
     }
     v.push((slider_rect(), Hit::Slider));
     if speed_shown() {
@@ -508,6 +515,13 @@ fn lower_layout() -> Vec<(R, Hit)> {
 
 fn hit_test(x: f32, y: f32) -> Option<Hit> {
     // An open menu takes every click.
+    if let Some((panel, items)) = effects_menu_layout() {
+        return Some(match items.iter().find(|(r, _)| r.contains(x, y)) {
+            Some(&(_, k)) => Hit::ExtraEffect(k),
+            None if panel.contains(x, y) => Hit::MenuBody,
+            None => Hit::MenuOutside,
+        });
+    }
     if let Some((panel, items)) = menu_layout() {
         return Some(match items.iter().find(|(r, _)| r.contains(x, y)) {
             Some(&(_, item)) => Hit::Menu(item),
@@ -680,7 +694,8 @@ fn menu_mods() -> u32 {
 }
 
 fn close_menu() -> bool {
-    MENU.lock().unwrap().take().is_some()
+    let effects = EFFECTS_MENU.swap(false, Ordering::Relaxed);
+    MENU.lock().unwrap().take().is_some() || effects
 }
 
 fn menu_preset() -> Option<usize> {
@@ -923,6 +938,53 @@ fn target_ids() -> Vec<String> {
 /// Some device the controls change can show this effect.
 fn effect_enabled(e: Effect) -> bool {
     target_ids().iter().any(|id| crate::devices::caps(id).has_effect(e))
+}
+
+/// The effect buttons: Static, Breathing, Spectrum, More ▾, Off (slot 3 is "More").
+fn effect_slot(slot: usize) -> R {
+    // Shares of the width by label length ("Статичный" is the longest, "Выкл." the shortest).
+    const SHARES: [f32; 5] = [1.25, 1.1, 1.0, 0.9, 0.75];
+    let unit = (W - 2.0 * PAD) / SHARES.iter().sum::<f32>();
+    let x = PAD + SHARES[..slot].iter().sum::<f32>() * unit;
+    R { x, y: SEG_Y, w: SHARES[slot] * unit, h: SEG_H }
+}
+
+/// The slot of a basic effect (index in `Effect::ALL`).
+fn slot_of(i: usize) -> usize {
+    if Effect::ALL[i] == Effect::Off {
+        4
+    } else {
+        i
+    }
+}
+
+/// Effects only some firmware has that a device the controls change can show.
+fn extra_effects() -> Vec<usize> {
+    (0..Effect::EXTRA.len()).filter(|&k| effect_enabled(Effect::EXTRA[k])).collect()
+}
+
+/// The list under "More" is open.
+static EFFECTS_MENU: AtomicBool = AtomicBool::new(false);
+
+/// The open list of extra effects: its card and items (index in `Effect::EXTRA`), under "More".
+fn effects_menu_layout() -> Option<(R, Vec<(R, usize)>)> {
+    if !EFFECTS_MENU.load(Ordering::Relaxed) {
+        return None;
+    }
+    let extra = extra_effects();
+    if extra.is_empty() {
+        return None;
+    }
+    // The effect buttons sit in the lower part, drawn shifted down by the device list.
+    let anchor = R { y: effect_slot(3).y + lower_y(), ..effect_slot(3) };
+    let w = 200.0;
+    let panel = R { x: (anchor.x + anchor.w - w).max(8.0), y: anchor.y + anchor.h + 4.0, w, h: 12.0 + extra.len() as f32 * MENU_ITEM_H };
+    let items = extra
+        .into_iter()
+        .enumerate()
+        .map(|(n, k)| (R { x: panel.x + 4.0, y: panel.y + 6.0 + n as f32 * MENU_ITEM_H, w: w - 8.0, h: MENU_ITEM_H }, k))
+        .collect();
+    Some((panel, items))
 }
 
 /// Labels of the zone switch: the whole device, then each zone.
@@ -1548,10 +1610,30 @@ impl Flyout {
         let seg = R { x: PAD, y: SEG_Y, w: W - 2.0 * PAD, h: SEG_H };
         self.fill(rt, seg, 6.0, t.card);
         self.stroke(rt, seg, 6.0, t.stroke, 1.0);
-        let seg_w = seg.w / 4.0;
         let effect = v.common_effect();
+        // "More": the chosen extra effect's name, or "More ▾"; pale when no device has any.
+        {
+            let r = effect_slot(3).inset(3.0);
+            let chosen = effect.filter(|e| Effect::EXTRA.contains(e));
+            let open = EFFECTS_MENU.load(Ordering::Relaxed);
+            if chosen.is_some() {
+                self.fill(rt, r, 4.0, t.accent);
+            } else if hover(Hit::MoreEffects) || open {
+                self.fill(rt, r, 4.0, t.card_hover);
+            }
+            let fg = if chosen.is_some() {
+                t.on_accent
+            } else if !extra_effects().is_empty() {
+                t.text
+            } else {
+                D2D1_COLOR_F { a: t.text2.a * 0.5, ..t.text2 }
+            };
+            let label = chosen.map_or(tr!("Ещё", "More"), |e| e.short_label());
+            self.text(rt, label, &f.center, R { w: r.w - 14.0, ..r }, fg);
+            self.text(rt, if open { ICON_CHEVRON_UP } else { ICON_CHEVRON_DOWN }, &f.icon_tiny, R { x: r.x + r.w - 20.0, w: 16.0, ..r }, fg);
+        }
         for (i, label) in EFFECT_LABELS.iter().enumerate() {
-            let r = R { x: seg.x + i as f32 * seg_w, y: seg.y, w: seg_w, h: seg.h }.inset(3.0);
+            let r = effect_slot(slot_of(i)).inset(3.0);
             let on = effect == Some(Effect::ALL[i]);
             if on {
                 self.fill(rt, r, 4.0, t.accent);
@@ -1707,6 +1789,7 @@ impl Flyout {
 
         rt.SetTransform(&Matrix3x2::identity());
         self.draw_menu(rt);
+        self.draw_effects_menu(rt, v);
     }
 
     /// One row of the device list.
@@ -2011,6 +2094,36 @@ impl Flyout {
     }
 
     /// The preset menu: a raised card over a dimmed panel.
+    /// The list of extra effects under "More", styled like the preset menu.
+    unsafe fn draw_effects_menu(&self, rt: &ID2D1RenderTarget, v: &View) {
+        let Some((panel, items)) = effects_menu_layout() else { return };
+        let t = &self.theme;
+        let f = &self.fmt;
+        for k in 1..=6 {
+            let d = k as f32 * 2.0;
+            self.fill(
+                rt,
+                R { x: panel.x - d + 1.0, y: panel.y - d + 4.0, w: panel.w + 2.0 * d - 2.0, h: panel.h + 2.0 * d - 2.0 },
+                8.0 + d,
+                col(0, 0, 0, 0.05),
+            );
+        }
+        self.fill(rt, panel, 8.0, t.bg);
+        self.fill(rt, panel, 8.0, t.card);
+        self.stroke(rt, panel, 8.0, t.stroke, 1.0);
+        let current = v.common_effect();
+        for (r, k) in items {
+            let e = Effect::EXTRA[k];
+            if self.hover == Some(Hit::ExtraEffect(k)) {
+                self.fill(rt, r, 4.0, t.card_hover);
+            }
+            if current == Some(e) {
+                self.text(rt, ICON_CHECK, &f.icon_tiny, R { x: r.x + 6.0, w: 20.0, ..r }, t.accent);
+            }
+            self.text(rt, e.label(), &f.sub, R { x: r.x + 32.0, w: r.w - 36.0, ..r }, t.text);
+        }
+    }
+
     unsafe fn draw_menu(&self, rt: &ID2D1RenderTarget) {
         let (Some((panel, items)), Some(i)) = (menu_layout(), menu_preset()) else { return };
         let Some(preset) = crate::config().presets.get(i).cloned() else { return };
@@ -2174,6 +2287,9 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32, card: usize, zone: u
             cfg.presets = vec![a, b, c];
             cfg.presets[2].brightness = 10;
         }
+    }
+    if std::env::var_os("RGBTRAY_DEMO_EFFECTS").is_some() {
+        EFFECTS_MENU.store(true, Ordering::Relaxed);
     }
     if std::env::var_os("RGBTRAY_DEMO_MENU").is_some() {
         open_menu(0, PAD + 40.0, lower_y() + PRESET_Y + 20.0);
@@ -2407,6 +2523,15 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
             }
         }
         Hit::Effect(i) => crate::set_effect(&target_ids(), Effect::ALL[i]),
+        Hit::MoreEffects => {
+            if !extra_effects().is_empty() {
+                EFFECTS_MENU.fetch_xor(true, Ordering::Relaxed);
+            }
+        }
+        Hit::ExtraEffect(k) => {
+            close_menu();
+            crate::set_effect(&target_ids(), Effect::EXTRA[k]);
+        }
         Hit::Autostart => {
             let on = !crate::autostart_enabled();
             crate::set_autostart(on);
