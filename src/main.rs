@@ -985,8 +985,34 @@ fn import_settings() {
                 };
                 ui::refresh();
                 match added {
-                    Ok(name) => message(&format!("{} «{name}».", tr!("Добавлен пресет", "Added the preset")), false),
-                    Err(e) => message(&format!("{}\n{e}", tr!("Не удалось прочитать пресет:", "Could not read the preset:")), true),
+                    Ok(p) if p.matched == p.total => message(&format!("{} «{}».", tr!("Добавлен пресет", "Added the preset"), p.name), false),
+                    Ok(p) => {
+                        let mut text = format!(
+                            "{} «{}»: {} {} {} {}.",
+                            tr!("Добавлен пресет", "Added the preset"),
+                            p.name,
+                            p.matched,
+                            tr!("из", "of"),
+                            p.total,
+                            tr!("устройств подошли к вашим", "devices match yours"),
+                        );
+                        if !p.missing.is_empty() {
+                            text += &format!("\n{} {}.", tr!("Нет у вас:", "Not here:"), p.missing.join(", "));
+                        }
+                        message(&text, false)
+                    }
+                    Err(config::ImportError::NoDevices(models)) => message(
+                        &format!(
+                            "{}\n{} {}.",
+                            tr!("Пресет не добавлен: ни одного его устройства у вас нет.", "The preset was not added: none of its devices is here."),
+                            tr!("В нём:", "It is for:"),
+                            models.join(", ")
+                        ),
+                        true,
+                    ),
+                    Err(config::ImportError::Unreadable(e)) => {
+                        message(&format!("{}\n{e}", tr!("Не удалось прочитать пресет:", "Could not read the preset:")), true)
+                    }
                 }
             }
             config::FileKind::Settings => {

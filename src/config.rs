@@ -227,6 +227,25 @@ pub enum FileKind {
     Other,
 }
 
+/// A shared preset that was added (`Config::import_preset`).
+#[derive(Debug, PartialEq)]
+pub struct ImportedPreset {
+    pub name: String,
+    /// Devices of the file that found one here, of `total`.
+    pub matched: usize,
+    pub total: usize,
+    /// Models of the file not here (names).
+    pub missing: Vec<String>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ImportError {
+    /// Not a preset file this version can read.
+    Unreadable(String),
+    /// None of its devices is here: the models it has.
+    NoDevices(Vec<String>),
+}
+
 /// Snapshot of all lighting settings, switchable in one click or by hotkey.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Preset {
@@ -404,21 +423,42 @@ impl Config {
         Some(format!("# RGB Tray preset. To add it: tray icon → Load settings or a preset…\n# Пресет RGB Tray. Чтобы добавить: значок в трее → Загрузить настройки или пресет…\n\n{body}"))
     }
 
-    /// Adds a shared preset (`preset_file`); returns its name. Devices of the file that aren't
-    /// here go to a device of the same model (another person's G915 → this G915), others
-    /// are left out; a name already taken gets a number.
-    pub fn import_preset(&mut self, text: &str) -> Result<String, String> {
-        let file: PresetFile = toml::from_str(text).map_err(|e| e.message().to_string())?;
+    /// Adds a shared preset (`preset_file`). Devices of the file that aren't here go to the
+    /// devices of the same model here (another person's G915 → this G915); with more of a model
+    /// here than in the file, the others get the first one's lighting too. Models not here are
+    /// left out, and a preset none of whose devices are here isn't added. A name already
+    /// taken gets a number.
+    pub fn import_preset(&mut self, text: &str) -> Result<ImportedPreset, ImportError> {
+        let file: PresetFile = toml::from_str(text).map_err(|e| ImportError::Unreadable(e.message().to_string()))?;
         let mut preset = file.rgbtray_preset;
-        // Devices that are here keep theirs first, then the others take a free one of their model.
+        let total = preset.devices.len();
+        // Devices that are here keep theirs first.
         let (mine, foreign): (Vec<_>, Vec<_>) = std::mem::take(&mut preset.devices).into_iter().partition(|(id, _)| self.devices.contains_key(id));
+        let mut matched = mine.len();
         let mut devices: BTreeMap<String, DeviceConfig> = mine.into_iter().collect();
         // By the id's model prefix itself: `kind_of` takes an unknown model for the first one.
         let model = |id: &str| id.split('-').next().unwrap_or(id).to_string();
-        for (id, d) in foreign {
-            if let Some(local) = self.devices.keys().find(|k| model(k) == model(&id) && !devices.contains_key(*k)).cloned() {
-                devices.insert(local, d);
+        let mut missing: Vec<String> = Vec::new();
+        let mut models: Vec<String> = foreign.iter().map(|(id, _)| model(id)).collect();
+        models.sort();
+        models.dedup();
+        for m in models {
+            let theirs: Vec<&DeviceConfig> = foreign.iter().filter(|(id, _)| model(id) == m).map(|(_, d)| d).collect();
+            let free: Vec<String> = self.devices.keys().filter(|k| model(k) == m && !devices.contains_key(*k)).cloned().collect();
+            if free.is_empty() {
+                let name = kinds().iter().find(|k| k.key == m).map_or(m.clone(), |k| k.name().to_string());
+                missing.extend(std::iter::repeat_n(name, theirs.len()));
+                continue;
             }
+            matched += theirs.len().min(free.len());
+            // In order; devices left over here take the first one's lighting.
+            for (k, local) in free.into_iter().enumerate() {
+                devices.insert(local, theirs.get(k).unwrap_or(&theirs[0]).lighting());
+            }
+        }
+        missing.dedup();
+        if devices.is_empty() {
+            return Err(ImportError::NoDevices(missing));
         }
         preset.devices = devices;
         preset.hotkey = None;
@@ -430,7 +470,7 @@ impl Config {
         }
         let name = preset.name.clone();
         self.presets.push(preset);
-        Ok(name)
+        Ok(ImportedPreset { name, matched, total, missing })
     }
 
     /// What a file to load is: a shared preset, all settings, or neither. A settings file must
@@ -942,7 +982,10 @@ mod tests {
         mine.devices.insert("logitech-1111".into(), device(Effect::Static, "#FFFFFF"));
         mine.devices.insert("naga-2222".into(), device(Effect::Static, "#FFFFFF"));
         mine.presets.push(mine.snapshot("Night".into()));
-        assert_eq!(mine.import_preset(&file).unwrap(), "Night (2)");
+        let added = mine.import_preset(&file).unwrap();
+        assert_eq!(added.name, "Night (2)");
+        assert_eq!((added.matched, added.total), (2, 3));
+        assert_eq!(added.missing, ["Razer Basilisk V3"]);
         let p = &mine.presets[1];
         assert!(p.hotkey.is_none());
         let ids: Vec<&String> = p.devices.keys().collect();
@@ -951,6 +994,41 @@ mod tests {
         assert_eq!(p.devices["naga-2222"].rgb(), Rgb(255, 0, 0));
         mine.load_preset(&mine.presets[1].clone());
         assert_eq!(mine.devices["naga-2222"].rgb(), Rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn shared_preset_lights_every_device_of_a_model() {
+        let mut theirs = Config::default();
+        theirs.devices.insert("logitech-AAAA".into(), device(Effect::Breathe, "#00FF00"));
+        theirs.presets.push(theirs.snapshot("Green".into()));
+        let file = theirs.preset_file(0).unwrap();
+
+        // Two G915s here, one in the file: both get its lighting.
+        let mut mine = Config::default();
+        for id in ["logitech-1111", "logitech-2222"] {
+            mine.devices.insert(id.into(), device(Effect::Static, "#FFFFFF"));
+        }
+        let added = mine.import_preset(&file).unwrap();
+        assert_eq!((added.matched, added.total), (1, 1));
+        assert!(added.missing.is_empty());
+        for id in ["logitech-1111", "logitech-2222"] {
+            assert_eq!(mine.presets[0].devices[id].effect, Effect::Breathe);
+            assert_eq!(mine.presets[0].devices[id].rgb(), Rgb(0, 255, 0));
+        }
+    }
+
+    #[test]
+    fn shared_preset_for_other_devices_is_not_added() {
+        let mut theirs = Config::default();
+        theirs.devices.insert("basiliskv3-CCCC".into(), device(Effect::Static, "#FF0000"));
+        theirs.presets.push(theirs.snapshot("Red".into()));
+        let file = theirs.preset_file(0).unwrap();
+
+        let mut mine = Config::default();
+        mine.devices.insert("logitech-1111".into(), device(Effect::Static, "#FFFFFF"));
+        assert_eq!(mine.import_preset(&file), Err(ImportError::NoDevices(vec!["Razer Basilisk V3".into()])));
+        assert!(mine.presets.is_empty());
+        assert!(matches!(mine.import_preset("not toml ["), Err(ImportError::Unreadable(_))));
     }
 
     #[test]
