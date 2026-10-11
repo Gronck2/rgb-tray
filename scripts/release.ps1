@@ -19,5 +19,9 @@ if ($Install) {
     # Wait for the setup process only: Start-Process -Wait would also wait for the app it launches.
     $p = [System.Diagnostics.Process]::Start((Resolve-Path $setup).Path, '--quiet')
     $p.WaitForExit()
+    if ($p.ExitCode -ne 0) {
+        Write-Error "Install of $version failed (see %APPDATA%\rgbtray\rgbtray.log); is the running app hung?"
+        exit 1
+    }
     Write-Host "Installed $version"
 }

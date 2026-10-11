@@ -73,7 +73,7 @@ pub struct Logitech {
     feat_keys: u8,
     feat_battery: u8,
     /// Effect IDs supported by each zone, indexed by effect index.
-    zones: Vec<Vec<u16>>,
+    pub zones: Vec<Vec<u16>>,
     /// Unique id of this keyboard ("logitech-<unit id>").
     pub id: String,
 }

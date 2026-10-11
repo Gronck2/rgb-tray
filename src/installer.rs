@@ -363,6 +363,8 @@ pub fn run(args: &[String]) {
     if args.iter().any(|a| a == "--quiet") {
         if let Err(e) = install(&opts) {
             crate::log(&format!("installer: {e}"));
+            // Scripts (release.ps1 -Install) and the updater tell a failed install by this.
+            std::process::exit(1);
         }
         return;
     }

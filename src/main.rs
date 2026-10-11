@@ -622,6 +622,17 @@ fn diagnose_report() -> String {
     }
     let profiles = devices::kinds().iter().filter(|k| !matches!(k.protocol, devices::Protocol::Native)).count();
     let _ = writeln!(s, "Device profiles: {profiles} models (own profiles go in {})", devices::profile::user_dir().display());
+    // Firmware effects of Logitech keyboards (0x8071 effect ids per zone): what more they could show.
+    let logitech = {
+        let _guard = APPLY_LOCK.lock().unwrap();
+        devices::logitech::Logitech::find_all(devices::logitech::SW_ID_POLL)
+    };
+    for kb in &logitech {
+        for (zone, ids) in kb.zones.iter().enumerate() {
+            let ids: Vec<String> = ids.iter().map(|e| format!("{e:04X}")).collect();
+            let _ = writeln!(s, "  {} zone {zone} effects: {}", short_id(&kb.id), ids.join(" "));
+        }
+    }
     for (file, e) in devices::PROFILE_ERRORS.lock().unwrap().iter() {
         let _ = writeln!(s, "  {file}: {e}");
     }
@@ -1330,6 +1341,26 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The config lock is held to the end of the statement that takes it, so a second
+    /// `config()` in the same statement waits forever (the tray menu hung that way in 0.6.13).
+    #[test]
+    fn one_config_lock_per_statement() {
+        let needle = concat!("config", "()");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = vec![root.clone(), root.join("devices")];
+        let mut checked = 0;
+        while let Some(dir) = files.pop() {
+            for path in std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "rs")) {
+                let text = std::fs::read_to_string(&path).unwrap();
+                for statement in text.split(';') {
+                    assert!(statement.matches(needle).count() < 2, "{}: two config locks in one statement:\n{statement}", path.display());
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked > 10);
+    }
 
     #[test]
     fn short_ids() {

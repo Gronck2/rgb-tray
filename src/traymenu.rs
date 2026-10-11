@@ -186,6 +186,12 @@ unsafe fn open() -> windows::core::Result<()> {
     DwmSetWindowAttribute(hwnd, 20, &dark as *const u32 as _, 4);
 
     let keyboard = crate::PRESENT.lock().unwrap().iter().find(|id| crate::devices::caps(id).per_key).cloned();
+    // One lock of the config: a guard taken inside the struct literal below would live to the
+    // end of the statement, and a second one there would wait for it forever.
+    let (follow_display, check_updates) = {
+        let cfg = crate::config();
+        (cfg.follow_display, cfg.check_updates)
+    };
     let menu = Menu {
         hwnd,
         scale,
@@ -198,8 +204,8 @@ unsafe fn open() -> windows::core::Result<()> {
         tracking: false,
         keyboard,
         autostart: crate::autostart_enabled(),
-        follow_display: crate::config().follow_display,
-        check_updates: crate::config().check_updates,
+        follow_display,
+        check_updates,
     };
     MENU.with(|m| *m.borrow_mut() = Some(menu));
     ShowWindow(hwnd, SW_SHOW);
