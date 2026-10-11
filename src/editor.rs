@@ -538,7 +538,7 @@ unsafe fn create_window() -> windows::core::Result<()> {
 /// Renders the editor into a PNG file (no window needed), for checking the look.
 pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Result<()> {
     if target().is_empty() {
-        let first = crate::PRESENT.lock().unwrap().iter().find(|id| crate::devices::has_per_key(id)).cloned();
+        let first = crate::PRESENT.lock().unwrap().iter().find(|id| crate::devices::caps(id).per_key).cloned();
         *TARGET.lock().unwrap() = first.unwrap_or_else(|| "logitech".into());
     }
 

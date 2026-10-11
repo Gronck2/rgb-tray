@@ -242,7 +242,7 @@ fn apply_all() {
             devices::set_speed(cfg.effective_speed(&f.id));
             let res = if display == DISPLAY_OFF {
                 f.dev.apply(Effect::Off, dc.rgb(), brightness)
-            } else if devices::has_per_key(&f.id) && dc.per_key {
+            } else if devices::caps(&f.id).per_key && dc.per_key {
                 f.dev.apply_keys(&dc.all_keys(), brightness)
             } else if !dc.zones.is_empty() && !devices::zones_of(&f.id).is_empty() {
                 let colors: Vec<(u8, Rgb)> = devices::zones_of(&f.id).iter().map(|&(led, _)| (led, dc.zone_rgb(led))).collect();
@@ -315,7 +315,8 @@ fn set_zone_color(id: &str, led: u8, c: Rgb) {
 
 fn set_effect(ids: &[String], e: Effect) {
     let mut cfg = config();
-    for id in ids {
+    // Devices that can't show the effect keep theirs.
+    for id in ids.iter().filter(|id| devices::caps(id).has_effect(e)) {
         let dc = cfg.device_mut(id);
         dc.effect = e;
         dc.per_key = false;

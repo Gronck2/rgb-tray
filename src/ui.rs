@@ -23,7 +23,7 @@ use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFEC
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use crate::devices::{kind_of, speed_factor, Effect, Rgb, NORMAL_SPEED};
+use crate::devices::{kind_of, speed_factor, Class, Effect, Rgb, Speed, NORMAL_SPEED};
 
 // ---------------------------------------------------------------- layout (in DIPs)
 
@@ -366,7 +366,7 @@ const SPEED_THUMB: f32 = 7.0;
 fn speed_shown() -> bool {
     let ids = selected().map_or_else(crate::active_ids, |id| vec![id]);
     let cfg = crate::config();
-    ids.iter().any(|id| cfg.device(id).visible().animated())
+    ids.iter().any(|id| cfg.device(id).visible().animated() && crate::devices::caps(id).has_speed())
 }
 
 /// Height of the header strip by which a pinned panel can be dragged.
@@ -408,7 +408,7 @@ fn name_width(name: &str) -> f32 {
 /// Name area of a device card, up to its buttons.
 fn name_rect(card: R, row: &Row) -> R {
     let buttons_x = match row {
-        Row::Device(id) if crate::devices::has_per_key(id) => keys_button_rect(card).x,
+        Row::Device(id) if crate::devices::caps(id).per_key => keys_button_rect(card).x,
         Row::Archived(_) => forget_button_rect(card).x,
         _ => card.x + card.w - 50.0,
     };
@@ -464,7 +464,7 @@ fn card_layout(rows: &[(R, Row)]) -> Vec<(R, Hit)> {
         }
         // Buttons on a card come first, so hit-testing finds them before the card.
         match row {
-            Row::Device(id) if crate::devices::has_per_key(id) => v.push((keys_button_rect(*r), Hit::Keys(i))),
+            Row::Device(id) if crate::devices::caps(id).per_key => v.push((keys_button_rect(*r), Hit::Keys(i))),
             Row::Archived(_) => v.push((forget_button_rect(*r), Hit::Forget(i))),
             Row::ServiceWarning => v.push((warning_button_rect(*r), Hit::DisableService)),
             Row::LightingWarning => v.push((warning_button_rect(*r), Hit::LightingSettings)),
@@ -494,7 +494,7 @@ fn lower_layout() -> Vec<(R, Hit)> {
     }
     v.push((swatch_rect(PALETTE.len()), Hit::Custom));
     let seg_w = (W - 2.0 * PAD) / 4.0;
-    for i in 0..4 {
+    for i in (0..4).filter(|&i| effect_enabled(Effect::ALL[i])) {
         v.push((R { x: PAD + i as f32 * seg_w, y: SEG_Y, w: seg_w, h: SEG_H }, Hit::Effect(i)));
     }
     v.push((slider_rect(), Hit::Slider));
@@ -920,9 +920,14 @@ fn target_ids() -> Vec<String> {
     selected().map_or_else(crate::active_ids, |id| vec![id])
 }
 
+/// Some device the controls change can show this effect.
+fn effect_enabled(e: Effect) -> bool {
+    target_ids().iter().any(|id| crate::devices::caps(id).has_effect(e))
+}
+
 /// Labels of the zone switch: the whole device, then each zone.
 fn zone_labels() -> Vec<String> {
-    let whole = if selected().is_some_and(|id| kind_of(&id).key == "naga") { tr!("Вся мышь", "All") } else { tr!("Все", "All") };
+    let whole = if selected().is_some_and(|id| crate::devices::caps(&id).class == Class::Mouse) { tr!("Вся мышь", "All") } else { tr!("Все", "All") };
     std::iter::once(whole.to_string()).chain(selected_zones().into_iter().map(|z| z.1)).collect()
 }
 
@@ -1553,7 +1558,15 @@ impl Flyout {
             } else if hover(Hit::Effect(i)) {
                 self.fill(rt, r, 4.0, t.card_hover);
             }
-            self.text(rt, crate::i18n::pick(*label), &f.center, r, if on { t.on_accent } else { t.text });
+            // An effect none of the devices can show is pale and can't be clicked.
+            let fg = if on {
+                t.on_accent
+            } else if effect_enabled(Effect::ALL[i]) {
+                t.text
+            } else {
+                D2D1_COLOR_F { a: t.text2.a * 0.5, ..t.text2 }
+            };
+            self.text(rt, crate::i18n::pick(*label), &f.center, r, fg);
         }
         if v.speed_shown {
             let s = speed_rect();
@@ -1900,7 +1913,7 @@ impl Flyout {
         if d.present && d.cfg.brightness < 100 && d.cfg.effect != Effect::Off {
             sub.push((ICON_BRIGHTNESS, format!("{}%", d.cfg.brightness)));
         }
-        if d.present && d.cfg.speed != NORMAL_SPEED && d.cfg.animated() {
+        if d.present && d.cfg.speed != NORMAL_SPEED && d.cfg.animated() && crate::devices::caps(&d.id).has_speed() {
             sub.push((ICON_SPEED, speed_label(d.cfg.speed)));
         }
         if let (true, Some(b)) = (d.present, d.battery) {
@@ -1967,7 +1980,7 @@ impl Flyout {
         }
 
         match row {
-            Row::Device(id) if crate::devices::has_per_key(id) => {
+            Row::Device(id) if crate::devices::caps(id).per_key => {
                 let kb = keys_button_rect(r);
                 self.fill(rt, kb, 4.0, if hover(Hit::Keys(i)) { t.card_hover } else { t.bg });
                 self.stroke(rt, kb, 4.0, t.stroke, 1.0);
@@ -2139,10 +2152,11 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32, card: usize, zone: u
             }
         }
         if std::env::var_os("RGBTRAY_DEMO_SPEED").is_some() {
-            if let Some(d) = cfg.devices.iter_mut().find(|(id, _)| id.starts_with("logitech")) {
-                d.1.effect = Effect::Breathe;
-                d.1.per_key = false;
-                d.1.speed = 75;
+            // The Naga too: its protocol has no speed, so it shows neither the slider nor the factor.
+            for (_, d) in cfg.devices.iter_mut().filter(|(id, _)| id.starts_with("logitech") || id.starts_with("naga")) {
+                d.effect = Effect::Breathe;
+                d.per_key = false;
+                d.speed = 75;
             }
         }
 
@@ -2264,11 +2278,19 @@ fn speed_value(x: f32) -> u8 {
     let s = speed_rect();
     let (x0, x1) = (s.x + SPEED_THUMB, s.x + s.w - SPEED_THUMB);
     let v = (((x - x0) / (x1 - x0)).clamp(0.0, 1.0) * 100.0).round() as u8;
-    // The normal speed is easy to hit again.
-    if v.abs_diff(NORMAL_SPEED) <= 3 {
-        NORMAL_SPEED
-    } else {
-        v
+    snap_speed(v, selected().map_or(Speed::Smooth, |id| crate::devices::caps(&id).speed))
+}
+
+/// A device with a few fixed speeds gets only those; elsewhere the normal speed is easy to hit again.
+fn snap_speed(v: u8, speed: Speed) -> u8 {
+    match speed {
+        Speed::Steps(n) if n >= 2 => {
+            let step = 100.0 / (n - 1) as f32;
+            ((v as f32 / step).round() * step).round() as u8
+        }
+        Speed::Steps(_) | Speed::None => NORMAL_SPEED,
+        Speed::Smooth if v.abs_diff(NORMAL_SPEED) <= 3 => NORMAL_SPEED,
+        Speed::Smooth => v,
     }
 }
 
@@ -2653,5 +2675,17 @@ mod tests {
         assert_eq!(speed_label(25), "×0.5");
         assert_eq!(speed_label(0), "×0.25");
         assert_eq!(speed_label(60), "×1.3");
+    }
+
+    #[test]
+    fn speed_snaps_to_steps() {
+        assert_eq!(snap_speed(20, Speed::Steps(3)), 0);
+        assert_eq!(snap_speed(30, Speed::Steps(3)), 50);
+        assert_eq!(snap_speed(80, Speed::Steps(3)), 100);
+        assert_eq!(snap_speed(40, Speed::Steps(5)), 50);
+        assert_eq!(snap_speed(10, Speed::Steps(5)), 0);
+        assert_eq!(snap_speed(90, Speed::None), NORMAL_SPEED);
+        assert_eq!(snap_speed(52, Speed::Smooth), NORMAL_SPEED);
+        assert_eq!(snap_speed(60, Speed::Smooth), 60);
     }
 }

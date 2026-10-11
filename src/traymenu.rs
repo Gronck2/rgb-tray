@@ -185,7 +185,7 @@ unsafe fn open() -> windows::core::Result<()> {
     let dark: u32 = theme.dark as u32;
     DwmSetWindowAttribute(hwnd, 20, &dark as *const u32 as _, 4);
 
-    let keyboard = crate::PRESENT.lock().unwrap().iter().find(|id| crate::devices::has_per_key(id)).cloned();
+    let keyboard = crate::PRESENT.lock().unwrap().iter().find(|id| crate::devices::caps(id).per_key).cloned();
     let menu = Menu {
         hwnd,
         scale,

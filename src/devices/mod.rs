@@ -148,6 +148,11 @@ pub struct Kind {
     /// The firmware has no serial number: the id comes from the USB port, so a device moved
     /// to another port takes over the settings of an absent one of the same kind.
     pub port_id: bool,
+    /// Effects the device can show.
+    pub effects: &'static [Effect],
+    /// How the speed of breathing and spectrum can be set.
+    pub speed: Speed,
+    pub class: Class,
 }
 
 impl Kind {
@@ -157,24 +162,144 @@ impl Kind {
     }
 }
 
+/// What a device is, for wording on the panel ("Вся мышь").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Class {
+    Keyboard,
+    Mouse,
+    Other,
+}
+
+/// How the speed of breathing and spectrum can be set.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Speed {
+    /// The protocol has no speed.
+    None,
+    /// A few fixed speeds, slowest first (ASUS Aura: 3).
+    Steps(u8),
+    /// Any speed (`speed_factor`).
+    Smooth,
+}
+
+/// What a device can do: the panel shows only these controls. The model gives what is known
+/// in advance; drivers add what they read from the device itself (LampArray zones and keys).
+#[derive(Clone, PartialEq, Debug)]
+pub struct Caps {
+    pub effects: &'static [Effect],
+    pub speed: Speed,
+    /// Independently lit zones: (LED / zone id, name (Russian, English)).
+    pub zones: Vec<(u8, (String, String))>,
+    /// Per-key colors (the key editor).
+    pub per_key: bool,
+    pub class: Class,
+}
+
+impl Caps {
+    pub fn has_effect(&self, e: Effect) -> bool {
+        self.effects.contains(&e)
+    }
+
+    /// Breathing or spectrum can run at another speed.
+    pub fn has_speed(&self) -> bool {
+        self.speed != Speed::None
+    }
+}
+
+/// Capabilities of a device, by id: its model's, with what its driver read from the device
+/// (only while it was found in this run). Works for disconnected devices too.
+pub fn caps(id: &str) -> Caps {
+    let kind = kind_of(id);
+    let mut zones: Vec<(u8, (String, String))> = kind.zones.iter().map(|&(led, (ru, en))| (led, (ru.to_string(), en.to_string()))).collect();
+    if zones.is_empty() {
+        zones = lamparray::zones(id).into_iter().map(|z| (z.led, z.names)).collect();
+    }
+    Caps { effects: kind.effects, speed: kind.speed, zones, per_key: kind.per_key || lamparray::has_keys(id), class: kind.class }
+}
+
+const ALL_EFFECTS: &[Effect] = &Effect::ALL;
+
 /// Every supported model, in panel order.
 pub const KINDS: [Kind; 7] = [
-    Kind { key: "logitech", names: ("Logitech G915 TKL", "Logitech G915 TKL"), icon: "\u{E765}", zones: &[], per_key: true, port_id: false },
-    Kind { key: "naga", names: ("Razer Naga V2 Pro", "Razer Naga V2 Pro"), icon: "\u{E962}", zones: &NAGA_ZONES, per_key: false, port_id: false },
-    Kind { key: "dock", names: ("Razer Mouse Dock Pro", "Razer Mouse Dock Pro"), icon: "\u{E772}", zones: &[], per_key: false, port_id: false },
-    Kind { key: "asus", names: ("Клавиатура ASUS", "ASUS keyboard"), icon: "\u{E7F8}", zones: &[], per_key: false, port_id: false },
-    Kind { key: "macropad", names: ("Geekboard MacroPad", "Geekboard MacroPad"), icon: "\u{E92E}", zones: &[], per_key: false, port_id: true },
+    Kind {
+        key: "logitech",
+        names: ("Logitech G915 TKL", "Logitech G915 TKL"),
+        icon: "\u{E765}",
+        zones: &[],
+        per_key: true,
+        port_id: false,
+        effects: ALL_EFFECTS,
+        speed: Speed::Smooth,
+        class: Class::Keyboard,
+    },
+    Kind {
+        key: "naga",
+        names: ("Razer Naga V2 Pro", "Razer Naga V2 Pro"),
+        icon: "\u{E962}",
+        zones: &NAGA_ZONES,
+        per_key: false,
+        port_id: false,
+        effects: ALL_EFFECTS,
+        speed: Speed::None,
+        class: Class::Mouse,
+    },
+    Kind {
+        key: "dock",
+        names: ("Razer Mouse Dock Pro", "Razer Mouse Dock Pro"),
+        icon: "\u{E772}",
+        zones: &[],
+        per_key: false,
+        port_id: false,
+        effects: ALL_EFFECTS,
+        speed: Speed::None,
+        class: Class::Other,
+    },
+    Kind {
+        key: "asus",
+        names: ("Клавиатура ASUS", "ASUS keyboard"),
+        icon: "\u{E7F8}",
+        zones: &[],
+        per_key: false,
+        port_id: false,
+        effects: ALL_EFFECTS,
+        speed: Speed::Steps(3),
+        class: Class::Keyboard,
+    },
+    Kind {
+        key: "macropad",
+        names: ("Geekboard MacroPad", "Geekboard MacroPad"),
+        icon: "\u{E92E}",
+        zones: &[],
+        per_key: false,
+        port_id: true,
+        effects: ALL_EFFECTS,
+        speed: Speed::Smooth,
+        class: Class::Keyboard,
+    },
     // Any QMK keyboard with VIA support and RGB lighting.
-    Kind { key: "via", names: ("Клавиатура QMK", "QMK keyboard"), icon: "\u{E765}", zones: &[], per_key: false, port_id: true },
+    Kind {
+        key: "via",
+        names: ("Клавиатура QMK", "QMK keyboard"),
+        icon: "\u{E765}",
+        zones: &[],
+        per_key: false,
+        port_id: true,
+        effects: ALL_EFFECTS,
+        speed: Speed::Smooth,
+        class: Class::Keyboard,
+    },
     // Any device with the standard HID LampArray interface and no driver of its own.
-    Kind { key: "lamparray", names: ("Устройство LampArray", "LampArray device"), icon: "\u{E82F}", zones: &[], per_key: false, port_id: true },
+    Kind {
+        key: "lamparray",
+        names: ("Устройство LampArray", "LampArray device"),
+        icon: "\u{E82F}",
+        zones: &[],
+        per_key: false,
+        port_id: true,
+        effects: ALL_EFFECTS,
+        speed: Speed::Smooth,
+        class: Class::Other,
+    },
 ];
-
-/// The device has per-key colors (the key editor): a model with them (G915), or a LampArray
-/// keyboard whose lamps are bound to keys.
-pub fn has_per_key(id: &str) -> bool {
-    kind_of(id).per_key || lamparray::has_keys(id)
-}
 
 /// Opens a keyboard for the key editor, by id.
 pub fn open_for_keys(id: &str) -> Option<Box<dyn Device>> {
@@ -219,11 +344,7 @@ pub fn device_name(info: &crate::hid::HidInfo) -> String {
 /// Independently lit zones of a device: (zone / LED id, name in the interface language).
 /// Fixed for a model (Naga), or read from the device (LampArray, incl. the ASUS keyboard).
 pub fn zones_of(id: &str) -> Vec<(u8, String)> {
-    let kind = kind_of(id);
-    if !kind.zones.is_empty() {
-        return kind.zones.iter().map(|&(led, name)| (led, crate::i18n::pick(name).to_string())).collect();
-    }
-    lamparray::zones(id).into_iter().map(|z| (z.led, if crate::i18n::en() { z.names.1 } else { z.names.0 })).collect()
+    caps(id).zones.into_iter().map(|(led, (ru, en))| (led, if crate::i18n::en() { en } else { ru })).collect()
 }
 
 /// Independently lit zones of the Naga V2 Pro: (LED id, name).
@@ -396,6 +517,27 @@ mod tests {
             assert!(!k.key.contains('-'), "{}", k.key);
             assert!(KINDS[i + 1..].iter().all(|o| o.key != k.key), "{}", k.key);
         }
+    }
+
+    #[test]
+    fn caps_come_from_the_model() {
+        // A disconnected Naga still has its zones, no speed, and is a mouse.
+        let naga = caps("naga-123456H78900012");
+        assert_eq!(naga.zones.iter().map(|z| z.0).collect::<Vec<_>>(), vec![0x04, 0x05]);
+        assert_eq!(naga.zones[0].1 .1, "Logo");
+        assert!(!naga.has_speed() && !naga.per_key && naga.class == Class::Mouse);
+        assert!(Effect::ALL.iter().all(|&e| naga.has_effect(e)));
+        assert!(caps("logitech-1A2B3C4D").per_key);
+        assert_eq!(caps("asus").speed, Speed::Steps(3));
+        // A LampArray device not found in this run has no zones or keys yet.
+        let la = caps("lamparray-DEADBEEF");
+        assert!(la.zones.is_empty() && !la.per_key && la.speed == Speed::Smooth);
+    }
+
+    #[test]
+    fn every_model_can_be_switched_off() {
+        // "Off" is how the app blanks devices with the display; every model needs it.
+        assert!(KINDS.iter().all(|k| k.effects.contains(&Effect::Off)));
     }
 
     #[test]

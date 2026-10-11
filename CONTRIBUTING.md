@@ -64,7 +64,7 @@ If the report marks your device as one of these but something doesn't work, open
 
 ### 2. A new model of a protocol we know
 
-- **Razer:** add a line to `MODELS` in `src/devices/razer.rs` (product id, transaction id, LED ids, battery). OpenRazer's device list is a good source for these values. A model that isn't a Naga or the dock also needs its own `Kind` in `KINDS` (name, icon, zones).
+- **Razer:** add a line to `MODELS` in `src/devices/razer.rs` (product id, transaction id, LED ids, battery). OpenRazer's device list is a good source for these values. A model that isn't a Naga or the dock also needs its own `Kind` in `KINDS` (name, icon, zones, effects, speed, class).
 - **QMK/VIA with a known firmware effect:** add a line to `MODELS` in `src/devices/via.rs`. Without a line the keyboard still works; the app draws breathing and spectrum itself.
 - **Logitech HID++ 2.0** keyboards with the 0x8071/0x8081 features are close to the G915. The receiver ids and the layout (`src/keymap.rs`) are the parts that differ.
 
@@ -109,7 +109,7 @@ Device profiles in TOML, which add a model of a known protocol without compiling
 
    `apply_zones`, `apply_keys`/`update_keys` and `battery` have defaults; implement them if the device has zones, per-key lighting or a battery. If the firmware has no breathing or spectrum, play them with `animation::start` the way `lamparray.rs` and `via.rs` do. A wireless device that is off but whose receiver is plugged in returns `Err(NO_LINK)`.
 
-2. Add `pub mod <name>;` and a `Kind` to `KINDS` in `src/devices/mod.rs`. The key is the id prefix and must not contain `-`. Add the name in both languages, a Segoe Fluent Icons glyph and the zones.
+2. Add `pub mod <name>;` and a `Kind` to `KINDS` in `src/devices/mod.rs`. The key is the id prefix and must not contain `-`. Add the name in both languages, a Segoe Fluent Icons glyph and what the model can do: zones, per-key colors, effects, speed (`Speed::None`, `Steps(n)` or `Smooth`) and class (keyboard, mouse, other). The panel shows only the controls these allow (`devices::caps`). What only the device itself can tell (like LampArray zones and keys) the driver registers when it finds the device.
 3. Hook the driver into `discover()`. If the device is wireless, also hook it into `batteries()` and `answering()`. A native driver must come before the generic `lamparray`/`via` ones, because `discover()` keeps the first device with a given id.
 4. Add a line to `interface_note()` so `--diagnose` marks the device as supported.
 5. Add the device to the tables in `README.md` and `README.ru.md`.
