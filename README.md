@@ -32,6 +32,7 @@ Right-click the tray icon → **Request device support…**. RGB Tray lists your
 
 - One panel for all devices: color, effect, brightness — for everything at once or per device.
 - Global brightness plus a per-device brightness on top of it.
+- Speed of breathing and spectrum, global and per device.
 - Per-key editor for the Logitech keyboard: brush, eyedropper, rainbow, two-color gradient, WASD and letters-only presets, highlighting a word, saved schemes, ANSI/ISO layouts.
 - Presets with global hotkeys (including F13–F24 with Ctrl/Alt/Shift/Win).
 - Multiple identical devices with separate settings; devices are recognised by serial number.
@@ -74,6 +75,10 @@ cargo build --release            # target\release\rgbtray.exe
 ```
 
 The installer is the same executable: named `RGBTray-Setup-*.exe` (or started with `--install`) it installs itself.
+
+## Contributing
+
+Device reports, testing on your hardware, bug reports and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) explains how to build and check the app, how to add a device and what a pull request needs.
 
 ## Acknowledgements
 
