@@ -56,6 +56,8 @@ enum Hit {
     Fill,
     Clear,
     Preset(usize),
+    /// A firmware effect of the keyboard (index in `Effect::EXTRA`): wave, ripple…
+    Firmware(usize),
     /// Color dot `k` of the two-color preset `i`.
     Slot(usize, usize),
     WordBox,
@@ -211,7 +213,19 @@ static HISTORY: Mutex<Vec<(u8, Vec<Rgb>)>> = Mutex::new(Vec::new());
 const HISTORY_DEPTH: usize = 50;
 
 /// Sets a key color and remembers the old one for rollback.
+/// Shows a firmware effect (wave, ripple…) instead of the key colors; they stay saved, and
+/// painting a key brings them back.
+fn firmware_effect(e: Effect) {
+    crate::set_effect(&[target()], e);
+}
+
 fn set_tracked(cfg: &mut crate::config::Config, code: u8, c: Rgb) {
+    // Painting over a firmware effect switches the keyboard back to its key colors.
+    let d = keyboard(cfg);
+    if !d.per_key {
+        d.per_key = true;
+        send(Msg::Full);
+    }
     let old = keyboard(cfg).key_color(code);
     if old == c {
         return;
@@ -435,9 +449,11 @@ pub fn open(id: &str) {
             HISTORY.lock().unwrap().clear();
             *TARGET.lock().unwrap() = id.to_string();
         }
-        {
+        // A firmware effect (wave, ripple…) keeps running until a key is painted.
+        let firmware = {
             let mut cfg = crate::config();
             let d = cfg.device_mut(id);
+            let firmware = !d.per_key && Effect::EXTRA.contains(&d.effect);
             if !d.per_key {
                 // Keys never set (all of them the first time, or keys added to the layout later)
                 // start from what the keyboard shows now.
@@ -447,11 +463,14 @@ pub fn open(id: &str) {
                         d.set_key(code, c);
                     }
                 }
-                d.per_key = true;
+                d.per_key = !firmware;
                 cfg.save();
             }
+            firmware
+        };
+        if !firmware {
+            send(Msg::Full);
         }
-        send(Msg::Full);
         if let Some(h) = with_editor(|e| e.hwnd) {
             set_title(h);
             InvalidateRect(h, null(), 0);
@@ -855,6 +874,16 @@ impl Editor {
         for (i, name) in PRESETS.iter().enumerate() {
             x = if two_color(i) { self.two_color_chip(rt, x, y, i) } else { self.chip(rt, x, y, crate::i18n::pick(*name), Hit::Preset(i), false) } + 8.0;
         }
+        // Effects of the keyboard's own firmware: they replace the key colors until a key is painted.
+        let (effect, per_key) = {
+            let cfg = crate::config();
+            let d = cfg.device(&target());
+            (d.effect, d.per_key)
+        };
+        let caps = crate::devices::caps(&target());
+        for (k, &e) in Effect::EXTRA.iter().enumerate().filter(|(_, e)| caps.has_effect(**e)) {
+            x = self.chip(rt, x, y, e.short_label(), Hit::Firmware(k), !per_key && effect == e) + 8.0;
+        }
 
         // Row 3: word + layout switch.
         y += ROW_STEP;
@@ -980,6 +1009,7 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
         Hit::Fill => fill_all(brush),
         Hit::Clear => fill_all(OFF),
         Hit::Preset(i) => apply_preset(i, colors[i]),
+        Hit::Firmware(k) => firmware_effect(Effect::EXTRA[k]),
         Hit::WordBox => {}
 
         Hit::WordApply => {
