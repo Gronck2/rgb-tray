@@ -122,7 +122,7 @@ Some things to keep in mind:
 
 ### 4. A closed protocol
 
-If nobody has documented the protocol, it can be learned by recording what the vendor software sends while you change the lighting (Wireshark + USBPcap). Attach the capture to the device request, together with a list of what you changed and when. A step-by-step guide is planned.
+If nobody has documented the protocol, it can be learned by recording what the vendor software sends while you change the lighting (Wireshark + USBPcap). [docs/usb-capture.md](docs/usb-capture.md) explains it step by step. Attach the capture to the device request, together with a list of what you changed and when.
 
 ## Code style
 

@@ -60,6 +60,14 @@ body:
     validations:
       required: true
 
+  - type: textarea
+    id: capture
+    attributes:
+      label: USB capture (optional) / Запись USB-обмена (необязательно)
+      description: |
+        If the vendor software can drive the device, a recording of what it sends helps a lot. How to make one: docs/usb-capture.md. Attach the .pcapng (zipped) here, with what you changed and in which order.
+        Если фирменная программа управляет устройством, запись того, что она шлёт, очень поможет. Как записать: docs/usb-capture.ru.md. Приложите .pcapng (в zip) и напишите, что и в каком порядке меняли.
+
   - type: checkboxes
     id: testing
     attributes:
