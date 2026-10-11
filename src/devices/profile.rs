@@ -170,7 +170,7 @@ fn from_profile(p: Profile) -> Result<Kind, String> {
         names: (p.name_ru.map_or(name, leak), name),
         icon,
         zones: leak_slice(zones),
-        per_key: false,
+        layout: None,
         // The protocols profiles describe report a serial number.
         port_id: false,
         effects: leak_slice(effects),

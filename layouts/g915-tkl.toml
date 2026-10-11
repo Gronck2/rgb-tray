@@ -1,0 +1,38 @@
+# Logitech G915 TKL: tenkeyless with a strip of logo, brightness and media keys on top.
+#
+# Each row: `y` (top, in key units), optional `h`/`w` (default key size), and `keys`: names
+# from `keymap::NAMES`, each as `Name[:width[:height]][@x]`. Without `@x` a key follows the
+# previous one. `ansi:` / `iso:` keys exist only in that variant (the other skips them).
+name = "g915-tkl"
+width = 18.25
+height = 7.1
+
+[[row]]
+y = 0.0
+w = 0.9
+h = 0.6
+keys = "Logo@0 Brightness@3 MediaPrev@14.35 MediaPlay@15.35 MediaNext@16.35 Mute@17.35"
+
+[[row]]
+y = 0.85
+keys = "Esc F1@2 F2 F3 F4 F5@6.5 F6 F7 F8 F9@11 F10 F11 F12 PrintScreen@15.25 ScrollLock Pause"
+
+[[row]]
+y = 2.1
+keys = "Grave 1 2 3 4 5 6 7 8 9 0 Minus Equal Backspace:2 Insert@15.25 Home PageUp"
+
+[[row]]
+y = 3.1
+keys = "Tab:1.5 Q W E R T Y U I O P LBracket RBracket ansi:Backslash:1.5 iso:Enter:1.25:2@13.75 Delete@15.25 End PageDown"
+
+[[row]]
+y = 4.1
+keys = "CapsLock:1.75 A S D F G H J K L Semicolon Quote ansi:Enter:2.25 iso:NonUsHash"
+
+[[row]]
+y = 5.1
+keys = "ansi:LShift:2.25 iso:LShift:1.25 iso:NonUsBackslash Z X C V B N M Comma Period Slash RShift:2.75 Up@16.25"
+
+[[row]]
+y = 6.1
+keys = "LCtrl:1.25 LWin:1.25 LAlt:1.25 Space:6.25 RAlt:1.25 RWin:1.25 Menu:1.25 RCtrl:1.25 Left@15.25 Down Right"

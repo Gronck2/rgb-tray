@@ -145,8 +145,8 @@ pub struct Kind {
     pub icon: &'static str,
     /// Independently lit zones: (LED id, name); empty = one color only.
     pub zones: &'static [(u8, Text)],
-    /// Keyboard with per-key colors (the key editor).
-    pub per_key: bool,
+    /// Keyboard with per-key colors (the key editor): its layout (`keymap::get`).
+    pub layout: Option<&'static str>,
     /// The firmware has no serial number: the id comes from the USB port, so a device moved
     /// to another port takes over the settings of an absent one of the same kind.
     pub port_id: bool,
@@ -224,6 +224,8 @@ pub struct Caps {
     pub zones: Vec<(u8, (String, String))>,
     /// Per-key colors (the key editor).
     pub per_key: bool,
+    /// The key layout of a keyboard with per-key colors (`keymap::get`).
+    pub layout: &'static str,
     pub class: Class,
 }
 
@@ -246,7 +248,9 @@ pub fn caps(id: &str) -> Caps {
     if zones.is_empty() {
         zones = lamparray::zones(id).into_iter().map(|z| (z.led, z.names)).collect();
     }
-    Caps { effects: kind.effects, speed: kind.speed, zones, per_key: kind.per_key || lamparray::has_keys(id), class: kind.class }
+    // A LampArray keyboard with lamps on keypad keys is full size.
+    let layout = kind.layout.unwrap_or(if lamparray::has_keypad(id) { crate::keymap::FULL } else { crate::keymap::TKL });
+    Caps { effects: kind.effects, speed: kind.speed, zones, per_key: kind.layout.is_some() || lamparray::has_keys(id), layout, class: kind.class }
 }
 
 const ALL_EFFECTS: &[Effect] = &Effect::ALL;
@@ -258,7 +262,7 @@ const NATIVE: [Kind; 5] = [
         names: ("Logitech G915 TKL", "Logitech G915 TKL"),
         icon: "\u{E765}",
         zones: &[],
-        per_key: true,
+        layout: Some(crate::keymap::G915_TKL),
         port_id: false,
         effects: ALL_EFFECTS,
         speed: Speed::Smooth,
@@ -271,7 +275,7 @@ const NATIVE: [Kind; 5] = [
         names: ("Клавиатура ASUS", "ASUS keyboard"),
         icon: "\u{E7F8}",
         zones: &[],
-        per_key: false,
+        layout: None,
         port_id: false,
         effects: ALL_EFFECTS,
         speed: Speed::Steps(3),
@@ -284,7 +288,7 @@ const NATIVE: [Kind; 5] = [
         names: ("Geekboard MacroPad", "Geekboard MacroPad"),
         icon: "\u{E92E}",
         zones: &[],
-        per_key: false,
+        layout: None,
         port_id: true,
         effects: ALL_EFFECTS,
         speed: Speed::Smooth,
@@ -298,7 +302,7 @@ const NATIVE: [Kind; 5] = [
         names: ("Клавиатура QMK", "QMK keyboard"),
         icon: "\u{E765}",
         zones: &[],
-        per_key: false,
+        layout: None,
         port_id: true,
         effects: ALL_EFFECTS,
         speed: Speed::Smooth,
@@ -312,7 +316,7 @@ const NATIVE: [Kind; 5] = [
         names: ("Устройство LampArray", "LampArray device"),
         icon: "\u{E82F}",
         zones: &[],
-        per_key: false,
+        layout: None,
         port_id: true,
         effects: ALL_EFFECTS,
         speed: Speed::Smooth,

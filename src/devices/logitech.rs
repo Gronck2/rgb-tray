@@ -242,7 +242,7 @@ impl Device for Logitech {
         // switched off and on; per-key colors (0x8081) keep working then (verified 11.10.2026).
         if matches!(effect, Effect::Static | Effect::Off) && self.feat_keys != 0 {
             let c = if effect == Effect::Off { Rgb(0, 0, 0) } else { color };
-            let keys: Vec<(u8, Rgb)> = crate::keymap::all_codes().into_iter().map(|code| (code, c)).collect();
+            let keys: Vec<(u8, Rgb)> = crate::keymap::get(crate::keymap::G915_TKL).codes().iter().map(|&code| (code, c)).collect();
             return Logitech::apply_keys(self, &keys, brightness);
         }
         // Take lighting control from the onboard mode.

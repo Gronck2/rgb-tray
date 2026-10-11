@@ -101,9 +101,14 @@ impl DeviceConfig {
         self.keys.contains_key(&code.to_string())
     }
 
-    /// Every addressable key with its color (off keys included), ready to send.
-    pub fn all_keys(&self) -> Vec<(u8, Rgb)> {
-        crate::keymap::all_codes().into_iter().map(|c| (c, self.key_color(c))).collect()
+    /// Every key of a layout (`keymap::Layout::codes`) with its color (off keys included), ready to send.
+    pub fn all_keys(&self, codes: &[u8]) -> Vec<(u8, Rgb)> {
+        codes.iter().map(|&c| (c, self.key_color(c))).collect()
+    }
+
+    /// Codes of the keys stored, whatever the layout.
+    fn stored_codes(&self) -> impl Iterator<Item = u8> + '_ {
+        self.keys.keys().filter_map(|k| k.parse().ok())
     }
 
     /// Only the lighting (what presets save), without name and bookkeeping.
@@ -119,9 +124,10 @@ impl DeviceConfig {
     /// color shown steadily (e.g. right after opening the key editor or "fill all"), so the
     /// panel and preset matching treat them as that.
     pub fn visible(&self) -> DeviceConfig {
-        let keys = self.all_keys();
-        match keys.first() {
-            Some(&(_, c)) if self.per_key && keys.iter().all(|&(_, k)| k == c) => {
+        // The stored keys: the editor stores every key of the keyboard's layout (off ones as black).
+        let colors: Vec<Rgb> = self.stored_codes().map(|c| self.key_color(c)).collect();
+        match colors.first().copied().unwrap_or(Rgb(0, 0, 0)) {
+            c if self.per_key && colors.iter().all(|&k| k == c) => {
                 let mut d = DeviceConfig { per_key: false, keys: KeyColors::new(), effect: Effect::Static, ..self.clone() };
                 if c == Rgb(0, 0, 0) {
                     d.effect = Effect::Off;
@@ -148,7 +154,7 @@ impl DeviceConfig {
         let (a, b) = (norm(self), norm(other));
         // Per-key colors matter only while they are shown; compared key by key, since an off
         // key may be stored as black or (older versions) left out.
-        let keys_equal = !a.per_key && !b.per_key || a.all_keys() == b.all_keys();
+        let keys_equal = !a.per_key && !b.per_key || a.stored_codes().chain(b.stored_codes()).all(|c| a.key_color(c) == b.key_color(c));
         keys_equal && DeviceConfig { keys: KeyColors::new(), ..a } == DeviceConfig { keys: KeyColors::new(), ..b }
     }
 }
@@ -387,7 +393,7 @@ impl Config {
                     }
                 };
                 // Per-key colors of older versions belong to the first keyboard found.
-                if kind.per_key && (self.per_key || !self.keys.is_empty()) {
+                if kind.layout.is_some() && (self.per_key || !self.keys.is_empty()) {
                     d.per_key = std::mem::take(&mut self.per_key);
                     d.keys = std::mem::take(&mut self.keys);
                     for p in self.presets.iter_mut() {
@@ -501,19 +507,20 @@ mod tests {
     #[test]
     fn uniform_key_colors_look_like_a_steady_color() {
         let mut d = DeviceConfig { per_key: true, ..DeviceConfig::default() };
-        for c in crate::keymap::all_codes() {
+        let codes = crate::keymap::get(crate::keymap::G915_TKL).codes();
+        for &c in codes {
             d.set_key(c, Rgb(0, 255, 0));
         }
         let v = d.visible();
         assert!(!v.per_key && v.effect == Effect::Static && v.rgb() == Rgb(0, 255, 0));
 
-        for c in crate::keymap::all_codes() {
+        for &c in codes {
             d.set_key(c, Rgb(0, 0, 0));
         }
         assert!(d.visible().effect == Effect::Off);
 
         // One key different: still per-key.
-        d.set_key(crate::keymap::all_codes()[0], Rgb(1, 2, 3));
+        d.set_key(codes[0], Rgb(1, 2, 3));
         assert!(d.visible().per_key);
     }
 

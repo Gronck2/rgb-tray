@@ -1,0 +1,28 @@
+# Full size (104 keys ANSI, 105 ISO): tenkeyless plus the numeric keypad. Row format: see g915-tkl.toml.
+name = "full"
+width = 22.5
+height = 6.25
+
+[[row]]
+y = 0.0
+keys = "Esc F1@2 F2 F3 F4 F5@6.5 F6 F7 F8 F9@11 F10 F11 F12 PrintScreen@15.25 ScrollLock Pause"
+
+[[row]]
+y = 1.25
+keys = "Grave 1 2 3 4 5 6 7 8 9 0 Minus Equal Backspace:2 Insert@15.25 Home PageUp NumLock@18.5 KpSlash KpAsterisk KpMinus"
+
+[[row]]
+y = 2.25
+keys = "Tab:1.5 Q W E R T Y U I O P LBracket RBracket ansi:Backslash:1.5 iso:Enter:1.25:2@13.75 Delete@15.25 End PageDown Kp7@18.5 Kp8 Kp9 KpPlus:1:2"
+
+[[row]]
+y = 3.25
+keys = "CapsLock:1.75 A S D F G H J K L Semicolon Quote ansi:Enter:2.25 iso:NonUsHash Kp4@18.5 Kp5 Kp6"
+
+[[row]]
+y = 4.25
+keys = "ansi:LShift:2.25 iso:LShift:1.25 iso:NonUsBackslash Z X C V B N M Comma Period Slash RShift:2.75 Up@16.25 Kp1@18.5 Kp2 Kp3 KpEnter:1:2"
+
+[[row]]
+y = 5.25
+keys = "LCtrl:1.25 LWin:1.25 LAlt:1.25 Space:6.25 RAlt:1.25 RWin:1.25 Menu:1.25 RCtrl:1.25 Left@15.25 Down Right Kp0:2@18.5 KpDecimal"

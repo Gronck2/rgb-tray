@@ -33,8 +33,9 @@ const U: f32 = 40.0;
 const MARGIN: f32 = 24.0;
 const KB_X: f32 = MARGIN;
 const KB_Y: f32 = 72.0;
-const KB_W: f32 = keymap::WIDTH * U;
-const KB_H: f32 = keymap::HEIGHT * U;
+/// Room for the keyboard: the G915 TKL at 40 px a key; other layouts are scaled to fit.
+const KB_W: f32 = 18.25 * U;
+const KB_H: f32 = 7.1 * U;
 const W: f32 = KB_W + 2.0 * MARGIN;
 const ROW_Y: f32 = KB_Y + KB_H + 28.0;
 const ROW_STEP: f32 = 48.0;
@@ -79,6 +80,17 @@ static WORKER: Mutex<Option<Sender<Msg>>> = Mutex::new(None);
 /// Id of the keyboard being edited.
 static TARGET: Mutex<String> = Mutex::new(String::new());
 
+/// Key layout of the keyboard being edited.
+/// `RGBTRAY_DEMO_LAYOUT=full|tkl`: a snapshot of another layout than the keyboard's.
+static DEMO_LAYOUT: Mutex<Option<String>> = Mutex::new(None);
+
+fn layout() -> &'static keymap::Layout {
+    match DEMO_LAYOUT.lock().unwrap().as_deref() {
+        Some(name) => keymap::get(name),
+        None => keymap::get(crate::devices::caps(&target()).layout),
+    }
+}
+
 fn target() -> String {
     TARGET.lock().unwrap().clone()
 }
@@ -114,7 +126,7 @@ fn send(msg: Msg) {
                 let (brightness, all) = {
                     let id = target();
                     let cfg = crate::config();
-                    (cfg.effective_brightness(&id), cfg.device(&id).all_keys())
+                    (cfg.effective_brightness(&id), cfg.device(&id).all_keys(layout().codes()))
                 };
                 let res = if full {
                     k.apply_keys(&all, brightness)
@@ -251,8 +263,8 @@ fn default_colors() -> [[Rgb; 2]; PRESETS.len()] {
 /// Keys of the current layout plus those only the other layout has: the keyboard has lights
 /// for both (e.g. an ANSI backslash lit by the ISO zone), and presets must cover them all.
 fn preset_keys(iso: bool) -> Vec<KeyDef> {
-    let mut keys = keymap::layout(iso);
-    for kd in keymap::layout(!iso) {
+    let mut keys = layout().keys(iso).to_vec();
+    for &kd in layout().keys(!iso) {
         if !keys.iter().any(|k| k.code == kd.code) {
             keys.push(kd);
         }
@@ -263,7 +275,7 @@ fn preset_keys(iso: bool) -> Vec<KeyDef> {
 fn apply_preset(i: usize, colors: [Rgb; 2]) {
     let mut cfg = crate::config();
     let keys = preset_keys(cfg.iso_layout);
-    let center = |kd: &KeyDef| (kd.x + kd.w / 2.0) / keymap::WIDTH;
+    let center = |kd: &KeyDef| (kd.x + kd.w / 2.0) / layout().width;
     match i {
         // Static rainbow across the keyboard: zero cost, the firmware just holds it.
         0 => {
@@ -300,12 +312,12 @@ fn apply_preset(i: usize, colors: [Rgb; 2]) {
 }
 
 fn send_all() {
-    send(Msg::Keys(crate::config().device(&target()).all_keys()));
+    send(Msg::Keys(crate::config().device(&target()).all_keys(layout().codes())));
 }
 
 fn fill_all(c: Rgb) {
     let mut cfg = crate::config();
-    for code in keymap::all_codes() {
+    for &code in layout().codes() {
         set_tracked(&mut cfg, code, c);
     }
     cfg.save();
@@ -316,15 +328,17 @@ fn fill_all(c: Rgb) {
 fn write_word(word: &str, brush: Rgb) {
     let brush = if brush == OFF { PALETTE[0] } else { brush };
     let mut cfg = crate::config();
-    for code in keymap::all_codes() {
+    for &code in layout().codes() {
         set_tracked(&mut cfg, code, OFF);
     }
     for ch in word.chars() {
-        if let Some(code) = keymap::code_for_char(ch) {
+        if let Some(code) = layout().code_for_char(ch) {
             set_tracked(&mut cfg, code, brush);
         }
     }
-    set_tracked(&mut cfg, keymap::LOGO, brush);
+    if layout().codes().contains(&keymap::LOGO) {
+        set_tracked(&mut cfg, keymap::LOGO, brush);
+    }
     cfg.save();
     drop(cfg);
     send_all();
@@ -428,7 +442,7 @@ pub fn open(id: &str) {
                 // Keys never set (all of them the first time, or keys added to the layout later)
                 // start from what the keyboard shows now.
                 let c = if d.effect == Effect::Off { OFF } else { d.rgb() };
-                for code in keymap::all_codes() {
+                for &code in layout().codes() {
                     if !d.has_key(code) {
                         d.set_key(code, c);
                     }
@@ -537,6 +551,7 @@ unsafe fn create_window() -> windows::core::Result<()> {
 
 /// Renders the editor into a PNG file (no window needed), for checking the look.
 pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Result<()> {
+    *DEMO_LAYOUT.lock().unwrap() = std::env::var("RGBTRAY_DEMO_LAYOUT").ok();
     if target().is_empty() {
         let first = crate::PRESENT.lock().unwrap().iter().find(|id| crate::devices::caps(id).per_key).cloned();
         *TARGET.lock().unwrap() = first.unwrap_or_else(|| "logitech".into());
@@ -551,11 +566,11 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Re
             let iso = cfg.iso_layout;
             let d = keyboard(&mut cfg);
             if d.keys.is_empty() {
-                for kd in keymap::layout(iso).iter().filter(|k| k.code != 0) {
-                    d.set_key(kd.code, hsv((kd.x + kd.w / 2.0) / keymap::WIDTH * 300.0, 1.0, 1.0));
+                for kd in layout().keys(iso).iter().filter(|k| k.code != 0) {
+                    d.set_key(kd.code, hsv((kd.x + kd.w / 2.0) / layout().width * 300.0, 1.0, 1.0));
                 }
                 for label in ["W", "A", "S", "D"] {
-                    d.set_key(keymap::code_by_label(label).unwrap_or(0), OFF);
+                    d.set_key(layout().code_by_label(label).unwrap_or(0), OFF);
                 }
             }
         }
@@ -569,7 +584,7 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Re
             brush: Some(rt.CreateSolidColorBrush(&theme.text, None)?),
             theme,
             hits: Vec::new(),
-            hover: Some(Hit::Key(keymap::code_by_label("G").unwrap_or(0))),
+            hover: Some(Hit::Key(layout().code_by_label("G").unwrap_or(0))),
             tracking_leave: false,
             painting: false,
             rolling: false,
@@ -726,7 +741,7 @@ impl Editor {
     unsafe fn draw(&mut self, rt: &ID2D1RenderTarget) {
         let (keys_cfg, iso, schemes) = {
             let cfg = crate::config();
-            let colors: Vec<(u8, Rgb)> = cfg.device(&target()).all_keys();
+            let colors: Vec<(u8, Rgb)> = cfg.device(&target()).all_keys(layout().codes());
             (colors, cfg.iso_layout, cfg.schemes.iter().map(|s| s.name.clone()).collect::<Vec<_>>())
         };
         let color_of = |code: u8| keys_cfg.iter().find(|(c, _)| *c == code).map(|(_, c)| *c).unwrap_or(OFF);
@@ -748,8 +763,12 @@ impl Editor {
         self.fill(rt, body, 12.0, col(0x14, 0x14, 0x14, 1.0));
         self.stroke(rt, body, 12.0, if t_dark { col(255, 255, 255, 0.10) } else { col(0, 0, 0, 0.25) }, 1.0);
 
-        for kd in keymap::layout(iso) {
-            let r = R { x: KB_X + kd.x * U + 2.0, y: KB_Y + kd.y * U + 2.0, w: kd.w * U - 4.0, h: kd.h * U - 4.0 };
+        // A layout of another size is scaled to fit and centered.
+        let lay = layout();
+        let u = (KB_W / lay.width).min(KB_H / lay.height);
+        let (ox, oy) = (KB_X + (KB_W - lay.width * u) / 2.0, KB_Y + (KB_H - lay.height * u) / 2.0);
+        for &kd in lay.keys(iso) {
+            let r = R { x: ox + kd.x * u + 2.0, y: oy + kd.y * u + 2.0, w: kd.w * u - 4.0, h: kd.h * u - 4.0 };
             let c = if kd.code == 0 { OFF } else { color_of(kd.code) };
             let lit = c != OFF;
             let fill = if lit { rgb_col(c) } else { col(0x2A, 0x2A, 0x2A, 1.0) };
@@ -985,7 +1004,7 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
             if let Some(s) = cfg.schemes.get(i) {
                 let scheme = s.keys.clone();
                 // Key by key, so every key can be rolled back to what it was before.
-                for code in keymap::all_codes() {
+                for &code in layout().codes() {
                     let tmp = crate::config::DeviceConfig { keys: scheme.clone(), ..Default::default() };
                     let c = tmp.key_color(code);
                     set_tracked(&mut cfg, code, c);

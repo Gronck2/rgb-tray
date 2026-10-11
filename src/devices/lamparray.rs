@@ -454,6 +454,11 @@ pub fn has_keys(id: &str) -> bool {
     LAYOUTS.lock().unwrap().iter().any(|l| l.id == id && !l.keys.is_empty())
 }
 
+/// The keyboard has lamps on numeric keypad keys (HID usages 0x53..=0x63): it is full size.
+pub fn has_keypad(id: &str) -> bool {
+    LAYOUTS.lock().unwrap().iter().any(|l| l.id == id && l.keys.iter().any(|k| (0x53..=0x63).contains(&k.0)))
+}
+
 /// Lamps lighting a key (HID keyboard usage).
 fn key_lamps(id: &str, usage: u32) -> Vec<u16> {
     LAYOUTS.lock().unwrap().iter().find(|l| l.id == id).map(|l| l.keys.iter().filter(|k| k.0 == usage).map(|k| k.1).collect()).unwrap_or_default()
