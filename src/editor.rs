@@ -214,8 +214,11 @@ const HISTORY_DEPTH: usize = 50;
 
 /// Sets a key color and remembers the old one for rollback.
 /// Shows a firmware effect (wave, ripple…) instead of the key colors; they stay saved, and
-/// painting a key brings them back.
-fn firmware_effect(e: Effect) {
+/// painting a key brings them back. An effect that takes a color (ripple) gets the brush's.
+fn firmware_effect(e: Effect, brush: Rgb) {
+    if e.colored() && brush != OFF {
+        crate::config().device_mut(&target()).set_rgb(brush);
+    }
     crate::set_effect(&[target()], e);
 }
 
@@ -991,8 +994,8 @@ fn pick(c: Rgb) {
     }
     // While a firmware effect that takes a color (ripple) runs, the brush color is its color
     // too; the key colors stay saved.
-    let effect = Some(keyboard(&mut crate::config())).filter(|d| !d.per_key && Effect::EXTRA.contains(&d.effect)).map(|d| d.effect);
-    if effect.is_some_and(Effect::colored) && c != OFF {
+    let shown = Some(keyboard(&mut crate::config())).filter(|d| !d.per_key && Effect::EXTRA.contains(&d.effect)).map(|d| (d.effect, d.rgb()));
+    if shown.is_some_and(|(e, now)| e.colored() && now != c) && c != OFF {
         crate::set_color(&[target()], c);
     }
 }
@@ -1016,7 +1019,7 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
         Hit::Fill => fill_all(brush),
         Hit::Clear => fill_all(OFF),
         Hit::Preset(i) => apply_preset(i, colors[i]),
-        Hit::Firmware(k) => firmware_effect(Effect::EXTRA[k]),
+        Hit::Firmware(k) => firmware_effect(Effect::EXTRA[k], slot.map_or(brush, |(i, k)| colors[i][k])),
         Hit::WordBox => {}
 
         Hit::WordApply => {

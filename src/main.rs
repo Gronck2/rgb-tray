@@ -198,10 +198,19 @@ fn active_ids() -> Vec<String> {
     config().sorted(ids)
 }
 
-/// Applies the saved settings to every connected device on a background thread.
+/// An `apply_all` is waiting for the devices: later calls join it rather than queue another.
+static APPLY_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// Applies the saved settings to every connected device on a background thread. Calls made
+/// while one waits are merged into it (it reads the settings once it gets the devices), so
+/// quick clicks don't restart an animation over and over.
 fn apply_all() {
+    if APPLY_PENDING.swap(true, Ordering::SeqCst) {
+        return;
+    }
     std::thread::spawn(|| {
         let _guard = APPLY_LOCK.lock().unwrap();
+        APPLY_PENDING.store(false, Ordering::SeqCst);
         let d = devices::discover();
         let ids: Vec<String> = d.found.iter().map(|f| f.id.clone()).collect();
         log(&format!("apply: {ids:?}"));
@@ -282,6 +291,7 @@ fn apply_all() {
 // ---------------------------------------------------------------- actions shared by the panel
 
 fn set_color(ids: &[String], c: Rgb) {
+    log(&format!("set color {ids:?} {c:?}"));
     let mut cfg = config();
     for id in ids {
         let dc = cfg.device_mut(id);
@@ -314,6 +324,7 @@ fn set_zone_color(id: &str, led: u8, c: Rgb) {
 }
 
 fn set_effect(ids: &[String], e: Effect) {
+    log(&format!("set effect {ids:?} {e:?}"));
     let mut cfg = config();
     // Devices that can't show the effect keep theirs.
     for id in ids.iter().filter(|id| devices::caps(id).has_effect(e)) {
