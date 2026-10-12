@@ -190,6 +190,12 @@ impl Logitech {
         self.req(1, &args).map(|_| ())
     }
 
+    /// 0x8071 SWControl with raw bytes: [1 (set), control flags (bit 0 all clusters, bit 1 power
+    /// modes), event flags]; returns the flags now in force. For `--logitech-battery-led-test`.
+    pub fn sw_control(&self, args: &[u8]) -> Result<[u8; 20], String> {
+        self.req(5, args)
+    }
+
     fn req_keys(&self, func: u8, args: &[u8]) -> Result<[u8; 20], String> {
         if self.feat_keys == 0 {
             return Err("the keyboard has no per-key colors".into());

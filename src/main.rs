@@ -744,6 +744,39 @@ fn logitech_effect_test() {
     log("effect test: done");
 }
 
+/// `--logitech-battery-led-test`: the G915 blinks its battery LED on low charge only while
+/// software doesn't hold its lighting (0x8071 SWControl). Each step holds 20 s for someone
+/// watching the LED and the keys to say what they saw; steps are logged. Control is taken back
+/// at the end; choosing a preset restores the lighting.
+fn logitech_battery_led_test() {
+    let Some(kb) = devices::logitech::Logitech::find_all(devices::logitech::SW_ID_POLL).into_iter().next() else {
+        log("battery LED test: no Logitech keyboard answers");
+        return;
+    };
+    let step = |name: &str, run: &dyn Fn() -> Result<(), String>| {
+        log(&format!("battery LED test: {name}"));
+        if let Err(e) = run() {
+            log(&format!("battery LED test: {name}: {e}"));
+        }
+        std::thread::sleep(std::time::Duration::from_secs(20));
+    };
+    let sw = |args: &[u8]| kb.sw_control(args).map(|r| log(&format!("battery LED test: control now {:02X?}", &r[4..7])));
+    let green = [0x00, 0xFF, 0x00, 0, 0, 0, 0, 0, 0, 0];
+    step("1 as the app does: control of all clusters, keys red one by one", &|| {
+        sw(&[0x01, 0x01, 0x00])?;
+        devices::Device::apply(&kb, devices::Effect::Static, devices::Rgb(255, 0, 0), 100)
+    });
+    step("2 control kept, event notifications on", &|| sw(&[0x01, 0x01, 0x07]));
+    step("3 control released", &|| sw(&[0x01, 0x00, 0x00]));
+    step("4 firmware static green on logo and keys, then control released", &|| {
+        kb.raw_effect(0, 0x0001, &green)?;
+        kb.raw_effect(1, 0x0001, &green)?;
+        sw(&[0x01, 0x00, 0x00])
+    });
+    let _ = sw(&[0x01, 0x01, 0x00]);
+    log("battery LED test: done");
+}
+
 fn lamparray_test(args: &[String]) {
     use std::fmt::Write as _;
     let out = args.first().cloned().unwrap_or_else(|| "lamparray.txt".into());
@@ -1327,6 +1360,10 @@ fn main() {
     // fills it with the color, writes what the devices report, and hands them back.
     if args.iter().any(|a| a == "--logitech-effect-test") {
         logitech_effect_test();
+        return;
+    }
+    if args.iter().any(|a| a == "--logitech-battery-led-test") {
+        logitech_battery_led_test();
         return;
     }
     if let Some(i) = args.iter().position(|a| a == "--lamparray-test") {

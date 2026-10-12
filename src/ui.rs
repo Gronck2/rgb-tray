@@ -1523,7 +1523,7 @@ impl Flyout {
             }
         }
         let current = v.common_color();
-        let static_like = matches!(v.common_effect(), Some(Effect::Static | Effect::Breathe));
+        let static_like = v.common_effect().is_some_and(Effect::colored);
         for (i, c) in PALETTE.iter().enumerate() {
             let r = swatch_rect(i);
             let chosen = static_like && current == Some(*c);

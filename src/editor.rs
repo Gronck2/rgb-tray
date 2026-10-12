@@ -987,6 +987,13 @@ fn pick(c: Rgb) {
     .flatten();
     if let Some((i, colors)) = preset {
         apply_preset(i, colors);
+        return;
+    }
+    // While a firmware effect that takes a color (ripple) runs, the brush color is its color
+    // too; the key colors stay saved.
+    let effect = Some(keyboard(&mut crate::config())).filter(|d| !d.per_key && Effect::EXTRA.contains(&d.effect)).map(|d| d.effect);
+    if effect.is_some_and(Effect::colored) && c != OFF {
+        crate::set_color(&[target()], c);
     }
 }
 
