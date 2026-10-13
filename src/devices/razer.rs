@@ -27,6 +27,23 @@ fn model_of(pid: u16) -> Option<(&'static str, &'static RazerModel)> {
     })
 }
 
+/// Id ("<kind>-<serial>") from the answer to the serial number request.
+/// A wired-only device without a readable serial is told apart by its HID path. A wireless one
+/// isn't: its dongle's path would make a second device of the same mouse whenever the mouse
+/// doesn't answer properly (12.10.2026, Naga V2 Pro charging from a wall charger), so it has no link.
+fn device_id(key: &str, wireless: bool, answer: Result<[u8; 91], String>, path_hash: impl FnOnce() -> String) -> Option<String> {
+    if answer.as_ref().is_err_and(|e| e == super::NO_LINK) {
+        return None;
+    }
+    let serial =
+        answer.ok().map(|r| r[9..9 + 22].iter().take_while(|&&b| b != 0).filter(|b| b.is_ascii_alphanumeric()).map(|&b| b as char).collect::<String>());
+    match serial.filter(|s| !s.is_empty()) {
+        Some(s) => Some(format!("{key}-{s}")),
+        None if wireless => None,
+        None => Some(format!("{key}-{}", path_hash())),
+    }
+}
+
 /// A Razer product id this app drives.
 pub fn is_supported(pid: u16) -> bool {
     model_of(pid).is_some()
@@ -58,15 +75,7 @@ impl Razer {
             let (key, model) = model_of(i.pid)?;
             // Mouse collections can't be opened for read/write, but feature reports work.
             let mut d = Razer { hid: Hid::open(&i.path, false, false)?, key, model, id: None };
-            d.id = match d.command(0x00, 0x82, &[]) {
-                Ok(r) => {
-                    let serial: String = r[9..9 + 22].iter().take_while(|&&b| b != 0).filter(|b| b.is_ascii_alphanumeric()).map(|&b| b as char).collect();
-                    let serial = if serial.is_empty() { super::path_hash(&i.path) } else { serial };
-                    Some(format!("{}-{serial}", key))
-                }
-                Err(e) if e == super::NO_LINK => None,
-                Err(_) => Some(format!("{}-{}", key, super::path_hash(&i.path))),
-            };
+            d.id = device_id(key, d.model.battery, d.command(0x00, 0x82, &[]), || super::path_hash(&i.path));
             Some(d)
         }) {
             // One device with several such collections answers with the same serial on each.
@@ -186,3 +195,33 @@ pub const DRIVER: super::Driver = super::Driver {
     },
     ..super::Driver::NONE
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn answer(serial: &str) -> Result<[u8; 91], String> {
+        let mut r = [0u8; 91];
+        r[9..9 + serial.len()].copy_from_slice(serial.as_bytes());
+        Ok(r)
+    }
+
+    #[test]
+    fn device_id_uses_the_serial() {
+        assert_eq!(device_id("naga", true, answer("123456H78900012"), || "HASH".into()), Some("naga-123456H78900012".into()));
+    }
+
+    #[test]
+    fn wireless_device_without_serial_has_no_link() {
+        assert_eq!(device_id("naga", true, answer(""), || "HASH".into()), None);
+        assert_eq!(device_id("naga", true, Err("Razer: status 0x03".into()), || "HASH".into()), None);
+        assert_eq!(device_id("naga", true, Err(crate::devices::NO_LINK.into()), || "HASH".into()), None);
+    }
+
+    #[test]
+    fn wired_device_without_serial_goes_by_path() {
+        assert_eq!(device_id("kbd", false, answer(""), || "HASH".into()), Some("kbd-HASH".into()));
+        assert_eq!(device_id("kbd", false, Err("Razer: read failed".into()), || "HASH".into()), Some("kbd-HASH".into()));
+        assert_eq!(device_id("kbd", false, Err(crate::devices::NO_LINK.into()), || "HASH".into()), None);
+    }
+}
