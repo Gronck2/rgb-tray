@@ -540,23 +540,67 @@ fn snooze_battery_alert(id: &str) {
 const HOTKEY_BASE: i32 = 0x100;
 const MAX_HOTKEYS: i32 = 64;
 
-/// (Re)registers the global hotkeys of all presets.
+/// Devices with a hotkey, in the order of their hotkey ids (`HOTKEY_BASE + MAX_HOTKEYS + i`).
+static DEVICE_HOTKEYS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// (Re)registers the global hotkeys of all presets (ids from HOTKEY_BASE) and devices (after them).
 fn register_hotkeys() {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, MOD_NOREPEAT};
     let hwnd = HWND_MAIN.load(Ordering::Relaxed) as HWND;
     unsafe {
-        for id in 0..MAX_HOTKEYS {
+        for id in 0..2 * MAX_HOTKEYS {
             UnregisterHotKey(hwnd, HOTKEY_BASE + id);
         }
         let cfg = config();
+        let register = |id: i32, h: config::Hotkey, what: &str| {
+            if RegisterHotKey(hwnd, HOTKEY_BASE + id, h.mods | MOD_NOREPEAT, h.vk) == 0 {
+                log(&format!("hotkey {} for \"{what}\" is taken by another app", h.label()));
+            }
+        };
         for (i, p) in cfg.presets.iter().enumerate().take(MAX_HOTKEYS as usize) {
             if let Some(h) = p.hotkey {
-                if RegisterHotKey(hwnd, HOTKEY_BASE + i as i32, h.mods | MOD_NOREPEAT, h.vk) == 0 {
-                    log(&format!("hotkey {} for \"{}\" is taken by another app", h.label(), p.name));
-                }
+                register(i as i32, h, &p.name);
             }
         }
+        let mut devices = DEVICE_HOTKEYS.lock().unwrap();
+        devices.clear();
+        for (id, h) in cfg.devices.iter().filter_map(|(id, d)| Some((id, d.hotkey?))).take(MAX_HOTKEYS as usize) {
+            register(MAX_HOTKEYS + devices.len() as i32, h, &cfg.display_name(id));
+            devices.push(id.clone());
+        }
     }
+}
+
+/// A hotkey belongs to one preset or device only: the others lose it.
+fn take_hotkey(cfg: &mut Config, hotkey: Option<config::Hotkey>) {
+    if hotkey.is_none() {
+        return;
+    }
+    for p in cfg.presets.iter_mut().filter(|p| p.hotkey == hotkey) {
+        p.hotkey = None;
+    }
+    for d in cfg.devices.values_mut().filter(|d| d.hotkey == hotkey) {
+        d.hotkey = None;
+    }
+}
+
+fn set_device_hotkey(id: &str, hotkey: Option<config::Hotkey>) {
+    let mut cfg = config();
+    take_hotkey(&mut cfg, hotkey);
+    cfg.device_mut(id).hotkey = hotkey;
+    cfg.save();
+    drop(cfg);
+    register_hotkeys();
+}
+
+/// A device hotkey: switches the device off, or back on as it was.
+fn toggle_device(id: &str) {
+    let mut cfg = config();
+    cfg.device_mut(id).toggle();
+    log(&format!("hotkey: {id} {:?}", cfg.device(id).effect));
+    cfg.save();
+    drop(cfg);
+    apply_all();
 }
 
 fn apply_preset(i: usize) {
@@ -611,14 +655,7 @@ fn rename_preset(i: usize, name: &str) {
 
 fn set_preset_hotkey(i: usize, hotkey: Option<config::Hotkey>) {
     let mut cfg = config();
-    // A hotkey belongs to one preset only.
-    if hotkey.is_some() {
-        for p in cfg.presets.iter_mut() {
-            if p.hotkey == hotkey {
-                p.hotkey = None;
-            }
-        }
-    }
+    take_hotkey(&mut cfg, hotkey);
     if let Some(p) = cfg.presets.get_mut(i) {
         p.hotkey = hotkey;
     }
@@ -1374,6 +1411,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let id = wparam as i32 - HOTKEY_BASE;
             if (0..MAX_HOTKEYS).contains(&id) {
                 apply_preset(id as usize);
+                ui::refresh();
+            } else if let Some(device) = usize::try_from(id - MAX_HOTKEYS).ok().and_then(|i| DEVICE_HOTKEYS.lock().unwrap().get(i).cloned()) {
+                toggle_device(&device);
                 ui::refresh();
             }
             0

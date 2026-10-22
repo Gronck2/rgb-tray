@@ -128,6 +128,8 @@ enum Hit {
     Forget(usize),
     /// The pencil after the device name on that row.
     RenameDevice(usize),
+    /// The keyboard button after the pencil: records the hotkey that switches the device off and on.
+    DeviceHotkey(usize),
     /// The power button on the warning about the Logitech LampArray service.
     DisableService,
     /// The close button on the warning about a program on that row: never show it again.
@@ -413,14 +415,21 @@ fn name_rect(card: R, row: &Row) -> R {
         Row::Archived(_) => forget_button_rect(card).x,
         _ => card.x + card.w - 50.0,
     };
-    // Room for the pencil after the name.
-    R { x: card.x + 50.0, y: card.y + 6.0, w: buttons_x - card.x - 56.0 - 24.0, h: 20.0 }
+    // Room for the pencil after the name, and the hotkey button of a connected device.
+    let room = if matches!(row, Row::Device(_)) { 46.0 } else { 24.0 };
+    R { x: card.x + 50.0, y: card.y + 6.0, w: buttons_x - card.x - 56.0 - room, h: 20.0 }
 }
 
 /// The small pencil right after a device's name.
 fn pencil_rect(card: R, row: &Row, name: &str) -> R {
     let n = name_rect(card, row);
     R { x: n.x + name_width(name).min(n.w) + 4.0, y: n.y, w: 20.0, h: 20.0 }
+}
+
+/// The hotkey button after the pencil (shown while the card is hovered or a hotkey is recorded).
+fn hotkey_rect(card: R, row: &Row, name: &str) -> R {
+    let p = pencil_rect(card, row, name);
+    R { x: p.x + 22.0, ..p }
 }
 
 /// The square icon button of a warning card: power (disable the service) or gear (Settings).
@@ -480,6 +489,9 @@ fn card_layout(rows: &[(R, Row)]) -> Vec<(R, Hit)> {
             if device_renaming().as_ref() != Some(id) {
                 let name = crate::config().display_name(id);
                 v.push((pencil_rect(*r, row, &name), Hit::RenameDevice(i)));
+                if matches!(row, Row::Device(_)) {
+                    v.push((hotkey_rect(*r, row, &name), Hit::DeviceHotkey(i)));
+                }
             }
         }
         v.push((*r, Hit::Card(i)));
@@ -590,6 +602,22 @@ fn preset_chips() -> Vec<(R, Hit, String)> {
 
 /// Preset whose hotkey is being recorded (usize::MAX = none).
 static CAPTURE: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Device whose on/off hotkey is being recorded.
+static CAPTURE_DEVICE: Mutex<Option<String>> = Mutex::new(None);
+
+fn capturing_device() -> Option<String> {
+    CAPTURE_DEVICE.lock().unwrap().clone()
+}
+
+/// A hotkey of a preset or a device is being recorded.
+fn capturing() -> bool {
+    CAPTURE.load(Ordering::Relaxed) != usize::MAX || capturing_device().is_some()
+}
+
+fn stop_capture() {
+    CAPTURE.store(usize::MAX, Ordering::Relaxed);
+    CAPTURE_DEVICE.lock().unwrap().take();
+}
 /// Preset being renamed in place (usize::MAX = none) and the text typed so far.
 static RENAME: AtomicUsize = AtomicUsize::new(usize::MAX);
 static RENAME_TEXT: Mutex<String> = Mutex::new(String::new());
@@ -608,14 +636,14 @@ fn renaming_any() -> bool {
 
 fn start_device_rename(id: String) {
     finish_rename(true);
-    CAPTURE.store(usize::MAX, Ordering::Relaxed);
+    stop_capture();
     *RENAME_TEXT.lock().unwrap() = crate::config().display_name(&id);
     *DEVICE_RENAME.lock().unwrap() = Some(id);
 }
 
 fn start_rename(i: usize) {
     finish_rename(true);
-    CAPTURE.store(usize::MAX, Ordering::Relaxed);
+    stop_capture();
     *RENAME_TEXT.lock().unwrap() = crate::config().presets.get(i).map(|p| p.name.clone()).unwrap_or_default();
     RENAME.store(i, Ordering::Relaxed);
 }
@@ -767,11 +795,12 @@ unsafe fn menu_action(hwnd: HWND, i: usize, item: MenuItem) {
         MenuItem::Mod(_) => {}
     }
 }
-/// Records the pressed combination as the hotkey of the preset being captured.
+/// Records the pressed combination as the hotkey of the preset or device being captured.
 /// Returns false when no capture is in progress.
 unsafe fn capture_key(vk: u32) -> bool {
     let i = CAPTURE.load(Ordering::Relaxed);
-    if i == usize::MAX {
+    let device = capturing_device();
+    if i == usize::MAX && device.is_none() {
         return false;
     }
     let down = |k: u16| GetKeyState(k as i32) < 0;
@@ -792,12 +821,19 @@ unsafe fn capture_key(vk: u32) -> bool {
     if down(VK_LWIN) || down(VK_RWIN) {
         mods |= 0x8;
     }
-    CAPTURE.store(usize::MAX, Ordering::Relaxed);
-    match (vk, mods) {
-        // Plain Esc cancels, Backspace/Delete remove the hotkey.
-        (0x1B, 0) => {}
-        (0x08 | 0x2E, 0) => crate::set_preset_hotkey(i, None),
-        _ => crate::set_preset_hotkey(i, Some(crate::config::Hotkey { mods, vk })),
+    stop_capture();
+    // Plain Esc cancels, Backspace/Delete remove the hotkey.
+    let hotkey = match (vk, mods) {
+        (0x1B, 0) => {
+            invalidate();
+            return true;
+        }
+        (0x08 | 0x2E, 0) => None,
+        _ => Some(crate::config::Hotkey { mods, vk }),
+    };
+    match device {
+        Some(id) => crate::set_device_hotkey(&id, hotkey),
+        None => crate::set_preset_hotkey(i, hotkey),
     }
     invalidate();
     true
@@ -1931,6 +1967,12 @@ impl Flyout {
         if let (true, Some(b)) = (d.no_link, d.battery) {
             sub.push(("", format!("{} {}%", tr!("было", "was"), b.percent)));
         }
+        if let Some(h) = d.cfg.hotkey {
+            sub.push((ICON_KEYBOARD, h.label()));
+        }
+        if capturing_device().as_deref() == Some(d.id.as_str()) {
+            sub = vec![("", tr!("Сочетание для вкл./выкл. · Del — убрать · Esc", "On/off shortcut · Del — remove · Esc").to_string())];
+        }
         let low = d.present && d.battery.is_some_and(|b| b.is_low());
         let name_color = if d.present { t.text } else { t.text2 };
         self.text(rt, kind.icon, &f.icon, R { x: r.x + 10.0, y: r.y, w: 32.0, h: r.h }, name_color);
@@ -1953,6 +1995,24 @@ impl Flyout {
             }
             let fg = if hover(Hit::RenameDevice(i)) { t.text } else { t.text2 };
             self.text(rt, ICON_RENAME, &f.icon_tiny, pencil, fg);
+            // The on/off hotkey button, while the card is pointed at or the hotkey recorded.
+            let recording = capturing_device().as_deref() == Some(d.id.as_str());
+            if !archived && (recording || [Hit::Card(i), Hit::RenameDevice(i), Hit::DeviceHotkey(i)].into_iter().any(hover)) {
+                let hk = hotkey_rect(r, row, &d.name);
+                if recording {
+                    self.fill(rt, hk, 3.0, t.accent);
+                } else if hover(Hit::DeviceHotkey(i)) {
+                    self.fill(rt, hk, 3.0, t.card_hover);
+                }
+                let fg = if recording {
+                    col(255, 255, 255, 1.0)
+                } else if hover(Hit::DeviceHotkey(i)) {
+                    t.text
+                } else {
+                    t.text2
+                };
+                self.text(rt, ICON_KEYBOARD, &f.icon_tiny, hk, fg);
+            }
         }
         let sub_color = if low { t.accent } else { t.text2 };
         let mut x = r.x + 50.0;
@@ -2360,6 +2420,16 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
                 start_device_rename(id);
             }
         }
+        Hit::DeviceHotkey(i) => {
+            if let Some((_, Row::Device(id))) = rows().get(i).cloned() {
+                let again = capturing_device().as_ref() == Some(&id);
+                finish_rename(true);
+                stop_capture();
+                if !again {
+                    *CAPTURE_DEVICE.lock().unwrap() = Some(id);
+                }
+            }
+        }
         Hit::Forget(i) => {
             if let Some((_, Row::Archived(id))) = rows().get(i).cloned() {
                 let mut armed = FORGET_ARMED.lock().unwrap();
@@ -2542,7 +2612,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             0
         }
         // While recording a preset hotkey every key press (incl. Alt/F10 combos) is captured.
-        WM_KEYDOWN | WM_SYSKEYDOWN if CAPTURE.load(Ordering::Relaxed) != usize::MAX => {
+        WM_KEYDOWN | WM_SYSKEYDOWN if capturing() => {
             capture_key(wparam as u32);
             0
         }
@@ -2601,7 +2671,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             close_menu();
             if let Some((x, y, Some(Hit::Preset(i)))) = hit {
                 finish_rename(true);
-                CAPTURE.store(usize::MAX, Ordering::Relaxed);
+                stop_capture();
                 open_menu(i, x, y);
             }
             invalidate();
@@ -2664,7 +2734,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_DESTROY => {
             let fly = FLYOUT.with(|c| c.borrow_mut().take());
             drop(fly);
-            CAPTURE.store(usize::MAX, Ordering::Relaxed);
+            stop_capture();
             finish_rename(true);
             LAST_CLOSE.store(GetTickCount64(), Ordering::Relaxed);
             0

@@ -32,16 +32,29 @@ pub struct DeviceConfig {
     /// When the device was last connected (Unix seconds).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub last_seen: u64,
+    /// Global hotkey that switches the device off and back on (not part of presets).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hotkey: Option<Hotkey>,
+    /// What the hotkey switched off, to bring back: the effect and whether per-key colors were shown.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient_resume")]
+    pub resume: Option<(Effect, bool)>,
 }
 
 /// An effect this version doesn't know (saved by a newer or an older one) reads as steady:
 /// one strange value must not make the whole settings file unreadable (0.6.24 lost the
 /// owner's presets that way after 0.6.23 had saved "experimental").
 fn lenient_effect<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Effect, D::Error> {
+    Ok(effect_named(&String::deserialize(d)?))
+}
+
+fn lenient_resume<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<(Effect, bool)>, D::Error> {
+    Ok(Option::<(String, bool)>::deserialize(d)?.map(|(name, keys)| (effect_named(&name), keys)))
+}
+
+fn effect_named(name: &str) -> Effect {
     use serde::de::IntoDeserializer;
-    let name = String::deserialize(d)?;
-    let known: Result<Effect, serde::de::value::Error> = Effect::deserialize(name.as_str().into_deserializer());
-    Ok(known.unwrap_or(Effect::Static))
+    let known: Result<Effect, serde::de::value::Error> = Effect::deserialize(name.into_deserializer());
+    known.unwrap_or(Effect::Static)
 }
 
 fn full_brightness() -> u8 {
@@ -72,6 +85,8 @@ impl Default for DeviceConfig {
             per_key: false,
             keys: KeyColors::new(),
             last_seen: 0,
+            hotkey: None,
+            resume: None,
         }
     }
 }
@@ -124,11 +139,31 @@ impl DeviceConfig {
 
     /// Only the lighting (what presets save), without name and bookkeeping.
     fn lighting(&self) -> DeviceConfig {
-        DeviceConfig { name: String::new(), last_seen: 0, ..self.clone() }
+        DeviceConfig { name: String::new(), last_seen: 0, hotkey: None, resume: None, ..self.clone() }
     }
 
     fn set_lighting(&mut self, from: &DeviceConfig) {
-        *self = DeviceConfig { name: std::mem::take(&mut self.name), last_seen: self.last_seen, ..from.lighting() };
+        *self = DeviceConfig {
+            name: std::mem::take(&mut self.name),
+            last_seen: self.last_seen,
+            hotkey: self.hotkey,
+            // A preset that switches the device on forgets what the hotkey switched off.
+            resume: if from.effect == Effect::Off { self.resume } else { None },
+            ..from.lighting()
+        };
+    }
+
+    /// The device hotkey: switches the device off, or back on with what it showed before.
+    pub fn toggle(&mut self) {
+        if self.effect == Effect::Off {
+            let (effect, per_key) = self.resume.take().unwrap_or((Effect::Static, false));
+            self.effect = effect;
+            self.per_key = per_key && !self.keys.is_empty();
+        } else {
+            self.resume = Some((self.effect, self.per_key));
+            self.effect = Effect::Off;
+            self.per_key = false;
+        }
     }
 
     /// What the device shows: per-key colors that are all the same look exactly like that
@@ -786,6 +821,46 @@ mod tests {
         // Presets of older versions have no speed: normal.
         let old: Preset = toml::from_str("name = \"Old\"\nbrightness = 100\n[devices]\n").unwrap();
         assert_eq!(old.speed, NORMAL_SPEED);
+    }
+
+    #[test]
+    fn device_hotkey_switches_off_and_back() {
+        let mut d = device(Effect::Breathe, "#112233");
+        d.toggle();
+        assert!(d.effect == Effect::Off);
+        d.toggle();
+        assert!(d.effect == Effect::Breathe && d.resume.is_none());
+        // Per-key colors come back too; Off from the panel comes back as steady.
+        d.set_key(4, Rgb(1, 2, 3));
+        d.per_key = true;
+        d.toggle();
+        assert!(d.effect == Effect::Off && !d.per_key);
+        d.toggle();
+        assert!(d.per_key);
+        let mut off = device(Effect::Off, "#112233");
+        off.toggle();
+        assert!(off.effect == Effect::Static);
+    }
+
+    #[test]
+    fn device_hotkey_is_saved_but_not_in_presets() {
+        let mut cfg = Config::default();
+        let mut d = device(Effect::Cycle, "#112233");
+        d.hotkey = Some(Hotkey { mods: 0x2, vk: 0x4C });
+        d.toggle();
+        cfg.devices.insert("tuya-A".into(), d);
+        let text = toml::to_string(&cfg).unwrap();
+        let back: Config = toml::from_str(&text).unwrap();
+        assert!(back.devices["tuya-A"].hotkey == Some(Hotkey { mods: 0x2, vk: 0x4C }));
+        assert!(back.devices["tuya-A"].resume == Some((Effect::Cycle, false)));
+        // An effect this version doesn't know comes back as steady.
+        let text = text.replace("\"cycle\"", "\"plasma\"");
+        assert!(toml::from_str::<Config>(&text).unwrap().devices["tuya-A"].resume == Some((Effect::Static, false)));
+        let p = cfg.snapshot("P".into());
+        assert!(p.devices["tuya-A"].hotkey.is_none() && p.devices["tuya-A"].resume.is_none());
+        // Loading a preset keeps the device's hotkey.
+        cfg.load_preset(&p);
+        assert!(cfg.devices["tuya-A"].hotkey.is_some());
     }
 
     #[test]
