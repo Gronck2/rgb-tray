@@ -2,7 +2,7 @@
 //! encrypted with AES-128-ECB under the bulb's local key). Bulbs are listed in
 //! `%APPDATA%\rgbtray\tuya.toml` (`[[device]]` with `id`, `local_key`, `name`), fetched once from
 //! the Tuya cloud. The LAN address is found by trying each open port 6668 on the local /24
-//! network and kept there as `local_ip`.
+//! network and kept there as `local_ip`. A bulb that doesn't answer is looked for again a few times.
 //!
 //! A bulb takes one local client at a time: while the Smart Life app on a phone holds it, the
 //! connection is reset (22.10.2026). Breathing and color cycle are firmware scenes (DP 25),
@@ -13,17 +13,17 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use windows_sys::Win32::Security::Cryptography::*;
 
 const PORT: u16 = 6668;
 const CONTROL: u32 = 7;
 const DP_QUERY: u32 = 10;
-const CONNECT_TIMEOUT: Duration = Duration::from_millis(700);
+/// Wi-Fi bulbs in power saving may take a while to answer.
+const CONNECT_TIMEOUT: Duration = Duration::from_millis(1500);
 const REPLY_TIMEOUT: Duration = Duration::from_secs(2);
-/// A lost bulb is looked for at most this often.
-const RESCAN_EVERY: Duration = Duration::from_secs(60);
+/// After a bulb didn't answer, it is looked for again after these many seconds (each after the previous).
+const RETRY_AFTER: [u64; 5] = [1, 3, 10, 30, 60];
 
 // Data points of v2 bulbs (category "dj").
 const DP_SWITCH: &str = "20";
@@ -310,39 +310,47 @@ fn open_ports() -> Vec<Ipv4Addr> {
 }
 
 static SCANNING: AtomicBool = AtomicBool::new(false);
-static LAST_SCAN: Mutex<Option<Instant>> = Mutex::new(None);
 
-/// Looks for bulbs whose address is unknown or stale, in the background; one that turns up
-/// elsewhere is saved and the lighting applied again.
+/// Whether the bulb answers now: at its address, or found elsewhere on the network (saved).
+fn reach(e: &Entry, open: &[Ipv4Addr]) -> bool {
+    if e.ip.is_some_and(|ip| answers(ip, e)) {
+        return true;
+    }
+    let Some(ip) = open.iter().copied().filter(|&ip| Some(ip) != e.ip).find(|&ip| answers(ip, e)) else { return false };
+    crate::log(&format!("{}: found at {ip}", device_id(e)));
+    if let Some(text) = std::fs::read_to_string(path()).ok().and_then(|t| with_ip(&t, &e.id, ip)) {
+        let _ = std::fs::write(path(), text);
+    }
+    true
+}
+
+/// A bulb didn't answer: looks for the bulbs again in the background, a few times over about
+/// two minutes (a Wi-Fi bulb may not answer for a moment, 22.10.2026, or move to another
+/// address). When one is back, the lighting is applied again, so it gets what it missed.
 fn rescan() {
-    {
-        let mut last = LAST_SCAN.lock().unwrap();
-        if last.is_some_and(|t| t.elapsed() < RESCAN_EVERY) || SCANNING.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        *last = Some(Instant::now());
+    if SCANNING.swap(true, Ordering::SeqCst) {
+        return;
     }
     std::thread::spawn(|| {
-        let open = open_ports();
-        let mut moved = false;
-        for e in entries() {
-            if e.ip.is_some_and(|ip| answers(ip, &e)) {
-                continue;
+        let mut missing = entries().len();
+        for (round, wait) in RETRY_AFTER.iter().enumerate() {
+            std::thread::sleep(Duration::from_secs(*wait));
+            let open = open_ports();
+            let lost: Vec<Entry> = entries().into_iter().filter(|e| !reach(e, &open)).collect();
+            if lost.len() < missing {
+                crate::apply_all();
             }
-            match open.iter().copied().filter(|&ip| Some(ip) != e.ip).find(|&ip| answers(ip, &e)) {
-                Some(ip) => {
-                    crate::log(&format!("{}: found at {ip}", device_id(&e)));
-                    if let Some(text) = std::fs::read_to_string(path()).ok().and_then(|t| with_ip(&t, &e.id, ip)) {
-                        moved |= std::fs::write(path(), text).is_ok();
-                    }
+            missing = lost.len();
+            if lost.is_empty() {
+                break;
+            }
+            if round + 1 == RETRY_AFTER.len() {
+                for e in &lost {
+                    crate::log(&format!("{}: not found on the network ({} open Tuya ports)", device_id(e), open.len()));
                 }
-                None => crate::log(&format!("{}: not found on the network ({} open Tuya ports)", device_id(&e), open.len())),
             }
         }
         SCANNING.store(false, Ordering::SeqCst);
-        if moved {
-            crate::apply_all();
-        }
     });
 }
 
