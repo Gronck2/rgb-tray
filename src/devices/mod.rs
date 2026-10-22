@@ -4,6 +4,7 @@ pub mod lamparray;
 pub mod logitech;
 pub mod profile;
 pub mod razer;
+pub mod tuya;
 pub mod via;
 
 use crate::i18n::Text;
@@ -167,7 +168,7 @@ impl Driver {
 
 /// Every driver. A native driver comes before the generic LampArray and QMK/VIA ones:
 /// `discover()` keeps the first device with a given id.
-pub const DRIVERS: &[Driver] = &[logitech::DRIVER, razer::DRIVER, asus::DRIVER, via::DRIVER, lamparray::DRIVER];
+pub const DRIVERS: &[Driver] = &[logitech::DRIVER, razer::DRIVER, asus::DRIVER, via::DRIVER, lamparray::DRIVER, tuya::DRIVER];
 
 /// Battery levels of all connected wireless devices, by device id. Opens only devices that
 /// have a battery, so it is cheap enough to run periodically.
@@ -259,6 +260,8 @@ pub enum Class {
     Keyboard,
     Mouse,
     Other,
+    /// A room light: it doesn't go dark or dim with the display.
+    Light,
 }
 
 /// How the speed of breathing and spectrum can be set.
@@ -314,7 +317,7 @@ pub fn caps(id: &str) -> Caps {
 const ALL_EFFECTS: &[Effect] = &Effect::ALL;
 
 /// Models written in Rust, in panel order (profile models are placed among them by `kinds`).
-const NATIVE: [Kind; 4] = [
+const NATIVE: [Kind; 5] = [
     Kind {
         key: "logitech",
         names: ("Logitech G915 TKL", "Logitech G915 TKL"),
@@ -366,6 +369,20 @@ const NATIVE: [Kind; 4] = [
         effects: ALL_EFFECTS,
         speed: Speed::Smooth,
         class: Class::Other,
+        protocol: Protocol::Native,
+        tested: true,
+    },
+    // Tuya Wi-Fi bulbs on the local network, listed in tuya.toml.
+    Kind {
+        key: "tuya",
+        names: ("Лампа Tuya", "Tuya bulb"),
+        icon: "\u{E82F}",
+        zones: &[],
+        layout: None,
+        port_id: false,
+        effects: &[Effect::Static, Effect::Breathe, Effect::Cycle, Effect::Off],
+        speed: Speed::Smooth,
+        class: Class::Light,
         protocol: Protocol::Native,
         tested: true,
     },

@@ -151,7 +151,7 @@ fn from_profile(p: Profile) -> Result<Kind, String> {
         None => match class {
             Class::Keyboard => "\u{E765}",
             Class::Mouse => "\u{E962}",
-            Class::Other => "\u{E82F}",
+            Class::Other | Class::Light => "\u{E82F}",
         },
     };
     let effects = p.effects.unwrap_or_else(|| Effect::ALL.to_vec());

@@ -22,8 +22,22 @@ A tiny Windows tray app that controls RGB lighting of keyboards and mice directl
 | Geekboard MacroPad v2 (QMK/VIA) | USB | Static, breathing, spectrum, off |
 | Other QMK keyboards with VIA and RGB (Keychron, custom boards…) | USB | Static, breathing, spectrum, off, brightness (breathing and spectrum drawn by the app) |
 | Devices with the Windows Dynamic Lighting standard (HID LampArray) | USB / built-in | Static, breathing, spectrum, off, zones from the device (breathing and spectrum drawn by the app) |
+| Tuya Wi-Fi bulbs (Smart Life), e.g. LINUS A60 | Wi-Fi, local network | Color, white (a white-ish color picks the white LEDs and their tint), breathing, spectrum, off; does not go dark with the display. Needs the bulb's local key, see below |
 
 Other models that speak the same protocols may work but are untested.
+
+### Tuya bulbs
+
+RGB Tray drives a Tuya bulb over the local network (protocol 3.3) with the bulb's *local key*, which only the Tuya cloud gives out. Get it once, for example with [tinytuya](https://github.com/jasonacox/tinytuya) (`python -m tinytuya wizard`), or the Smart Life QR login of `tuya-device-sharing-sdk`. Then list the bulbs in `%APPDATA%\rgbtray\tuya.toml`:
+
+```toml
+[[device]]
+name = "Desk lamp"
+id = "bf1234567890abcdef12"
+local_key = "0123456789abcdef"
+```
+
+The app finds the bulb on the local network by itself and remembers its address (`local_ip`). The bulb must be in **Smart Life** or **Tuya Smart**: accounts of branded copies of the app can't hand out keys. A bulb takes one local connection at a time: while the Smart Life app is open on a phone, RGB Tray can't reach it.
 
 ### Asking for a new device
 

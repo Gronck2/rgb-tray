@@ -242,6 +242,8 @@ fn apply_all() {
             log(if display == DISPLAY_OFF { "display off: lighting off" } else { "display dimmed: lighting dimmed" });
         }
         for f in &d.found {
+            // A room light stays as it is when the display sleeps or dims.
+            let display = if devices::caps(&f.id).class == devices::Class::Light { DISPLAY_ON } else { display };
             let dc = cfg.device(&f.id);
             let mut brightness = cfg.effective_brightness(&f.id);
             if display == DISPLAY_DIMMED {
