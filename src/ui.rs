@@ -2417,7 +2417,7 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
             crate::set_autostart(on);
             with_flyout(|f| f.autostart = on);
         }
-        Hit::Reapply => crate::apply_all(),
+        Hit::Reapply => crate::reapply_all(),
         Hit::Pin => {
             let pinned = !PINNED.fetch_xor(true, Ordering::Relaxed);
             let mut cfg = crate::config();

@@ -349,7 +349,7 @@ fn run(item: Item, keyboard: Option<String>) {
                 crate::editor::open(&id);
             }
         }
-        Item::Reapply => crate::apply_all(),
+        Item::Reapply => crate::reapply_all(),
         Item::Autostart => crate::set_autostart(!crate::autostart_enabled()),
         Item::FollowDisplay => crate::toggle_follow_display(),
         Item::CheckUpdates => crate::toggle_check_updates(),

@@ -142,6 +142,8 @@ fn send(msg: Msg) {
                     }
                     k.update_keys(&latest, brightness)
                 };
+                // The keyboard no longer shows what the panel last sent it.
+                crate::forget_applied(&target());
                 if let Err(e) = res {
                     crate::log(&format!("key editor: {e}"));
                     kb = None;

@@ -201,9 +201,36 @@ fn active_ids() -> Vec<String> {
 /// An `apply_all` is waiting for the devices: later calls join it rather than queue another.
 static APPLY_PENDING: AtomicBool = AtomicBool::new(false);
 
-/// Applies the saved settings to every connected device on a background thread. Calls made
-/// while one waits are merged into it (it reads the settings once it gets the devices), so
-/// quick clicks don't restart an animation over and over.
+/// What a device is sent by `apply_all`.
+#[derive(Debug)]
+enum Job {
+    Plain(Effect, Rgb),
+    Keys(Vec<(u8, Rgb)>),
+    Zones(Effect, Vec<(u8, Rgb)>),
+}
+
+/// What each device was last sent (id, `Job` with brightness and speed): a device whose
+/// lighting didn't change is skipped, so changing one device doesn't make the others blink.
+static APPLIED: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+/// The next `apply_all` sends to every device, changed or not.
+static FORCE_APPLY: AtomicBool = AtomicBool::new(false);
+
+/// A device may have lost its lighting or been set behind the app's back (wake, hot-plug, the
+/// key editor): it is sent its settings on the next `apply_all`.
+fn forget_applied(id: &str) {
+    APPLIED.lock().unwrap().retain(|(i, _)| i != id);
+}
+
+/// Applies the saved settings to every connected device, even unchanged ones (after wake or
+/// hot-plug, when devices may have reset).
+fn reapply_all() {
+    FORCE_APPLY.store(true, Ordering::SeqCst);
+    apply_all();
+}
+
+/// Applies the saved settings to the connected devices whose lighting changed, on a
+/// background thread. Calls made while one waits are merged into it (it reads the settings
+/// once it gets the devices), so quick clicks don't restart an animation over and over.
 fn apply_all() {
     if APPLY_PENDING.swap(true, Ordering::SeqCst) {
         return;
@@ -236,6 +263,9 @@ fn apply_all() {
         }
         let mut status = Vec::new();
         let mut present = Vec::new();
+        let force = FORCE_APPLY.swap(false, Ordering::SeqCst);
+        let mut unchanged_ids = Vec::new();
+        let mut applied = APPLIED.lock().unwrap();
         // The lighting follows the display: dimmed with it, off while it is off (idle, locked or asleep).
         let display = if cfg.follow_display { DISPLAY.load(Ordering::Relaxed) } else { DISPLAY_ON };
         if display != DISPLAY_ON {
@@ -250,30 +280,48 @@ fn apply_all() {
                 brightness = (brightness as u32 * DIMMED_BRIGHTNESS as u32 / 100).max(1) as u8;
             }
             // Devices are applied one at a time (APPLY_LOCK): the driver reads this device's speed.
-            devices::set_speed(cfg.effective_speed(&f.id));
-            let res = if display == DISPLAY_OFF {
-                f.dev.apply(Effect::Off, dc.rgb(), brightness)
+            let speed = cfg.effective_speed(&f.id);
+            devices::set_speed(speed);
+            let job = if display == DISPLAY_OFF {
+                Job::Plain(Effect::Off, dc.rgb())
             } else if devices::caps(&f.id).per_key && dc.per_key {
-                f.dev.apply_keys(&dc.all_keys(keymap::get(devices::caps(&f.id).layout).codes()), brightness)
+                Job::Keys(dc.all_keys(keymap::get(devices::caps(&f.id).layout).codes()))
             } else if !dc.zones.is_empty() && !devices::zones_of(&f.id).is_empty() {
-                let colors: Vec<(u8, Rgb)> = devices::zones_of(&f.id).iter().map(|&(led, _)| (led, dc.zone_rgb(led))).collect();
-                f.dev.apply_zones(dc.effect, &colors, brightness)
+                Job::Zones(dc.effect, devices::zones_of(&f.id).iter().map(|&(led, _)| (led, dc.zone_rgb(led))).collect())
             } else {
-                f.dev.apply(dc.effect, dc.rgb(), brightness)
+                Job::Plain(dc.effect, dc.rgb())
             };
+            let stamp = format!("{job:?} {brightness} {speed}");
+            let unchanged = !force && applied.iter().any(|(id, s)| *id == f.id && *s == stamp);
+            if unchanged {
+                unchanged_ids.push(f.id.clone());
+            }
+            let res = match &job {
+                _ if unchanged => Ok(()),
+                Job::Plain(effect, color) => f.dev.apply(*effect, *color, brightness),
+                Job::Keys(keys) => f.dev.apply_keys(keys, brightness),
+                Job::Zones(effect, colors) => f.dev.apply_zones(*effect, colors, brightness),
+            };
+            applied.retain(|(id, _)| *id != f.id);
             match res {
                 Err(e) if e == devices::NO_LINK => {
                     no_link.push(f.id.clone());
                     continue;
                 }
                 Err(e) => log(&format!("{}: {e}", f.id)),
-                Ok(()) => {}
+                Ok(()) => applied.push((f.id.clone(), stamp)),
             }
             present.push(f.id.clone());
             if let Some(b) = f.dev.battery() {
                 status.push((f.id.clone(), b));
             }
         }
+        // A device that went away gets everything when it is back.
+        applied.retain(|(id, _)| present.contains(id));
+        if !unchanged_ids.is_empty() {
+            log(&format!("unchanged: {unchanged_ids:?}"));
+        }
+        drop(applied);
         if !no_link.is_empty() {
             log(&format!("no link: {no_link:?}"));
         }
@@ -1336,7 +1384,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_TIMER if wparam == TIMER_REAPPLY_EARLY || wparam == TIMER_REAPPLY || wparam == TIMER_REAPPLY_LATE => {
             KillTimer(hwnd, wparam);
-            apply_all();
+            reapply_all();
             0
         }
         WM_APPLIED | WM_BATTERY => {
