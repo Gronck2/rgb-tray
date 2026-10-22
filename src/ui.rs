@@ -54,10 +54,6 @@ const PRESET_LABEL_Y: f32 = SLIDER_Y + SLIDER_H + 14.0;
 const PRESET_Y: f32 = PRESET_LABEL_Y + 24.0;
 const PRESET_H: f32 = 28.0;
 const PRESET_STEP: f32 = 34.0;
-const PRESET_ROWS: usize = 2;
-const DIVIDER_Y: f32 = PRESET_Y + PRESET_STEP * PRESET_ROWS as f32 + 6.0;
-const FOOTER_Y: f32 = DIVIDER_Y + 10.0;
-const LOWER_H: f32 = FOOTER_Y + 50.0;
 pub(crate) const PALETTE: [Rgb; 9] = [
     Rgb(0x0A, 0xE3, 0xEF),
     Rgb(0xFF, 0x1E, 0x1E),
@@ -102,12 +98,8 @@ enum Hit {
     Card(usize),
     Swatch(usize),
     Custom,
-    /// Global preset chip; right click opens its menu.
+    /// Global preset chip: a click applies it, a right click opens its menu (save, hotkey, rename...).
     Preset(usize),
-    /// Small buttons on a preset chip: overwrite with the current lighting, record hotkey, rename.
-    PresetOverwrite(usize),
-    PresetHotkey(usize),
-    PresetRename(usize),
     /// An item of the open preset menu; a click on the menu body; a click outside it.
     Menu(MenuItem),
     MenuBody,
@@ -317,7 +309,25 @@ fn lower_y() -> f32 {
 }
 
 fn panel_h() -> f32 {
-    lower_y() + LOWER_H
+    lower_y() + lower_h()
+}
+
+/// Rows of preset chips: as many as the presets need, so "Save current" is always there.
+fn preset_rows() -> usize {
+    preset_chips().iter().map(|c| ((c.0.y - PRESET_Y) / PRESET_STEP).round() as usize + 1).max().unwrap_or(1)
+}
+
+// The footer sits under the presets (relative to the top of the section under the device list).
+fn divider_y() -> f32 {
+    PRESET_Y + PRESET_STEP * preset_rows() as f32 + 6.0
+}
+
+fn footer_y() -> f32 {
+    divider_y() + 10.0
+}
+
+fn lower_h() -> f32 {
+    footer_y() + 50.0
 }
 
 #[derive(Clone, Copy)]
@@ -514,8 +524,8 @@ fn lower_layout() -> Vec<(R, Hit)> {
     if speed_shown() {
         v.push((speed_rect(), Hit::Speed));
     }
-    v.push((R { x: PAD - 4.0, y: FOOTER_Y, w: 250.0, h: 36.0 }, Hit::Autostart));
-    v.push((R { x: W - PAD - 92.0, y: FOOTER_Y, w: 92.0, h: 36.0 }, Hit::Exit));
+    v.push((R { x: PAD - 4.0, y: footer_y(), w: 250.0, h: 36.0 }, Hit::Autostart));
+    v.push((R { x: W - PAD - 92.0, y: footer_y(), w: 92.0, h: 36.0 }, Hit::Exit));
     v
 }
 
@@ -555,17 +565,14 @@ fn preset_label(p: &crate::config::Preset) -> String {
     }
 }
 
-/// Width of the three icon buttons at the right end of a preset chip.
-const PRESET_ICONS_W: f32 = 73.0;
-
-/// Preset chips flowing over up to two rows, then the "save" chip.
-/// For each preset the icon buttons come before the chip itself, so hit-testing finds them first.
+/// Compact preset chips (name and hotkey) flowing over as many rows as they need, then the
+/// small "+" chip that saves the current lighting as a new preset. Everything else is in the
+/// preset's menu (right click).
 fn preset_chips() -> Vec<(R, Hit, String)> {
     let renaming = RENAME.load(Ordering::Relaxed);
     let labels: Vec<String> =
         crate::config().presets.iter().enumerate().map(|(i, p)| if i == renaming { RENAME_TEXT.lock().unwrap().clone() } else { preset_label(p) }).collect();
-    let items =
-        labels.into_iter().enumerate().map(|(i, l)| (l, Some(i))).chain(std::iter::once((tr!("+ Сохранить текущие", "+ Save current").to_string(), None)));
+    let items = labels.into_iter().enumerate().map(|(i, l)| (l, Some(i))).chain(std::iter::once((String::new(), None)));
     let mut out = Vec::new();
     let (mut x, mut row) = (PAD, 0);
     for (label, preset) in items {
@@ -574,25 +581,16 @@ fn preset_chips() -> Vec<(R, Hit, String)> {
         if preset == Some(renaming) {
             w = w.max(110.0);
         }
-        if preset.is_some() {
-            w += PRESET_ICONS_W;
+        if preset.is_none() {
+            w = PRESET_H + 8.0;
         }
         if x + w > W - PAD && x > PAD {
             row += 1;
             x = PAD;
         }
-        if row >= PRESET_ROWS {
-            break;
-        }
         let r = R { x, y: PRESET_Y + row as f32 * PRESET_STEP, w: w.min(W - 2.0 * PAD), h: PRESET_H };
         match preset {
-            Some(i) => {
-                let icon = |k: f32| R { x: r.x + r.w - PRESET_ICONS_W + 2.0 + k * 23.0, y: r.y + 3.0, w: 22.0, h: r.h - 6.0 };
-                out.push((icon(0.0), Hit::PresetOverwrite(i), String::new()));
-                out.push((icon(1.0), Hit::PresetHotkey(i), String::new()));
-                out.push((icon(2.0), Hit::PresetRename(i), String::new()));
-                out.push((r, Hit::Preset(i), label));
-            }
+            Some(i) => out.push((r, Hit::Preset(i), label)),
             None => out.push((r, Hit::SavePreset, label)),
         }
         x += r.w + 6.0;
@@ -1696,20 +1694,20 @@ impl Flyout {
         } else {
             self.text(
                 rt,
-                tr!("ПКМ по пресету — меню", "Right-click a preset for menu"),
+                tr!("ПКМ — сохранить, клавиша, имя", "Right-click: save, hotkey, name"),
                 &f.sub_right,
-                R { x: W - PAD - 200.0, y: PRESET_LABEL_Y, w: 200.0, h: 20.0 },
+                R { x: W - PAD - 250.0, y: PRESET_LABEL_Y, w: 250.0, h: 20.0 },
                 t.text2,
             );
         }
-        let (active, saved): (Vec<bool>, Vec<bool>) = {
+        let active: Vec<bool> = {
             let cfg = crate::config();
-            cfg.presets.iter().map(|p| (cfg.matches(p), cfg.saved_in(p))).unzip()
+            cfg.presets.iter().map(|p| cfg.matches(p)).collect()
         };
         let renaming = RENAME.load(Ordering::Relaxed);
         let chips = preset_chips();
         let is_on = |i: usize| active.get(i) == Some(&true) && renaming != i;
-        // Pass 1: chips with their labels (or the rename field).
+        // Chips with their labels (or the rename field), then the "+" chip.
         for (r, hit, label) in chips.iter().filter(|c| matches!(c.1, Hit::Preset(_) | Hit::SavePreset)) {
             let (r, hit) = (*r, *hit);
             let i = match hit {
@@ -1725,55 +1723,25 @@ impl Flyout {
                 self.fill(rt, r, 4.0, if hover(hit) && !editing { t.card_hover } else { t.card });
                 self.stroke(rt, r, 4.0, if highlighted { t.accent } else { t.stroke }, if highlighted { 2.0 } else { 1.0 });
             }
-            let text_r = if i == usize::MAX { r } else { R { w: r.w - PRESET_ICONS_W + 6.0, ..r } };
+            if !is_preset {
+                let fg = if hover(hit) { t.text } else { t.text2 };
+                self.text(rt, ICON_ADD, &f.icon_tiny, r, fg);
+                continue;
+            }
             if editing {
-                let inner = R { x: r.x + 10.0, w: r.w - PRESET_ICONS_W - 10.0, ..r };
+                let inner = R { x: r.x + 10.0, w: r.w - 20.0, ..r };
                 self.text(rt, label, &f.sub, inner, t.text);
                 let caret_x = inner.x + (label.chars().count() as f32 * 6.9).min(inner.w - 2.0);
                 self.fill(rt, R { x: caret_x, y: r.y + 6.0, w: 1.5, h: r.h - 12.0 }, 0.0, t.text);
             } else {
-                let fg = if is_on(i) {
-                    t.on_accent
-                } else if hit == Hit::SavePreset {
-                    t.text2
-                } else {
-                    t.text
-                };
-                self.text(rt, label, &f.center_small, text_r, fg);
+                let fg = if is_on(i) { t.on_accent } else { t.text };
+                self.text(rt, label, &f.center_small, r, fg);
             }
-        }
-        // Pass 2: the small icon buttons on top of their chips.
-        for (r, hit, _) in chips.iter().filter(|c| matches!(c.1, Hit::PresetOverwrite(_) | Hit::PresetHotkey(_) | Hit::PresetRename(_))) {
-            let (r, hit) = (*r, *hit);
-            let (i, glyph) = match hit {
-                Hit::PresetOverwrite(i) => (i, ICON_SAVE),
-                Hit::PresetHotkey(i) => (i, "\u{E765}"),
-                Hit::PresetRename(i) => (i, "\u{E70F}"),
-                _ => continue,
-            };
-            let on = is_on(i);
-            // Nothing to overwrite while the preset is exactly what is shown.
-            let disabled = matches!(hit, Hit::PresetOverwrite(_)) && saved.get(i) == Some(&true);
-            if hover(hit) && !disabled {
-                self.fill(rt, r, 3.0, if on { col(255, 255, 255, 0.25) } else { t.card_hover });
-            }
-            let active_btn = (hit == Hit::PresetHotkey(i) && capture == i) || (hit == Hit::PresetRename(i) && renaming == i);
-            let mut fg = if active_btn {
-                t.accent
-            } else if on {
-                t.on_accent
-            } else {
-                t.text2
-            };
-            if disabled {
-                fg.a *= 0.4;
-            }
-            self.text(rt, glyph, &f.icon_tiny, r, fg);
         }
 
         // Footer.
-        self.fill(rt, R { x: 0.0, y: DIVIDER_Y, w: W, h: 1.0 }, 0.0, t.stroke);
-        let sw = R { x: PAD, y: FOOTER_Y + 8.0, w: 40.0, h: 20.0 };
+        self.fill(rt, R { x: 0.0, y: divider_y(), w: W, h: 1.0 }, 0.0, t.stroke);
+        let sw = R { x: PAD, y: footer_y() + 8.0, w: 40.0, h: 20.0 };
         if self.autostart {
             self.fill(rt, sw, 10.0, t.accent);
             self.circle(rt, sw.x + sw.w - 10.0, sw.cy(), if hover(Hit::Autostart) { 7.0 } else { 6.0 }, t.on_accent);
@@ -1782,8 +1750,8 @@ impl Flyout {
             self.stroke(rt, sw, 10.0, t.text2, 1.0);
             self.circle(rt, sw.x + 10.0, sw.cy(), if hover(Hit::Autostart) { 6.0 } else { 5.0 }, t.text2);
         }
-        self.text(rt, tr!("Запускать вместе с Windows", "Start with Windows"), &f.sub, R { x: sw.x + 50.0, y: FOOTER_Y, w: 200.0, h: 36.0 }, t.text);
-        let exit = R { x: W - PAD - 92.0, y: FOOTER_Y, w: 92.0, h: 36.0 };
+        self.text(rt, tr!("Запускать вместе с Windows", "Start with Windows"), &f.sub, R { x: sw.x + 50.0, y: footer_y(), w: 200.0, h: 36.0 }, t.text);
+        let exit = R { x: W - PAD - 92.0, y: footer_y(), w: 92.0, h: 36.0 };
         if hover(Hit::Exit) {
             self.fill(rt, exit, 4.0, t.card_hover);
         }
@@ -2507,15 +2475,6 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
         }
         Hit::Zone(z) => ZONE.store(z, Ordering::Relaxed),
         Hit::Preset(i) => crate::apply_preset(i),
-        Hit::PresetOverwrite(i) => {
-            if !preset_saved(i) {
-                crate::overwrite_preset(i);
-            }
-        }
-        Hit::PresetHotkey(i) => {
-            finish_rename(true);
-            CAPTURE.store(i, Ordering::Relaxed);
-        }
         Hit::Menu(item) => {
             if let Some(target) = menu_target() {
                 menu_action(hwnd, target, item);
@@ -2525,10 +2484,6 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
             close_menu();
         }
         Hit::MenuBody => {}
-        Hit::PresetRename(i) => {
-            finish_rename(true);
-            start_rename(i);
-        }
         Hit::SavePreset => crate::save_preset(),
         Hit::Swatch(i) => paint_selected(PALETTE[i]),
         Hit::Custom => {
@@ -2638,7 +2593,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             .unwrap_or((None, None, None));
             // A click anywhere except the field being edited finishes renaming.
             let renaming = RENAME.load(Ordering::Relaxed);
-            if renaming != usize::MAX && !matches!(hit, Some(Hit::Preset(i) | Hit::PresetRename(i)) if i == renaming) {
+            if renaming != usize::MAX && !matches!(hit, Some(Hit::Preset(i)) if i == renaming) {
                 finish_rename(true);
                 invalidate();
             }
@@ -2665,7 +2620,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 invalidate();
             } else if let Some(h) = hit {
                 // Clicking the chip that is being renamed keeps editing instead of applying it.
-                if !(matches!(h, Hit::Preset(i) | Hit::PresetRename(i) if i == renaming)) {
+                if !(matches!(h, Hit::Preset(i) if i == renaming)) {
                     activate(hwnd, h);
                 }
             }
