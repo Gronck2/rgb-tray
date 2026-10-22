@@ -53,7 +53,7 @@ A Razer device can often be added right away, without a new version: describe it
 - Firmware effects of a keyboard in its key editor, next to the presets: wave and ripple on the Logitech G915. Painting a key brings the key colors back.
 - Per-key editor for the Logitech keyboard: brush, eyedropper, rainbow, two-color gradient, WASD and letters-only presets, highlighting a word, saved schemes, ANSI/ISO layouts.
 - Presets with global hotkeys (including F13–F24 with Ctrl/Alt/Shift/Win).
-- A global hotkey per device that switches it off and back on as it was (the keyboard button after the name on its card), e.g. for a room lamp.
+- A global hotkey per device that switches it off and back on as it was (the keyboard button after the name on its card: F13–F24 or any shortcut), e.g. for a room lamp.
 - Multiple identical devices with separate settings; devices are recognised by serial number.
 - Disconnected devices are kept in an archive with their settings and come back when reconnected.
 - "No link" status when a wireless device is asleep or off; colors are re-applied when it wakes.

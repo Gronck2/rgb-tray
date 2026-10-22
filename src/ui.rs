@@ -681,8 +681,32 @@ enum MenuItem {
     Delete,
 }
 
-/// The open preset menu, drawn inside the panel: (preset, anchor point, modifiers for F13–F24).
-static MENU: Mutex<Option<(usize, f32, f32, u32)>> = Mutex::new(None);
+/// What the open menu is for: a preset (all its actions and its hotkey) or a device (its on/off hotkey).
+#[derive(Clone, PartialEq)]
+enum MenuTarget {
+    Preset(usize),
+    Device(String),
+}
+
+impl MenuTarget {
+    fn hotkey(&self) -> Option<crate::config::Hotkey> {
+        let cfg = crate::config();
+        match self {
+            MenuTarget::Preset(i) => cfg.presets.get(*i).and_then(|p| p.hotkey),
+            MenuTarget::Device(id) => cfg.devices.get(id).and_then(|d| d.hotkey),
+        }
+    }
+
+    fn set_hotkey(&self, hotkey: Option<crate::config::Hotkey>) {
+        match self {
+            MenuTarget::Preset(i) => crate::set_preset_hotkey(*i, hotkey),
+            MenuTarget::Device(id) => crate::set_device_hotkey(id, hotkey),
+        }
+    }
+}
+
+/// The open menu, drawn inside the panel: (what for, anchor point, modifiers for F13–F24).
+static MENU: Mutex<Option<(MenuTarget, f32, f32, u32)>> = Mutex::new(None);
 
 /// MOD_* bits with their labels, in Windows order.
 const MENU_MODS: [(u32, &str); 4] = [(0x2, "Ctrl"), (0x1, "Alt"), (0x4, "Shift"), (0x8, "Win")];
@@ -700,38 +724,43 @@ const MENU_KEY_H: f32 = 26.0;
 const MENU_KEY_STEP: f32 = 30.0;
 const MENU_KEY_COLS: usize = 4;
 
-fn open_menu(i: usize, x: f32, y: f32) {
+fn open_menu(target: MenuTarget, x: f32, y: f32) {
     // Start from the modifiers of the current F13–F24 hotkey.
-    let mods = crate::config().presets.get(i).and_then(|p| p.hotkey).filter(|h| is_f13_24(h.vk)).map_or(0, |h| h.mods);
-    *MENU.lock().unwrap() = Some((i, x, y, mods));
+    let mods = target.hotkey().filter(|h| is_f13_24(h.vk)).map_or(0, |h| h.mods);
+    *MENU.lock().unwrap() = Some((target, x, y, mods));
 }
 
 fn menu_mods() -> u32 {
-    MENU.lock().unwrap().map_or(0, |m| m.3)
+    MENU.lock().unwrap().as_ref().map_or(0, |m| m.3)
 }
 
 fn close_menu() -> bool {
     MENU.lock().unwrap().take().is_some()
 }
 
-fn menu_preset() -> Option<usize> {
-    MENU.lock().unwrap().map(|m| m.0)
+fn menu_target() -> Option<MenuTarget> {
+    MENU.lock().unwrap().as_ref().map(|m| m.0.clone())
 }
 
-/// The menu card and its items, placed next to the click and kept inside the panel.
+/// The menu card and its items, placed next to the click and kept inside the panel. A device's
+/// menu has only the hotkey part.
 fn menu_layout() -> Option<(R, Vec<(R, MenuItem)>)> {
-    let (_, ax, ay, _) = (*MENU.lock().unwrap())?;
+    let (target, ax, ay, _) = MENU.lock().unwrap().clone()?;
+    let preset = matches!(target, MenuTarget::Preset(_));
     let key_rows = 12 / MENU_KEY_COLS + 1;
-    let h = 6.0 + MENU_HEADER_H + 4.0 * MENU_ITEM_H + MENU_GAP + MENU_LABEL_H + (key_rows + 1) as f32 * MENU_KEY_STEP + MENU_GAP + MENU_ITEM_H + 6.0;
+    let actions = if preset { 4.0 * MENU_ITEM_H + MENU_GAP + MENU_ITEM_H } else { 0.0 };
+    let h = 6.0 + MENU_HEADER_H + actions + MENU_GAP + MENU_LABEL_H + (key_rows + 1) as f32 * MENU_KEY_STEP + 6.0;
     let x = ax.clamp(8.0, W - 8.0 - MENU_W);
     let y = if ay + h <= panel_h() - 8.0 { ay } else { (ay - h).max(8.0) };
     let panel = R { x, y, w: MENU_W, h };
     let mut items = Vec::new();
     let row = |y: f32| R { x: x + 4.0, y, w: MENU_W - 8.0, h: MENU_ITEM_H };
     let mut cy = y + 6.0 + MENU_HEADER_H;
-    for item in [MenuItem::Apply, MenuItem::Overwrite, MenuItem::Rename, MenuItem::Export] {
-        items.push((row(cy), item));
-        cy += MENU_ITEM_H;
+    if preset {
+        for item in [MenuItem::Apply, MenuItem::Overwrite, MenuItem::Rename, MenuItem::Export] {
+            items.push((row(cy), item));
+            cy += MENU_ITEM_H;
+        }
     }
     cy += MENU_GAP + MENU_LABEL_H;
     let gx = x + 12.0;
@@ -748,8 +777,10 @@ fn menu_layout() -> Option<(R, Vec<(R, MenuItem)>)> {
     let last = cy + (key_rows - 1) as f32 * MENU_KEY_STEP;
     items.push((R { x: gx, y: last, w: cell, h: MENU_KEY_H }, MenuItem::Hotkey(None)));
     items.push((R { x: gx + cell + 4.0, y: last, w: MENU_W - 24.0 - cell - 4.0, h: MENU_KEY_H }, MenuItem::Combo));
-    cy = last + MENU_KEY_STEP + MENU_GAP;
-    items.push((row(cy), MenuItem::Delete));
+    if preset {
+        cy = last + MENU_KEY_STEP + MENU_GAP;
+        items.push((row(cy), MenuItem::Delete));
+    }
     Some((panel, items))
 }
 
@@ -759,7 +790,7 @@ fn preset_saved(i: usize) -> bool {
     cfg.presets.get(i).is_some_and(|p| cfg.saved_in(p))
 }
 
-unsafe fn menu_action(hwnd: HWND, i: usize, item: MenuItem) {
+unsafe fn menu_action(hwnd: HWND, target: MenuTarget, item: MenuItem) {
     if let MenuItem::Mod(bit) = item {
         // Toggling a modifier keeps the menu open and updates an assigned F13–F24 hotkey.
         let mods = {
@@ -768,31 +799,41 @@ unsafe fn menu_action(hwnd: HWND, i: usize, item: MenuItem) {
             state.3 ^= bit;
             state.3
         };
-        let current = crate::config().presets.get(i).and_then(|p| p.hotkey);
-        if let Some(h) = current.filter(|h| is_f13_24(h.vk)) {
-            crate::set_preset_hotkey(i, Some(crate::config::Hotkey { mods, vk: h.vk }));
+        if let Some(h) = target.hotkey().filter(|h| is_f13_24(h.vk)) {
+            target.set_hotkey(Some(crate::config::Hotkey { mods, vk: h.vk }));
         }
         return;
     }
     let mods = menu_mods();
     close_menu();
     match item {
-        MenuItem::Apply => crate::apply_preset(i),
-        MenuItem::Overwrite => {
-            if !preset_saved(i) {
-                crate::overwrite_preset(i);
-            }
-        }
-        MenuItem::Rename => start_rename(i),
-        MenuItem::Export => crate::export_preset(i),
-        MenuItem::Hotkey(None) => crate::set_preset_hotkey(i, None),
-        MenuItem::Hotkey(Some(n)) => crate::set_preset_hotkey(i, Some(crate::config::Hotkey { mods, vk: VK_F13 + n })),
+        MenuItem::Hotkey(None) => target.set_hotkey(None),
+        MenuItem::Hotkey(Some(n)) => target.set_hotkey(Some(crate::config::Hotkey { mods, vk: VK_F13 + n })),
         MenuItem::Combo => {
-            CAPTURE.store(i, Ordering::Relaxed);
+            stop_capture();
+            match target {
+                MenuTarget::Preset(i) => CAPTURE.store(i, Ordering::Relaxed),
+                MenuTarget::Device(id) => *CAPTURE_DEVICE.lock().unwrap() = Some(id),
+            }
             SetForegroundWindow(hwnd);
         }
-        MenuItem::Delete => crate::delete_preset(i),
         MenuItem::Mod(_) => {}
+        // The other items are a preset's.
+        _ => {
+            let MenuTarget::Preset(i) = target else { return };
+            match item {
+                MenuItem::Apply => crate::apply_preset(i),
+                MenuItem::Overwrite => {
+                    if !preset_saved(i) {
+                        crate::overwrite_preset(i);
+                    }
+                }
+                MenuItem::Rename => start_rename(i),
+                MenuItem::Export => crate::export_preset(i),
+                MenuItem::Delete => crate::delete_preset(i),
+                _ => {}
+            }
+        }
     }
 }
 /// Records the pressed combination as the hotkey of the preset or device being captured.
@@ -2076,8 +2117,17 @@ impl Flyout {
 
     /// The preset menu: a raised card over a dimmed panel.
     unsafe fn draw_menu(&self, rt: &ID2D1RenderTarget) {
-        let (Some((panel, items)), Some(i)) = (menu_layout(), menu_preset()) else { return };
-        let Some(preset) = crate::config().presets.get(i).cloned() else { return };
+        let (Some((panel, items)), Some(target)) = (menu_layout(), menu_target()) else { return };
+        let (name, hotkey, same) = match &target {
+            MenuTarget::Preset(i) => {
+                let Some(preset) = crate::config().presets.get(*i).cloned() else { return };
+                (preset.name, preset.hotkey, preset_saved(*i))
+            }
+            MenuTarget::Device(id) => {
+                let name = crate::config().display_name(id);
+                (name, target.hotkey(), false)
+            }
+        };
         let t = &self.theme;
         let f = &self.fmt;
         let hover = |h: Hit| self.hover == Some(h);
@@ -2099,13 +2149,13 @@ impl Flyout {
 
         // Header: preset name and its hotkey.
         let head = R { x: panel.x + 14.0, y: panel.y + 6.0, w: panel.w - 28.0, h: MENU_HEADER_H };
-        self.text(rt, &preset.name, &f.label, R { w: head.w - 90.0, ..head }, t.text);
-        if let Some(hk) = preset.hotkey {
+        self.text(rt, &name, &f.label, R { w: head.w - 90.0, ..head }, t.text);
+        if let Some(hk) = hotkey {
             self.text(rt, &hk.label(), &f.sub_right, head, t.text2);
         }
 
-        let same = preset_saved(i);
-        let mut line_after_actions = 0.0;
+        // A device menu has no actions: the hotkey part starts under the header.
+        let mut line_after_actions = panel.y + 6.0 + MENU_HEADER_H;
         for &(r, item) in &items {
             let h = Hit::Menu(item);
             match item {
@@ -2156,9 +2206,9 @@ impl Flyout {
                 }
                 MenuItem::Hotkey(_) | MenuItem::Combo => {
                     let current = match item {
-                        MenuItem::Hotkey(Some(n)) => preset.hotkey.is_some_and(|h| h.vk == VK_F13 + n),
-                        MenuItem::Hotkey(None) => preset.hotkey.is_none(),
-                        _ => preset.hotkey.is_some_and(|h| !is_f13_24(h.vk)),
+                        MenuItem::Hotkey(Some(n)) => hotkey.is_some_and(|h| h.vk == VK_F13 + n),
+                        MenuItem::Hotkey(None) => hotkey.is_none(),
+                        _ => hotkey.is_some_and(|h| !is_f13_24(h.vk)),
                     };
                     if current {
                         self.fill(rt, r, 4.0, t.accent);
@@ -2170,7 +2220,7 @@ impl Flyout {
                     let label = match item {
                         MenuItem::Hotkey(Some(n)) => format!("F{}", 13 + n),
                         MenuItem::Hotkey(None) => tr!("Нет", "None").to_string(),
-                        _ => match preset.hotkey {
+                        _ => match hotkey {
                             Some(hk) if current => hk.label(),
                             _ => tr!("Сочетание…", "Shortcut…").to_string(),
                         },
@@ -2240,8 +2290,15 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32, card: usize, zone: u
             cfg.presets[2].brightness = 10;
         }
     }
-    if std::env::var_os("RGBTRAY_DEMO_MENU").is_some() {
-        open_menu(0, PAD + 40.0, lower_y() + PRESET_Y + 20.0);
+    // RGBTRAY_DEMO_MENU=device: the hotkey menu of the last device instead of the first preset.
+    match std::env::var("RGBTRAY_DEMO_MENU").ok().as_deref() {
+        Some("device") => {
+            if let Some(id) = crate::active_ids().last().cloned() {
+                open_menu(MenuTarget::Device(id), PAD + 40.0, 160.0);
+            }
+        }
+        Some(_) => open_menu(MenuTarget::Preset(0), PAD + 40.0, lower_y() + PRESET_Y + 20.0),
+        None => {}
     }
     render_png(path, W, panel_h(), scale, |rt, d2d| unsafe {
         let fly = Flyout {
@@ -2421,13 +2478,12 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
             }
         }
         Hit::DeviceHotkey(i) => {
-            if let Some((_, Row::Device(id))) = rows().get(i).cloned() {
-                let again = capturing_device().as_ref() == Some(&id);
+            if let Some((r, ref row @ Row::Device(ref id))) = rows().get(i).cloned() {
                 finish_rename(true);
                 stop_capture();
-                if !again {
-                    *CAPTURE_DEVICE.lock().unwrap() = Some(id);
-                }
+                let name = crate::config().display_name(id);
+                let b = hotkey_rect(r, row, &name);
+                open_menu(MenuTarget::Device(id.clone()), b.x, b.y + b.h + 4.0);
             }
         }
         Hit::Forget(i) => {
@@ -2457,8 +2513,8 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
             CAPTURE.store(i, Ordering::Relaxed);
         }
         Hit::Menu(item) => {
-            if let Some(i) = menu_preset() {
-                menu_action(hwnd, i, item);
+            if let Some(target) = menu_target() {
+                menu_action(hwnd, target, item);
             }
         }
         Hit::MenuOutside => {
@@ -2672,7 +2728,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some((x, y, Some(Hit::Preset(i)))) = hit {
                 finish_rename(true);
                 stop_capture();
-                open_menu(i, x, y);
+                open_menu(MenuTarget::Preset(i), x, y);
             }
             invalidate();
             0
@@ -2683,7 +2739,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             ScreenToClient(hwnd, &mut pt);
             let caption = with_flyout(|f| {
                 let (x, y) = (pt.x as f32 / f.scale, pt.y as f32 / f.scale);
-                (0.0..HEADER_DRAG_H).contains(&y) && menu_preset().is_none() && hit_test(x, y).is_none()
+                (0.0..HEADER_DRAG_H).contains(&y) && menu_target().is_none() && hit_test(x, y).is_none()
             });
             if caption == Some(true) {
                 HTCAPTION as LRESULT
