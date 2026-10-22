@@ -282,7 +282,7 @@ fn apply_all() {
             // Devices are applied one at a time (APPLY_LOCK): the driver reads this device's speed.
             let speed = cfg.effective_speed(&f.id);
             devices::set_speed(speed);
-            let job = if display == DISPLAY_OFF {
+            let job = if display == DISPLAY_OFF || dc.switched_off {
                 Job::Plain(Effect::Off, dc.rgb())
             } else if devices::caps(&f.id).per_key && dc.per_key {
                 Job::Keys(dc.all_keys(keymap::get(devices::caps(&f.id).layout).codes()))
@@ -340,9 +340,18 @@ fn apply_all() {
 
 // ---------------------------------------------------------------- actions shared by the panel
 
+/// Picking a color or an effect for one device switched off by its hotkey means "show this":
+/// it comes back on. Changing all devices leaves it off.
+fn switch_on_alone(cfg: &mut Config, ids: &[String]) {
+    if let [id] = ids {
+        cfg.device_mut(id).switched_off = false;
+    }
+}
+
 fn set_color(ids: &[String], c: Rgb) {
     log(&format!("set color {ids:?} {c:?}"));
     let mut cfg = config();
+    switch_on_alone(&mut cfg, ids);
     for id in ids {
         let dc = cfg.device_mut(id);
         dc.set_rgb(c);
@@ -362,6 +371,7 @@ fn set_color(ids: &[String], c: Rgb) {
 /// Colors one lighting zone of a device (e.g. the side panel of the mouse).
 fn set_zone_color(id: &str, led: u8, c: Rgb) {
     let mut cfg = config();
+    switch_on_alone(&mut cfg, &[id.to_string()]);
     let dc = cfg.device_mut(id);
     let leds: Vec<u8> = devices::zones_of(id).iter().map(|z| z.0).collect();
     dc.set_zone(led, c, &leds);
@@ -376,6 +386,7 @@ fn set_zone_color(id: &str, led: u8, c: Rgb) {
 fn set_effect(ids: &[String], e: Effect) {
     log(&format!("set effect {ids:?} {e:?}"));
     let mut cfg = config();
+    switch_on_alone(&mut cfg, ids);
     // Devices that can't show the effect keep theirs.
     for id in ids.iter().filter(|id| devices::caps(id).has_effect(e)) {
         let dc = cfg.device_mut(id);
@@ -597,7 +608,7 @@ fn set_device_hotkey(id: &str, hotkey: Option<config::Hotkey>) {
 fn toggle_device(id: &str) {
     let mut cfg = config();
     cfg.device_mut(id).toggle();
-    log(&format!("hotkey: {id} {:?}", cfg.device(id).effect));
+    log(&format!("hotkey: {id} {}", if cfg.device(id).switched_off { "off" } else { "on" }));
     cfg.save();
     drop(cfg);
     apply_all();

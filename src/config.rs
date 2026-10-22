@@ -35,9 +35,10 @@ pub struct DeviceConfig {
     /// Global hotkey that switches the device off and back on (not part of presets).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hotkey: Option<Hotkey>,
-    /// What the hotkey switched off, to bring back: the effect and whether per-key colors were shown.
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient_resume")]
-    pub resume: Option<(Effect, bool)>,
+    /// Switched off by its hotkey: dark, with its lighting kept for the next press. Like the
+    /// display going dark, it is not part of presets.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub switched_off: bool,
 }
 
 /// An effect this version doesn't know (saved by a newer or an older one) reads as steady:
@@ -45,10 +46,6 @@ pub struct DeviceConfig {
 /// owner's presets that way after 0.6.23 had saved "experimental").
 fn lenient_effect<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Effect, D::Error> {
     Ok(effect_named(&String::deserialize(d)?))
-}
-
-fn lenient_resume<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<(Effect, bool)>, D::Error> {
-    Ok(Option::<(String, bool)>::deserialize(d)?.map(|(name, keys)| (effect_named(&name), keys)))
 }
 
 fn effect_named(name: &str) -> Effect {
@@ -86,7 +83,7 @@ impl Default for DeviceConfig {
             keys: KeyColors::new(),
             last_seen: 0,
             hotkey: None,
-            resume: None,
+            switched_off: false,
         }
     }
 }
@@ -139,30 +136,27 @@ impl DeviceConfig {
 
     /// Only the lighting (what presets save), without name and bookkeeping.
     fn lighting(&self) -> DeviceConfig {
-        DeviceConfig { name: String::new(), last_seen: 0, hotkey: None, resume: None, ..self.clone() }
+        DeviceConfig { name: String::new(), last_seen: 0, hotkey: None, switched_off: false, ..self.clone() }
     }
 
+    /// Takes over a preset's lighting; whether the hotkey switched the device off stays.
     fn set_lighting(&mut self, from: &DeviceConfig) {
         *self = DeviceConfig {
             name: std::mem::take(&mut self.name),
             last_seen: self.last_seen,
             hotkey: self.hotkey,
-            // A preset that switches the device on forgets what the hotkey switched off.
-            resume: if from.effect == Effect::Off { self.resume } else { None },
+            switched_off: self.switched_off,
             ..from.lighting()
         };
     }
 
-    /// The device hotkey: switches the device off, or back on with what it showed before.
+    /// The device hotkey: switches the device off, or back on as it was. A device set to "Off"
+    /// in the panel comes on steady.
     pub fn toggle(&mut self) {
-        if self.effect == Effect::Off {
-            let (effect, per_key) = self.resume.take().unwrap_or((Effect::Static, false));
-            self.effect = effect;
-            self.per_key = per_key && !self.keys.is_empty();
+        if !self.switched_off && self.effect == Effect::Off {
+            self.effect = Effect::Static;
         } else {
-            self.resume = Some((self.effect, self.per_key));
-            self.effect = Effect::Off;
-            self.per_key = false;
+            self.switched_off = !self.switched_off;
         }
     }
 
@@ -827,40 +821,32 @@ mod tests {
     fn device_hotkey_switches_off_and_back() {
         let mut d = device(Effect::Breathe, "#112233");
         d.toggle();
-        assert!(d.effect == Effect::Off);
+        assert!(d.switched_off && d.effect == Effect::Breathe);
         d.toggle();
-        assert!(d.effect == Effect::Breathe && d.resume.is_none());
-        // Per-key colors come back too; Off from the panel comes back as steady.
-        d.set_key(4, Rgb(1, 2, 3));
-        d.per_key = true;
-        d.toggle();
-        assert!(d.effect == Effect::Off && !d.per_key);
-        d.toggle();
-        assert!(d.per_key);
+        assert!(!d.switched_off && d.effect == Effect::Breathe);
+        // A device set to "Off" in the panel comes on steady.
         let mut off = device(Effect::Off, "#112233");
         off.toggle();
-        assert!(off.effect == Effect::Static);
+        assert!(off.effect == Effect::Static && !off.switched_off);
     }
 
     #[test]
-    fn device_hotkey_is_saved_but_not_in_presets() {
+    fn device_hotkey_does_not_touch_presets() {
         let mut cfg = Config::default();
         let mut d = device(Effect::Cycle, "#112233");
         d.hotkey = Some(Hotkey { mods: 0x2, vk: 0x4C });
-        d.toggle();
         cfg.devices.insert("tuya-A".into(), d);
-        let text = toml::to_string(&cfg).unwrap();
-        let back: Config = toml::from_str(&text).unwrap();
-        assert!(back.devices["tuya-A"].hotkey == Some(Hotkey { mods: 0x2, vk: 0x4C }));
-        assert!(back.devices["tuya-A"].resume == Some((Effect::Cycle, false)));
-        // An effect this version doesn't know comes back as steady.
-        let text = text.replace("\"cycle\"", "\"plasma\"");
-        assert!(toml::from_str::<Config>(&text).unwrap().devices["tuya-A"].resume == Some((Effect::Static, false)));
         let p = cfg.snapshot("P".into());
-        assert!(p.devices["tuya-A"].hotkey.is_none() && p.devices["tuya-A"].resume.is_none());
-        // Loading a preset keeps the device's hotkey.
+        // Switched off by the hotkey: the preset still is the current lighting.
+        cfg.devices.get_mut("tuya-A").unwrap().toggle();
+        assert!(cfg.saved_in(&p));
+        assert!(!cfg.snapshot("Q".into()).devices["tuya-A"].switched_off);
+        assert!(p.devices["tuya-A"].hotkey.is_none());
+        // Loading a preset keeps the hotkey and leaves the device off.
         cfg.load_preset(&p);
-        assert!(cfg.devices["tuya-A"].hotkey.is_some());
+        assert!(cfg.devices["tuya-A"].hotkey.is_some() && cfg.devices["tuya-A"].switched_off);
+        let back: Config = toml::from_str(&toml::to_string(&cfg).unwrap()).unwrap();
+        assert!(back.devices["tuya-A"].switched_off && back.devices["tuya-A"].hotkey == Some(Hotkey { mods: 0x2, vk: 0x4C }));
     }
 
     #[test]
