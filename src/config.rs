@@ -518,6 +518,12 @@ impl Config {
             && self.devices.iter().all(|(id, d)| p.devices.get(id).is_none_or(|pd| d.same_lighting(pd)))
     }
 
+    /// Saving over the preset would change nothing: it is the current lighting and knows every
+    /// device (a device added after it was saved can still be written into it).
+    pub fn saved_in(&self, p: &Preset) -> bool {
+        self.matches(p) && self.devices.keys().all(|id| p.devices.contains_key(id))
+    }
+
     /// The color all these devices show, when they all show the same single color.
     pub fn uniform_color(&self, ids: &[String]) -> Option<Rgb> {
         let devices: Vec<DeviceConfig> = ids.iter().map(|id| self.device(id).visible()).collect();
@@ -789,6 +795,9 @@ mod tests {
         let p = cfg.snapshot("P".into());
         cfg.devices.insert("dock-B".into(), device(Effect::Cycle, "#00FF00"));
         assert!(cfg.matches(&p));
+        // It is still shown as the current preset, but the new device can be saved into it.
+        assert!(!cfg.saved_in(&p));
+        assert!(cfg.saved_in(&cfg.snapshot("P".into())));
         cfg.load_preset(&p);
         assert!(cfg.devices["dock-B"].effect == Effect::Cycle);
     }

@@ -725,10 +725,10 @@ fn menu_layout() -> Option<(R, Vec<(R, MenuItem)>)> {
     Some((panel, items))
 }
 
-/// Overwriting makes sense only when the current lighting differs from the preset.
-fn preset_matches(i: usize) -> bool {
+/// Overwriting makes sense only when the current lighting differs from the preset or it lacks a device.
+fn preset_saved(i: usize) -> bool {
     let cfg = crate::config();
-    cfg.presets.get(i).is_some_and(|p| cfg.matches(p))
+    cfg.presets.get(i).is_some_and(|p| cfg.saved_in(p))
 }
 
 unsafe fn menu_action(hwnd: HWND, i: usize, item: MenuItem) {
@@ -751,7 +751,7 @@ unsafe fn menu_action(hwnd: HWND, i: usize, item: MenuItem) {
     match item {
         MenuItem::Apply => crate::apply_preset(i),
         MenuItem::Overwrite => {
-            if !preset_matches(i) {
+            if !preset_saved(i) {
                 crate::overwrite_preset(i);
             }
         }
@@ -1621,9 +1621,9 @@ impl Flyout {
                 t.text2,
             );
         }
-        let active: Vec<bool> = {
+        let (active, saved): (Vec<bool>, Vec<bool>) = {
             let cfg = crate::config();
-            cfg.presets.iter().map(|p| cfg.matches(p)).collect()
+            cfg.presets.iter().map(|p| (cfg.matches(p), cfg.saved_in(p))).unzip()
         };
         let renaming = RENAME.load(Ordering::Relaxed);
         let chips = preset_chips();
@@ -1672,7 +1672,7 @@ impl Flyout {
             };
             let on = is_on(i);
             // Nothing to overwrite while the preset is exactly what is shown.
-            let disabled = matches!(hit, Hit::PresetOverwrite(_)) && active.get(i) == Some(&true);
+            let disabled = matches!(hit, Hit::PresetOverwrite(_)) && saved.get(i) == Some(&true);
             if hover(hit) && !disabled {
                 self.fill(rt, r, 3.0, if on { col(255, 255, 255, 0.25) } else { t.card_hover });
             }
@@ -2044,7 +2044,7 @@ impl Flyout {
             self.text(rt, &hk.label(), &f.sub_right, head, t.text2);
         }
 
-        let same = preset_matches(i);
+        let same = preset_saved(i);
         let mut line_after_actions = 0.0;
         for &(r, item) in &items {
             let h = Hit::Menu(item);
@@ -2378,7 +2378,7 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
         Hit::Zone(z) => ZONE.store(z, Ordering::Relaxed),
         Hit::Preset(i) => crate::apply_preset(i),
         Hit::PresetOverwrite(i) => {
-            if !preset_matches(i) {
+            if !preset_saved(i) {
                 crate::overwrite_preset(i);
             }
         }
