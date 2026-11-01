@@ -10,6 +10,9 @@ body:
 
         **Как получить отчёт:** правый клик по значку RGB Tray → **Запросить поддержку устройства…** — отчёт скопируется в буфер обмена. Или `rgbtray --diagnose report.txt`.
 
+        **With Claude Code:** open a clone of the repository in Claude Code and type `/add-device` — it can often get the device working right away and send a pull request.
+        **С Claude Code:** откройте клон репозитория в Claude Code и наберите `/add-device` — часто устройство удаётся подключить сразу и отправить pull request.
+
   - type: input
     id: model
     attributes:

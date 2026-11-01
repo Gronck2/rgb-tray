@@ -45,6 +45,10 @@ Right-click the tray icon → **Request device support…**. RGB Tray lists your
 
 A Razer device can often be added right away, without a new version: describe it in a small profile file ([docs/profiles.md](docs/profiles.md)).
 
+### Adding your device with Claude
+
+With [Claude Code](https://claude.com/claude-code) you can get a device working yourself, without knowing Rust or HID. Clone this repository, open Claude Code in it and type `/add-device`. Claude reads the device report, looks for the protocol (OpenRGB, OpenRazer, a USB capture of the vendor app), writes a profile or a driver and tests it with you: it can't see the lights, so it asks what the device did after each step. Commands that could harm a device (firmware updates, saving to flash) are off limits. When it works, Claude can send it as a pull request so that it is built in for everyone.
+
 ## Features
 
 - One panel for all devices: color, effect, brightness — for everything at once or per device.
@@ -82,6 +86,8 @@ Close vendor lighting software before using RGB Tray: two programs writing to th
 | Command | What it does |
 |---|---|
 | `rgbtray --diagnose [file.txt]` | Writes the device report: app and Windows versions, supported devices, and all HID devices grouped with their interfaces, likely lighting controllers first. Without a file name it is saved to `%APPDATA%\rgbtray\rgbtray-diagnose.txt` and opened in Notepad. Also available in the tray menu. |
+| `rgbtray --hid-send <out.txt> <vid:pid[:page]> <feature|output|get> "<hex>"…` | Sends raw HID reports and appends the answers to the file, for working out a device's protocol ([docs/profiles.md](docs/profiles.md#hid-any-device-with-a-simple-protocol)). |
+| `rgbtray --profile-test <out.txt> <profile.toml>` | Plays colors and effects on the devices of a `[hid]` profile that isn't installed yet and logs each step. |
 | `rgbtray --show` | Starts with the panel open and pinned. |
 | `rgbtray --uninstall` | Removes the app (settings are kept). |
 

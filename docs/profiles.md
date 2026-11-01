@@ -8,7 +8,7 @@ The built-in profiles are in [`profiles/`](../profiles) in the repository. A fil
 
 If a file has a mistake, RGB Tray skips it and says why in the device report (tray icon → Device report…, the "Device profiles" line) and in `%APPDATA%\rgbtray\rgbtray.log`.
 
-Protocols profiles support today: **Razer** and **QMK/VIA**.
+Protocols profiles support today: **Razer**, **QMK/VIA**, and **[hid]**: report templates for any device with a simple protocol.
 
 ## Example
 
@@ -76,3 +76,62 @@ Any QMK keyboard with VIA and RGB lighting already works without a profile: the 
 | `cycle_effect` | no | Number of the firmware effect to use for "Spectrum" (QMK RGB Matrix / RGBLight mode). Without it the app draws the spectrum. |
 
 QMK has no serial number, so a keyboard's settings are tied to its USB port. `[[zones]]` aren't supported for VIA keyboards. Example: [`profiles/geekboard-macropad.toml`](../profiles/geekboard-macropad.toml).
+
+## `[hid]`: any device with a simple protocol
+
+For a device no driver knows, if its lighting is set by one or a few HID reports with the color in them. The reports are written as byte templates; the app fills in the color when it sends them. Working out the bytes is the hard part: [CONTRIBUTING.md](../CONTRIBUTING.md#adding-a-device) explains how, and the `/add-device` skill lets [Claude Code](https://claude.com/claude-code) do it with you.
+
+```toml
+# A made-up LED strip with two zones.
+key = "mystrip"
+name = "My LED strip"
+class = "other"
+
+[[zones]]
+led = 0x01
+name = "Left"
+
+[[zones]]
+led = 0x02
+name = "Right"
+
+[hid]
+vid = 0x1234
+pids = [0x5678]
+usage_page = 0xFF00
+report = "feature"
+static = ["07 0A {zone} {r} {g} {b}", "07 0B"]
+```
+
+| Field | Required | What it is |
+|---|---|---|
+| `vid`, `pids` | yes | USB vendor id and product ids (in the device report). |
+| `usage_page` | yes | Usage page of the HID collection the reports go to, usually a vendor one (`0xFF00` and up). The device report lists the collections of each device. |
+| `usage` | no | Its usage, if the device has several collections on that page. |
+| `report` | yes | `feature` (sent with HidD_SetFeature) or `output` (written to the device). Each report is padded with zeros to the collection's report length. |
+| `static` | yes | Reports that show a steady color, in order. |
+| `off` | no | Reports that switch the lighting off. By default `static` with black. |
+| `breathe`, `cycle` | no | Reports that start the firmware's breathing or spectrum. Without them the app draws the effect by sending `static` about 60 times a second. |
+| `delay_ms` | no | Pause between reports, for devices that drop reports sent too fast. |
+
+A report is hex bytes separated by spaces, starting with the report id (`00` if the device has no report ids). Placeholders:
+
+| Placeholder | Value |
+|---|---|
+| `{r}` `{g}` `{b}` | The color scaled by the brightness slider. |
+| `{red}` `{green}` `{blue}` | The color as chosen, for devices that take brightness separately. |
+| `{brightness}` | Brightness 0–255. |
+| `{percent}` | Brightness 0–100. |
+| `{speed}` | Effect speed 0–255, about 127 normal, higher is faster. |
+| `{zone}` | The zone's `led` id. A report with `{zone}` is sent once per zone, with that zone's color; `[[zones]]` need it. |
+
+The device has no serial number to the app, so its settings are tied to its USB port. If a protocol needs answers from the device, a checksum or a handshake, a profile can't describe it: that is a driver (CONTRIBUTING.md, "A new protocol").
+
+### Trying a profile before installing it
+
+```
+rgbtray --hid-send out.txt 1234:5678:FF00 feature "07 0A 01 FF 00 00" "07 0B"
+rgbtray --profile-test out.txt my-strip.toml
+```
+
+`--hid-send` sends single reports to the first collection that matches `vid:pid[:usage_page[:usage]]` and appends what it sent and what the device answered to `out.txt` (`feature`, `output`, or `get` to read a feature report by id). `--profile-test` plays red, green, blue, dim white, each zone in turn, breathing, spectrum and off with a [hid] profile, a step every few seconds, and logs each step. Watch the device while it runs.

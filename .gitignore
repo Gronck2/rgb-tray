@@ -1,2 +1,5 @@
 /target/
 /dist/
+CLAUDE.local.md
+/.claude/*
+!/.claude/skills/

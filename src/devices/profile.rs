@@ -2,6 +2,7 @@
 //! built-in ones are in `profiles/` (compiled in); users add or replace models with files in
 //! `%APPDATA%\rgbtray\devices\*.toml`. A profile becomes a `Kind`, like a model written in Rust.
 
+use super::rawhid::{self, HidModel, Packet, Report};
 use super::razer::RazerModel;
 use super::via::ViaModel;
 use super::{Class, Effect, Kind, Protocol, Speed};
@@ -40,6 +41,8 @@ struct Profile {
     razer: Option<RazerSection>,
     #[serde(default)]
     via: Option<ViaSection>,
+    #[serde(default)]
+    hid: Option<HidSection>,
     /// Someone checked the model on real hardware (the card says "untested" otherwise).
     #[serde(default)]
     tested: bool,
@@ -72,6 +75,44 @@ struct ViaSection {
     /// Firmware effect number for "Spectrum", if the firmware has a usable one.
     #[serde(default)]
     cycle_effect: Option<u8>,
+}
+
+/// Any HID device with a simple protocol: reports written as byte templates (see `rawhid`).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HidSection {
+    vid: u16,
+    pids: Vec<u16>,
+    usage_page: u16,
+    #[serde(default)]
+    usage: Option<u16>,
+    report: ReportName,
+    #[serde(rename = "static")]
+    static_: Vec<String>,
+    #[serde(default)]
+    off: Vec<String>,
+    #[serde(default)]
+    breathe: Vec<String>,
+    #[serde(default)]
+    cycle: Vec<String>,
+    #[serde(default)]
+    delay_ms: u16,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ReportName {
+    Feature,
+    Output,
+}
+
+/// Report templates of one list (`static`, `off`...), each in the program's lifetime.
+fn templates(list: &str, texts: Vec<String>) -> Result<&'static [Packet], String> {
+    let packets = texts
+        .iter()
+        .map(|t| rawhid::parse_packet(t).map(|p| &*Box::leak(p.into_boxed_slice())).map_err(|e| format!("[hid] {list}: {e}")))
+        .collect::<Result<Vec<Packet>, String>>()?;
+    Ok(leak_slice(packets))
 }
 
 /// The 90-byte Razer report (as documented by OpenRazer).
@@ -115,7 +156,7 @@ fn parse(text: &str) -> Result<Kind, String> {
 
 /// All models of a file: one profile, or several as `[[device]]` sections. A broken one
 /// doesn't keep the others out.
-fn parse_file(text: &str) -> Vec<Result<Kind, String>> {
+pub fn parse_file(text: &str) -> Vec<Result<Kind, String>> {
     let table: toml::Table = match toml::from_str(text) {
         Ok(t) => t,
         Err(e) => return vec![Err(e.message().to_string())],
@@ -158,8 +199,12 @@ fn from_profile(p: Profile) -> Result<Kind, String> {
     if !effects.contains(&Effect::Off) {
         return Err("effects must include \"off\"".into());
     }
-    let (protocol, speed, port_id) = match (p.razer, p.via) {
-        (Some(r), None) => {
+    let sections = p.razer.is_some() as u8 + p.via.is_some() as u8 + p.hid.is_some() as u8;
+    if sections > 1 {
+        return Err("more than one protocol section".into());
+    }
+    let (protocol, speed, port_id) = match (p.razer, p.via, p.hid) {
+        (Some(r), _, _) => {
             if r.pids.is_empty() || r.leds.is_empty() {
                 return Err("[razer]: pids and leds must not be empty".into());
             }
@@ -170,7 +215,7 @@ fn from_profile(p: Profile) -> Result<Kind, String> {
             // The Razer report has no effect speed; the device reports a serial number.
             (Protocol::Razer(Box::leak(Box::new(model))), Speed::None, false)
         }
-        (None, Some(v)) => {
+        (_, Some(v), _) => {
             if !p.zones.is_empty() {
                 return Err("[via] keyboards have no zones".into());
             }
@@ -178,8 +223,34 @@ fn from_profile(p: Profile) -> Result<Kind, String> {
             // QMK has no serial number: the id comes from the USB port.
             (Protocol::Via(Box::leak(Box::new(model))), Speed::Smooth, true)
         }
-        (None, None) => return Err("no protocol section ([razer] or [via])".into()),
-        (Some(_), Some(_)) => return Err("more than one protocol section".into()),
+        (_, _, Some(h)) => {
+            if h.pids.is_empty() || h.static_.is_empty() {
+                return Err("[hid]: pids and static must not be empty".into());
+            }
+            let static_ = templates("static", h.static_)?;
+            let zoned = static_.iter().any(|t| t.contains(&rawhid::Byte::Zone));
+            if !p.zones.is_empty() && !zoned {
+                return Err("[hid]: zones need {zone} in a static report".into());
+            }
+            let model = HidModel {
+                vid: h.vid,
+                pids: leak_slice(h.pids),
+                usage_page: h.usage_page,
+                usage: h.usage,
+                report: match h.report {
+                    ReportName::Feature => Report::Feature,
+                    ReportName::Output => Report::Output,
+                },
+                static_,
+                off: templates("off", h.off)?,
+                breathe: templates("breathe", h.breathe)?,
+                cycle: templates("cycle", h.cycle)?,
+                delay_ms: h.delay_ms,
+            };
+            // Ids come from the USB port: a profile can't say how to read a serial number.
+            (Protocol::Hid(Box::leak(Box::new(model))), Speed::Smooth, true)
+        }
+        (None, None, None) => return Err("no protocol section ([razer], [via] or [hid])".into()),
     };
     // Effects beyond the basic four that the protocol's driver can send.
     let extra: &[Effect] = match protocol {
@@ -311,6 +382,26 @@ mod tests {
         assert_eq!(pad.icon, "\u{E92E}");
         let both = "key = \"x\"\nname = \"X\"\nclass = \"keyboard\"\n[via]\nvid = 1\npid = 2\n[razer]\npids = [1]\ntransaction_id = 0x1F\nleds = [5]\n";
         assert!(parse(both).unwrap_err().contains("more than one"));
+    }
+
+    #[test]
+    fn hid_profile() {
+        let ok = "key = \"strip\"\nname = \"LED strip\"\nclass = \"other\"\n[[zones]]\nled = 1\nname = \"Left\"\n[[zones]]\nled = 2\nname = \"Right\"\n\
+                  [hid]\nvid = 0x1234\npids = [0x5678]\nusage_page = 0xFF00\nreport = \"output\"\nstatic = [\"00 07 {zone} {r} {g} {b}\", \"00 08\"]\n\
+                  cycle = [\"00 09 {speed}\"]\n";
+        let k = parse(ok).unwrap();
+        let Protocol::Hid(m) = k.protocol else { panic!("strip is not hid") };
+        assert_eq!((m.vid, m.pids, m.usage_page, m.usage, m.report), (0x1234, &[0x5678][..], 0xFF00, None, Report::Output));
+        assert_eq!((m.static_.len(), m.off.len(), m.breathe.len(), m.cycle.len()), (2, 0, 0, 1));
+        // No serial: the id comes from the port; the app can draw any speed.
+        assert!(k.port_id && k.speed == Speed::Smooth && k.effects == Effect::ALL);
+        let err = |text: &str| parse(text).unwrap_err();
+        assert!(err(&ok.replace("{zone} ", "")).contains("{zone}"));
+        assert!(err(&ok.replace("{speed}", "{fast}")).contains("cycle"));
+        assert!(err(&ok.replace("report = \"output\"", "report = \"input\"")).contains("input"));
+        assert!(err(&ok.replace("pids = [0x5678]", "pids = []")).contains("pids"));
+        assert!(err(&format!("{ok}[via]\nvid = 1\npid = 2\n")).contains("more than one"));
+        assert!(err(&format!("effects = [\"wave\", \"off\"]\n{ok}")).contains("Wave"));
     }
 
     #[test]

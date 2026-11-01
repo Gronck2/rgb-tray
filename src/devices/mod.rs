@@ -3,6 +3,7 @@ pub mod asus;
 pub mod lamparray;
 pub mod logitech;
 pub mod profile;
+pub mod rawhid;
 pub mod razer;
 pub mod tuya;
 pub mod via;
@@ -168,7 +169,7 @@ impl Driver {
 
 /// Every driver. A native driver comes before the generic LampArray and QMK/VIA ones:
 /// `discover()` keeps the first device with a given id.
-pub const DRIVERS: &[Driver] = &[logitech::DRIVER, razer::DRIVER, asus::DRIVER, via::DRIVER, lamparray::DRIVER, tuya::DRIVER];
+pub const DRIVERS: &[Driver] = &[logitech::DRIVER, razer::DRIVER, asus::DRIVER, rawhid::DRIVER, via::DRIVER, lamparray::DRIVER, tuya::DRIVER];
 
 /// Battery levels of all connected wireless devices, by device id. Opens only devices that
 /// have a battery, so it is cheap enough to run periodically.
@@ -214,6 +215,7 @@ pub enum Protocol {
     Native,
     Razer(&'static razer::RazerModel),
     Via(&'static via::ViaModel),
+    Hid(&'static rawhid::HidModel),
 }
 
 /// Every model in panel order: the Rust models, with the profile models by their protocol

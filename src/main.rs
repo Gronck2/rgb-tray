@@ -961,6 +961,61 @@ fn lamparray_test(args: &[String]) {
     }
 }
 
+/// Appends text to a file (CLI tests write their steps as they go).
+fn append(path: &str, text: &str) {
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = f.write_all(text.as_bytes());
+    }
+}
+
+fn profile_test(out: &str, file: &str) {
+    use devices::Device as _;
+    let _ = std::fs::write(out, "");
+    let text = match std::fs::read_to_string(file) {
+        Ok(t) => t,
+        Err(e) => return append(out, &format!("{file}: {e}\n")),
+    };
+    let start = std::time::Instant::now();
+    for kind in devices::profile::parse_file(&text) {
+        let kind: &'static devices::Kind = match kind {
+            Ok(k) => Box::leak(Box::new(k)),
+            Err(e) => {
+                append(out, &format!("profile error: {e}\n"));
+                continue;
+            }
+        };
+        let found = devices::rawhid::find(kind);
+        append(out, &format!("{}: {} device(s) found\n", kind.key, found.len()));
+        if found.is_empty() {
+            continue;
+        }
+        if !matches!(kind.protocol, devices::Protocol::Hid(_)) {
+            append(out, "only [hid] profiles can be tested this way; put others into the devices folder and restart the app\n");
+        }
+        let zones: Vec<u8> = kind.zones.iter().map(|z| z.0).collect();
+        let (red, green, blue, white, off) = (Rgb(255, 0, 0), Rgb(0, 255, 0), Rgb(0, 0, 255), Rgb(255, 255, 255), Rgb(0, 0, 0));
+        let mut steps = Vec::new();
+        let all = |c: Rgb| if zones.is_empty() { vec![(0, c)] } else { zones.iter().map(|&z| (z, c)).collect() };
+        for (name, c) in [("red", red), ("green", green), ("blue", blue)] {
+            steps.push((format!("static {name}"), Effect::Static, all(c), 100));
+        }
+        steps.push(("static white at 30% brightness".into(), Effect::Static, all(white), 30));
+        for &z in &zones {
+            steps.push((format!("zone {z:#04x} red, others off"), Effect::Static, zones.iter().map(|&o| (o, if o == z { red } else { off })).collect(), 100));
+        }
+        steps.push(("breathe green".into(), Effect::Breathe, all(green), 100));
+        steps.push(("cycle".into(), Effect::Cycle, all(red), 100));
+        steps.push(("off".into(), Effect::Off, all(red), 100));
+        for (name, effect, colors, brightness) in steps {
+            for d in &found {
+                let res = d.apply_zones(effect, &colors, brightness);
+                append(out, &format!("{:>5.1}s {name}: {}\n", start.elapsed().as_secs_f32(), res.err().unwrap_or_else(|| "ok".into())));
+            }
+            std::thread::sleep(std::time::Duration::from_secs(if effect.animated() { 6 } else { 3 }));
+        }
+    }
+}
+
 /// "naga-123456H78900012" → "naga-…0012": enough to tell identical devices apart.
 fn short_id(id: &str) -> String {
     match id.split_once('-') {
@@ -1480,6 +1535,20 @@ fn main() {
     }
     if let Some(i) = args.iter().position(|a| a == "--lamparray-test") {
         lamparray_test(&args[i + 1..]);
+        return;
+    }
+    // `--hid-send <out.txt> <vid:pid[:page[:usage]]> <feature|output|get> "<hex>"...`: raw reports,
+    // for working out a protocol; answers are appended to the file.
+    if let Some(i) = args.iter().position(|a| a == "--hid-send") {
+        let out = args.get(i + 1).cloned().unwrap_or_else(|| "hid.txt".into());
+        append(&out, &devices::rawhid::send_cli(&args[(i + 2).min(args.len())..]));
+        return;
+    }
+    // `--profile-test <out.txt> <profile.toml>`: plays a fixed sequence on the devices of a [hid]
+    // profile that isn't installed yet, a step every 3 s, each step logged as it starts.
+    if let Some(i) = args.iter().position(|a| a == "--profile-test") {
+        let out = args.get(i + 1).cloned().unwrap_or_else(|| "profile.txt".into());
+        profile_test(&out, args.get(i + 2).map(String::as_str).unwrap_or(""));
         return;
     }
     if args.iter().any(|a| a == "--uninstall") {

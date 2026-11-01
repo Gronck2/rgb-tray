@@ -10,6 +10,7 @@ Thanks for helping. RGB Tray is a small Windows tray app in Rust (Win32 + Direct
 - **Test builds.** A device we add for you can only be checked on your hardware. We'll ask you to try a build and tell us what the lights actually did.
 - **Report bugs** with the [bug form](../../issues/new?template=bug-report.yml). Attach `%APPDATA%\rgbtray\rgbtray.log` (and `rgbtray.old.log` if the problem was before the last restart).
 - **Send a pull request:** a device, a fix, a translation fix.
+- **Add your device with Claude.** Open [Claude Code](https://claude.com/claude-code) in a clone of this repository and type `/add-device`. The skill (`.claude/skills/add-device/SKILL.md`) takes Claude from the device report to a tested profile or driver and a pull request. `CLAUDE.md` tells Claude how the project is built and checked.
 
 ## Build and check
 
@@ -67,6 +68,10 @@ If the report marks your device as one of these but something doesn't work, open
 - **Razer:** write a profile: a small TOML file in `profiles/` (built in) or `%APPDATA%\rgbtray\devices\` (your own, no compiling). [docs/profiles.md](docs/profiles.md) describes the format; OpenRazer is a good source for the values. Add the file to `BUILT_IN` in `src/devices/profile.rs` to build it in.
 - **QMK/VIA with a known firmware effect:** write a profile with a `[via]` section (see [docs/profiles.md](docs/profiles.md)). Without one the keyboard still works; the app draws breathing and spectrum itself.
 - **Logitech HID++ 2.0** keyboards with the 0x8071/0x8081 features are close to the G915. The receiver ids and the layout (`layouts/*.toml`, see `src/keymap.rs`) are the parts that differ.
+
+### 2a. A simple protocol: a `[hid]` profile
+
+If the device's lighting is set by one or a few HID reports with the color in them, and it needs no answers, checksums or handshake, a `[hid]` profile describes it without code: report templates with `{r} {g} {b}` and other placeholders ([docs/profiles.md](docs/profiles.md#hid-any-device-with-a-simple-protocol)). Work the reports out from OpenRGB's source for the device, a USB capture of the vendor app, or careful tries with `rgbtray --hid-send`, then check the whole profile with `rgbtray --profile-test`.
 
 Logitech HID++ and ASUS Aura models are still in code: their drivers find what a device can do by themselves, and a profile would only matter once there's a second model to tell apart (see `ROADMAP.md`).
 
