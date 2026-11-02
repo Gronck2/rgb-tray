@@ -21,9 +21,16 @@ fn speed_step(factor: f32) -> usize {
 /// Device id of the laptop keyboard.
 const ID: &str = "asus";
 
+/// One of the vendor collections, with its feature report length (64 or more).
+struct Collection {
+    hid: Hid,
+    path: Vec<u16>,
+    len: usize,
+}
+
 pub struct Asus {
-    aura: Hid,
-    kbd: Option<Hid>,
+    aura: Collection,
+    kbd: Option<Collection>,
     /// The HID LampArray interface (Windows Dynamic Lighting): its zones (keyboard zones and
     /// body lamps) are colored through it; single colors and effects go through Aura.
     lamp_array: Option<LampArray>,
@@ -32,8 +39,10 @@ pub struct Asus {
 impl Asus {
     pub fn find() -> Option<Asus> {
         let infos = hid::enumerate(VID);
-        let open =
-            |usage: u16| infos.iter().find(|i| i.usage_page == 0xFF31 && i.usage == usage && i.feature_len >= 64).and_then(|i| Hid::open(&i.path, true, false));
+        let open = |usage: u16| {
+            let i = infos.iter().find(|i| i.usage_page == 0xFF31 && i.usage == usage && i.feature_len >= 64)?;
+            Some(Collection { hid: Hid::open(&i.path, true, false)?, path: i.path.clone(), len: i.feature_len as usize })
+        };
         let lamp_array = infos.iter().find(|i| i.usage_page == 0x0059 && i.usage == 0x0001 && i.feature_len > 1).and_then(|i| LampArray::open(i).ok());
         if let Some(la) = &lamp_array {
             la.register_zones(ID);
@@ -49,10 +58,11 @@ impl Asus {
         }
     }
 
-    fn send(hid: &Hid, bytes: &[u8]) -> Result<(), String> {
-        let mut buf = [0u8; 64];
+    /// Sends a feature report, padded with zeros to the collection's report length.
+    fn send(c: &Collection, bytes: &[u8]) -> Result<(), String> {
+        let mut buf = vec![0u8; c.len.max(bytes.len())];
         buf[..bytes.len()].copy_from_slice(bytes);
-        if hid.set_feature(&buf) {
+        if c.hid.set_feature(&buf) {
             Ok(())
         } else {
             Err("ASUS: send failed".into())
@@ -61,6 +71,10 @@ impl Asus {
 }
 
 impl Device for Asus {
+    fn hid_path(&self) -> Option<&[u16]> {
+        Some(&self.aura.path)
+    }
+
     fn apply(&self, effect: Effect, color: Rgb, brightness: u8) -> Result<(), String> {
         self.take_from_dynamic_lighting();
         // The keyboard has 4 backlight levels: 0 (off) ..= 3.
@@ -72,7 +86,10 @@ impl Device for Asus {
             Self::send(kbd, &[KBD_REPORT, 0xBA, 0xC5, 0xC4, level])?;
         }
         let mode = match effect {
-            Effect::Off => return Ok(()),
+            // Backlight level 0 is off.
+            Effect::Off if self.kbd.is_some() => return Ok(()),
+            // Without the backlight level collection: steady black through Aura (below).
+            Effect::Off => 0,
             Effect::Static => 0,
             Effect::Breathe => 1,
             Effect::Cycle => 2,
@@ -81,7 +98,7 @@ impl Device for Asus {
             // Not in this firmware (the panel doesn't offer them): the color, steadily.
             Effect::Ripple | Effect::Reactive | Effect::Starlight => 0,
         };
-        let Rgb(r, g, b) = color;
+        let Rgb(r, g, b) = if effect == Effect::Off { Rgb(0, 0, 0) } else { color };
         let breathe = (effect == Effect::Breathe) as u8;
         Self::send(&self.aura, &[AURA_REPORT, 0xB3, 0x00, mode, r, g, b, SPEEDS[speed_step(super::speed())], 0x00, breathe])?;
         Self::send(&self.aura, &[AURA_REPORT, 0xB5, 0, 0, 0])?;

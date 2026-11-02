@@ -2,6 +2,7 @@
 
 use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
+use std::time::{Duration, Instant};
 
 use windows_sys::core::GUID;
 use windows_sys::Win32::Devices::DeviceAndDriverInstallation::*;
@@ -239,6 +240,76 @@ impl Hid {
             Ok(Some(n as usize))
         }
     }
+
+    /// Discards input reports (read into `buf`): at most `max` of them, those already waiting
+    /// and, with a non-zero `wait`, those arriving within it.
+    pub fn drain(&self, buf: &mut [u8], max: usize, wait: Duration) {
+        let deadline = Instant::now() + wait;
+        for _ in 0..max {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match self.read(buf, left.as_millis() as u32) {
+                Ok(Some(_)) => continue,
+                _ => break,
+            }
+        }
+    }
+
+    /// One request and its answer: discards up to `stale` input reports already waiting
+    /// (answers to earlier requests), writes `out`, then reads reports into `buf` until
+    /// `answer` takes one (returns Some), skipping the others (traffic of other apps).
+    pub fn exchange<T>(&self, out: &[u8], buf: &mut [u8], stale: usize, patience: Patience, mut answer: impl FnMut(&[u8]) -> Option<T>) -> Result<T, Exchange> {
+        self.drain(buf, stale, Duration::ZERO);
+        if !self.write(out) {
+            return Err(Exchange::Write(std::io::Error::last_os_error()));
+        }
+        let mut read = |timeout: Duration| match self.read(buf, timeout.as_millis() as u32) {
+            Err(()) => Err(Exchange::Gone),
+            Ok(None) => Ok(None),
+            Ok(Some(_)) => Ok(Some(answer(buf))),
+        };
+        match patience {
+            Patience::Total(total) => {
+                let deadline = Instant::now() + total;
+                while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+                    match read(left)? {
+                        None => break,
+                        Some(Some(t)) => return Ok(t),
+                        Some(None) => {}
+                    }
+                }
+            }
+            Patience::Reads(count, each) => {
+                for _ in 0..count {
+                    match read(each)? {
+                        None => break,
+                        Some(Some(t)) => return Ok(t),
+                        Some(None) => {}
+                    }
+                }
+            }
+        }
+        Err(Exchange::NoAnswer)
+    }
+}
+
+/// How long `Hid::exchange` waits for the answer.
+#[derive(Clone, Copy, Debug)]
+pub enum Patience {
+    /// Reads until this much time has passed in all.
+    Total(Duration),
+    /// Up to this many reads, each waiting up to the duration.
+    Reads(usize, Duration),
+}
+
+/// Why `Hid::exchange` got no answer.
+#[derive(Debug)]
+pub enum Exchange {
+    /// The request couldn't be written (the OS error).
+    Write(std::io::Error),
+    /// A read failed: the device is gone.
+    Gone,
+    /// No report taken within the time.
+    NoAnswer,
 }
 
 /// Parsed report descriptor of an open device (HidP_* functions take it).
