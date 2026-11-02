@@ -435,8 +435,12 @@ fn date(secs: u64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// Copies of settings that read well: the last one, today's, and this version's first.
-fn keep_copies(dir: &std::path::Path, text: &str) {
+/// Copies of settings that read well: the last one, today's, and (at load, `before_version`)
+/// this version's first. Text that doesn't read as settings is never copied.
+fn keep_copies(dir: &std::path::Path, text: &str, before_version: bool) {
+    if Config::file_kind(text) != FileKind::Settings {
+        return;
+    }
     write_atomically(&dir.join("config.backup.toml"), text);
     let backups = dir.join("backups");
     if std::fs::create_dir_all(&backups).is_err() {
@@ -448,15 +452,15 @@ fn keep_copies(dir: &std::path::Path, text: &str) {
     }
     // Before a new version first saves anything: what the previous one left.
     let version = backups.join(format!("config-before-{}.toml", env!("CARGO_PKG_VERSION")));
-    if !version.exists() {
+    if before_version && !version.exists() {
         let _ = std::fs::write(&version, text);
     }
     prune(&backups, "config-before-", VERSION_COPIES);
     prune(&backups, "config-2", DAILY_COPIES);
 }
 
-/// Keeps the newest `keep` copies whose names start with `prefix`.
-fn prune(dir: &std::path::Path, prefix: &str, keep: usize) {
+/// Files in `dir` whose names start with `prefix`, newest first.
+fn newest_first(dir: &std::path::Path, prefix: &str) -> Vec<std::path::PathBuf> {
     let mut files: Vec<(std::time::SystemTime, std::path::PathBuf)> = std::fs::read_dir(dir)
         .map(|d| {
             d.flatten()
@@ -466,18 +470,19 @@ fn prune(dir: &std::path::Path, prefix: &str, keep: usize) {
         })
         .unwrap_or_default();
     files.sort_by_key(|f| std::cmp::Reverse(f.0));
-    for (_, old) in files.into_iter().skip(keep) {
+    files.into_iter().map(|f| f.1).collect()
+}
+
+/// Keeps the newest `keep` copies whose names start with `prefix`.
+fn prune(dir: &std::path::Path, prefix: &str, keep: usize) {
+    for old in newest_first(dir, prefix).into_iter().skip(keep) {
         let _ = std::fs::remove_file(old);
     }
 }
 
 /// Every copy to restore from, newest first: the last good one, then those in `backups/`.
 fn copies_newest_first(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
-    let mut files: Vec<(std::time::SystemTime, std::path::PathBuf)> = std::fs::read_dir(dir.join("backups"))
-        .map(|d| d.flatten().filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path()))).collect())
-        .unwrap_or_default();
-    files.sort_by_key(|f| std::cmp::Reverse(f.0));
-    std::iter::once(dir.join("config.backup.toml")).chain(files.into_iter().map(|f| f.1)).collect()
+    std::iter::once(dir.join("config.backup.toml")).chain(newest_first(&dir.join("backups"), "")).collect()
 }
 
 impl Config {
@@ -708,10 +713,6 @@ impl Config {
         base.join("rgbtray")
     }
 
-    fn path() -> PathBuf {
-        Self::dir().join("config.toml")
-    }
-
     /// Reads the settings (see `load_from`).
     pub fn load() -> Config {
         Self::load_from(&Self::dir())
@@ -735,7 +736,7 @@ impl Config {
         let read = String::from_utf8(bytes.clone()).map_err(|_| "not UTF-8".to_string()).and_then(|text| Ok((good_settings(&text)?, text)));
         match read {
             Ok((cfg, text)) => {
-                keep_copies(dir, &text);
+                keep_copies(dir, &text, true);
                 cfg
             }
             Err(e) => {
@@ -761,9 +762,16 @@ impl Config {
     }
 
     pub fn save(&self) {
-        let _ = std::fs::create_dir_all(Self::dir());
+        self.save_to(&Self::dir());
+    }
+
+    /// Writes `config.toml` in `dir` and refreshes the copies of good settings (the dated one
+    /// at most once a day), so they don't wait for the next start.
+    fn save_to(&self, dir: &std::path::Path) {
+        let _ = std::fs::create_dir_all(dir);
         if let Ok(s) = toml::to_string_pretty(self) {
-            write_atomically(&Self::path(), &s);
+            write_atomically(&dir.join("config.toml"), &s);
+            keep_copies(dir, &s, false);
         }
     }
 
@@ -1085,6 +1093,31 @@ mod tests {
         std::fs::write(dir.join("config.toml"), b"brightness = 40\n# \xff\xfe\n").unwrap();
         assert_eq!(Config::load_from(&dir).brightness, 40);
         assert_eq!(std::fs::read_to_string(dir.join("config.toml")).unwrap(), good);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saving_refreshes_the_copies() {
+        let dir = temp_dir("save");
+        let mut cfg = Config::default();
+        cfg.presets.push(cfg.snapshot("Day".into()));
+        cfg.save_to(&dir);
+        let backup = || toml::from_str::<Config>(&std::fs::read_to_string(dir.join("config.backup.toml")).unwrap()).unwrap();
+        assert_eq!(backup().presets[0].name, "Day");
+        // Today's copy is made once; a save is no new version.
+        let daily = dir.join("backups").join(format!("config-{}.toml", date(now())));
+        let first = std::fs::read_to_string(&daily).unwrap();
+        cfg.presets[0].name = "Night".into();
+        cfg.save_to(&dir);
+        assert_eq!(backup().presets[0].name, "Night");
+        assert_eq!(std::fs::read_to_string(&daily).unwrap(), first);
+        assert_eq!(std::fs::read_dir(dir.join("backups")).unwrap().count(), 1);
+        assert_eq!(Config::load_from(&dir).presets[0].name, "Night");
+
+        // Text that isn't settings is never kept as a copy.
+        keep_copies(&dir, "[package]\nname = \"x\"\n", true);
+        keep_copies(&dir, "not toml [", true);
+        assert_eq!(backup().presets[0].name, "Night");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
