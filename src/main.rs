@@ -984,18 +984,19 @@ fn profile_test(out: &str, file: &str) {
                 continue;
             }
         };
+        if !matches!(kind.protocol, devices::Protocol::Hid(_)) {
+            append(out, &format!("{}: only [hid] profiles can be tested this way; put others into the devices folder and restart the app\n", kind.key));
+            continue;
+        }
         let found = devices::rawhid::find(kind);
         append(out, &format!("{}: {} device(s) found\n", kind.key, found.len()));
         if found.is_empty() {
             continue;
         }
-        if !matches!(kind.protocol, devices::Protocol::Hid(_)) {
-            append(out, "only [hid] profiles can be tested this way; put others into the devices folder and restart the app\n");
-        }
         let zones: Vec<u8> = kind.zones.iter().map(|z| z.0).collect();
         let (red, green, blue, white, off) = (Rgb(255, 0, 0), Rgb(0, 255, 0), Rgb(0, 0, 255), Rgb(255, 255, 255), Rgb(0, 0, 0));
         let mut steps = Vec::new();
-        let all = |c: Rgb| if zones.is_empty() { vec![(0, c)] } else { zones.iter().map(|&z| (z, c)).collect() };
+        let all = |c: Rgb| devices::rawhid::fill(&zones, c);
         for (name, c) in [("red", red), ("green", green), ("blue", blue)] {
             steps.push((format!("static {name}"), Effect::Static, all(c), 100));
         }
@@ -1545,7 +1546,8 @@ fn main() {
         return;
     }
     // `--profile-test <out.txt> <profile.toml>`: plays a fixed sequence on the devices of a [hid]
-    // profile that isn't installed yet, a step every 3 s, each step logged as it starts.
+    // profile that isn't installed yet, a step every 3 s (6 s for breathing and spectrum), each
+    // step logged as it starts.
     if let Some(i) = args.iter().position(|a| a == "--profile-test") {
         let out = args.get(i + 1).cloned().unwrap_or_else(|| "profile.txt".into());
         profile_test(&out, args.get(i + 2).map(String::as_str).unwrap_or(""));

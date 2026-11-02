@@ -108,10 +108,8 @@ enum ReportName {
 
 /// Report templates of one list (`static`, `off`...), each in the program's lifetime.
 fn templates(list: &str, texts: Vec<String>) -> Result<&'static [Packet], String> {
-    let packets = texts
-        .iter()
-        .map(|t| rawhid::parse_packet(t).map(|p| &*Box::leak(p.into_boxed_slice())).map_err(|e| format!("[hid] {list}: {e}")))
-        .collect::<Result<Vec<Packet>, String>>()?;
+    let packets =
+        texts.iter().map(|t| rawhid::parse_packet(t).map(leak_slice).map_err(|e| format!("[hid] {list}: {e}"))).collect::<Result<Vec<Packet>, String>>()?;
     Ok(leak_slice(packets))
 }
 
@@ -199,6 +197,9 @@ fn from_profile(p: Profile) -> Result<Kind, String> {
     if !effects.contains(&Effect::Off) {
         return Err("effects must include \"off\"".into());
     }
+    if let Some((i, z)) = p.zones.iter().enumerate().find(|(i, z)| p.zones[..*i].iter().any(|o| o.led == z.led)) {
+        return Err(format!("zone {} \"{}\": led {:#04x} is already a zone", i + 1, z.name, z.led));
+    }
     let sections = p.razer.is_some() as u8 + p.via.is_some() as u8 + p.hid.is_some() as u8;
     if sections > 1 {
         return Err("more than one protocol section".into());
@@ -228,10 +229,26 @@ fn from_profile(p: Profile) -> Result<Kind, String> {
                 return Err("[hid]: pids and static must not be empty".into());
             }
             let static_ = templates("static", h.static_)?;
-            let zoned = static_.iter().any(|t| t.contains(&rawhid::Byte::Zone));
-            if !p.zones.is_empty() && !zoned {
+            let (off, breathe, cycle) = (templates("off", h.off)?, templates("breathe", h.breathe)?, templates("cycle", h.cycle)?);
+            let has = |list: &[Packet], b: rawhid::Byte| list.iter().any(|t| t.contains(&b));
+            if !p.zones.is_empty() && !has(static_, rawhid::Byte::Zone) {
                 return Err("[hid]: zones need {zone} in a static report".into());
             }
+            if let Some((list, _)) = [("static", static_), ("off", off), ("breathe", breathe), ("cycle", cycle)]
+                .into_iter()
+                .find(|(_, l)| p.zones.is_empty() && has(l, rawhid::Byte::Zone))
+            {
+                return Err(format!("[hid] {list}: {{zone}} needs [[zones]]"));
+            }
+            // A speed slider only when the speed is used: the app draws an effect, or a report takes {speed}.
+            let drawn = |e: Effect, list: &[Packet]| list.is_empty() && effects.contains(&e);
+            let speed =
+                if drawn(Effect::Breathe, breathe) || drawn(Effect::Cycle, cycle) || [static_, off, breathe, cycle].iter().any(|l| has(l, rawhid::Byte::Speed))
+                {
+                    Speed::Smooth
+                } else {
+                    Speed::None
+                };
             let model = HidModel {
                 vid: h.vid,
                 pids: leak_slice(h.pids),
@@ -242,13 +259,13 @@ fn from_profile(p: Profile) -> Result<Kind, String> {
                     ReportName::Output => Report::Output,
                 },
                 static_,
-                off: templates("off", h.off)?,
-                breathe: templates("breathe", h.breathe)?,
-                cycle: templates("cycle", h.cycle)?,
+                off,
+                breathe,
+                cycle,
                 delay_ms: h.delay_ms,
             };
             // Ids come from the USB port: a profile can't say how to read a serial number.
-            (Protocol::Hid(Box::leak(Box::new(model))), Speed::Smooth, true)
+            (Protocol::Hid(Box::leak(Box::new(model))), speed, true)
         }
         (None, None, None) => return Err("no protocol section ([razer], [via] or [hid])".into()),
     };
@@ -284,22 +301,31 @@ fn from_profile(p: Profile) -> Result<Kind, String> {
     })
 }
 
+/// A key of a model written in Rust, which a profile can't use.
+fn taken(key: &str) -> bool {
+    super::NATIVE.iter().any(|n| n.key == key)
+}
+
+/// Adds the models of a file, replacing ones of the same key; problems go to `errors`.
+fn add(file: &str, text: &str, kinds: &mut Vec<Kind>, errors: &mut Vec<(String, String)>) {
+    for res in parse_file(text) {
+        match res {
+            // `kinds()` would drop it: settings of the built-in model are kept under that key.
+            Ok(k) if taken(k.key) => errors.push((file.to_string(), format!("key \"{}\" is taken by a built-in driver", k.key))),
+            Ok(k) => match kinds.iter().position(|o| o.key == k.key) {
+                Some(i) => kinds[i] = k,
+                None => kinds.push(k),
+            },
+            Err(e) => errors.push((file.to_string(), e)),
+        }
+    }
+}
+
 /// Profile models: built-in ones in order, a user file with the same key replacing its
 /// built-in one, other user files after them (by file name). Problems: (file, message).
 pub fn load() -> (Vec<Kind>, Vec<(String, String)>) {
     let mut kinds: Vec<Kind> = Vec::new();
     let mut errors = Vec::new();
-    let add = |file: &str, text: &str, kinds: &mut Vec<Kind>, errors: &mut Vec<(String, String)>| {
-        for res in parse_file(text) {
-            match res {
-                Ok(k) => match kinds.iter().position(|o| o.key == k.key) {
-                    Some(i) => kinds[i] = k,
-                    None => kinds.push(k),
-                },
-                Err(e) => errors.push((file.to_string(), e)),
-            }
-        }
-    };
     for (file, text) in BUILT_IN {
         add(file, text, &mut kinds, &mut errors);
     }
@@ -402,6 +428,42 @@ mod tests {
         assert!(err(&ok.replace("pids = [0x5678]", "pids = []")).contains("pids"));
         assert!(err(&format!("{ok}[via]\nvid = 1\npid = 2\n")).contains("more than one"));
         assert!(err(&format!("effects = [\"wave\", \"off\"]\n{ok}")).contains("Wave"));
+        // {zone} without [[zones]] would send nothing.
+        let zoneless = ok.replace("[[zones]]\nled = 1\nname = \"Left\"\n[[zones]]\nled = 2\nname = \"Right\"\n", "");
+        assert!(err(&zoneless).contains("[hid] static: {zone} needs [[zones]]"));
+        let zoneless = zoneless.replace("{zone} ", "").replace("00 09 {speed}", "00 09 {zone}");
+        assert!(err(&zoneless).contains("[hid] cycle: {zone} needs [[zones]]"));
+        // The same LED twice.
+        assert!(err(&ok.replace("led = 2", "led = 1")).contains("led 0x01 is already a zone"));
+    }
+
+    #[test]
+    fn hid_speed_slider_only_when_used() {
+        let base = "key = \"lamp\"\nname = \"Lamp\"\nclass = \"other\"\n[hid]\nvid = 1\npids = [2]\nusage_page = 0xFF00\nreport = \"feature\"\n\
+                    static = [\"01 {r} {g} {b}\"]\n";
+        let speed = |text: &str| parse(text).unwrap().speed;
+        // The app draws breathing and spectrum.
+        assert_eq!(speed(base), Speed::Smooth);
+        // Firmware effects without {speed}: nothing to set.
+        let firmware = format!("{base}breathe = [\"02 01\"]\ncycle = [\"02 02\"]\n");
+        assert_eq!(speed(&firmware), Speed::None);
+        assert_eq!(speed(&firmware.replace("02 02", "02 02 {speed}")), Speed::Smooth);
+        // Effects the device doesn't have aren't drawn.
+        assert_eq!(speed(&format!("effects = [\"static\", \"off\"]\n{base}")), Speed::None);
+    }
+
+    #[test]
+    fn built_in_driver_keys_are_taken() {
+        let razer = |key: &str| format!("key = \"{key}\"\nname = \"X\"\nclass = \"mouse\"\n[razer]\npids = [1]\ntransaction_id = 0x1F\nleds = [4]\n");
+        let (mut kinds, mut errors) = (Vec::new(), Vec::new());
+        for key in ["logitech", "asus", "via", "lamparray", "tuya"] {
+            assert!(taken(key), "{key}");
+            add("x.toml", &razer(key), &mut kinds, &mut errors);
+        }
+        add("y.toml", &razer("mine"), &mut kinds, &mut errors);
+        assert_eq!(kinds.iter().map(|k| k.key).collect::<Vec<_>>(), ["mine"]);
+        assert_eq!(errors.len(), 5);
+        assert_eq!(errors[0], ("x.toml".to_string(), "key \"logitech\" is taken by a built-in driver".to_string()));
     }
 
     #[test]
@@ -430,6 +492,8 @@ mod tests {
         assert!(k.effects.contains(&Effect::Wave) && k.effects.contains(&Effect::Starlight));
         assert!(err(&format!("effects = [\"ripple\", \"off\"]\n{ok}")).contains("Ripple"));
         assert!(err(&format!("{ok}\n[[zones]]\nled = 0x09\nname = \"Wheel\"\n")).contains("zone"));
+        let twice = format!("{ok}\n[[zones]]\nled = 0x04\nname = \"Logo\"\n[[zones]]\nled = 0x04\nname = \"Logo 2\"\n");
+        assert!(err(&twice).contains("zone 2 \"Logo 2\": led 0x04 is already a zone"));
         assert!(err("key = \"x\"\nname = \"X\"\nclass = \"other\"\n").contains("protocol"));
     }
 }

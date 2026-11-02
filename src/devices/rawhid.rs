@@ -91,9 +91,19 @@ pub fn parse_packet(text: &str) -> Result<Vec<Byte>, String> {
 }
 
 /// Effect speed byte of a speed factor (¼..4 over the range).
+// Same curve as `via::qmk_speed`; use that one once it is pub(crate).
 fn speed_byte(factor: f32) -> u8 {
     let s = (50.0 + 25.0 * factor.max(1e-3).log2()).clamp(0.0, 100.0);
     (s * 255.0 / 100.0) as u8
+}
+
+/// One color for the whole device: every zone's LED id with it, or LED id 0 without zones.
+pub fn fill(zones: &[u8], color: Rgb) -> Vec<(u8, Rgb)> {
+    if zones.is_empty() {
+        vec![(0, color)]
+    } else {
+        zones.iter().map(|&z| (z, color)).collect()
+    }
 }
 
 /// The reports of templates for zone colors (LED id, color): a template with `{zone}` once
@@ -139,6 +149,27 @@ fn matches(m: &HidModel, i: &HidInfo) -> Option<usize> {
     (i.vid == m.vid && m.pids.contains(&i.pid) && i.usage_page == m.usage_page && m.usage.is_none_or(|u| u == i.usage) && len > 0).then_some(len)
 }
 
+/// The device a HID collection belongs to: its path without the collection number (`&col02`)
+/// and the collection's part of the instance id (the last `&0001`). Collections of one
+/// interface share it; other interfaces and other devices don't.
+fn device_of(path: &[u16]) -> String {
+    let path = String::from_utf16_lossy(path).trim_end_matches('\0').to_lowercase();
+    let parts: Vec<&str> = path.split('#').collect();
+    if parts.len() < 3 {
+        return path;
+    }
+    let ids: Vec<&str> = parts[1].split('&').filter(|p| !p.starts_with("col")).collect();
+    let instance = parts[2].rsplit_once('&').map_or(parts[2], |(head, _)| head);
+    format!("{}#{}#{instance}", parts[0], ids.join("&"))
+}
+
+/// Opens a collection: read/write, or for feature reports without access if that fails
+/// (mouse and keyboard collections can't be opened for read/write, but feature reports work).
+fn open(path: &[u16], report: Report) -> Option<Hid> {
+    let overlapped = report == Report::Output;
+    Hid::open(path, true, overlapped).or_else(|| if overlapped { None } else { Hid::open(path, false, false) })
+}
+
 pub struct RawHid {
     /// "<kind>-<hash of the HID path>": the id comes from the USB port.
     pub id: String,
@@ -153,13 +184,23 @@ pub struct RawHid {
 /// The connected devices of a `[hid]` model.
 pub fn find(kind: &'static Kind) -> Vec<RawHid> {
     let super::Protocol::Hid(model) = kind.protocol else { return Vec::new() };
-    hid::enumerate(model.vid)
-        .into_iter()
+    find_in(kind, &hid::enumerate(model.vid))
+}
+
+/// The devices of a `[hid]` model among listed collections: the first matching collection of
+/// each device, like `--hid-send`, so a device with several matching collections is one device.
+fn find_in(kind: &'static Kind, list: &[HidInfo]) -> Vec<RawHid> {
+    let super::Protocol::Hid(model) = kind.protocol else { return Vec::new() };
+    let mut seen = Vec::new();
+    list.iter()
         .filter_map(|i| {
-            let len = matches(model, &i)?;
-            let overlapped = model.report == Report::Output;
-            // Mouse and keyboard collections can't be opened for read/write, but feature reports work.
-            let hid = Hid::open(&i.path, true, overlapped).or_else(|| if overlapped { None } else { Hid::open(&i.path, false, false) })?;
+            let len = matches(model, i)?;
+            let device = device_of(&i.path);
+            if seen.contains(&device) {
+                return None;
+            }
+            let hid = open(&i.path, model.report)?;
+            seen.push(device);
             Some(RawHid {
                 id: format!("{}-{}", kind.key, super::path_hash(&i.path)),
                 path: i.path.clone(),
@@ -196,19 +237,27 @@ impl RawHid {
     }
 
     /// Plays breathing or spectrum with the static reports, from its own handle to the device.
+    /// With `delay_ms`, frames that come sooner than that after the last send (the static
+    /// reports sent just before count as one) are skipped rather than waited for.
     fn start_animation(&self, effect: Effect, zones: Vec<(u8, Rgb)>, brightness: u8) -> Result<(), String> {
-        let overlapped = self.model.report == Report::Output;
-        let hid = Hid::open(&self.path, true, overlapped).or_else(|| if overlapped { None } else { Hid::open(&self.path, false, false) });
-        let hid = hid.ok_or("HID profile: cannot open")?;
+        let hid = open(&self.path, self.model.report).ok_or("HID profile: cannot open")?;
         let (model, len) = (self.model, self.len);
+        let pause = std::time::Duration::from_millis(model.delay_ms as u64);
+        let mut last = std::time::Instant::now();
         animation::start(
             &self.path,
             Box::new(move |t| {
+                if last.elapsed() < pause {
+                    return true;
+                }
                 let (zones, level) = match effect {
                     Effect::Breathe => (zones.clone(), (brightness as f32 * animation::breathe(t)) as u8),
                     _ => (zones.iter().map(|z| (z.0, crate::hue(animation::cycle_hue(t)))).collect(), brightness),
                 };
-                packets(model.static_, &zones, level, 1.0, len).is_ok_and(|r| send(&hid, model, &r))
+                // The frame takes no lock of its own, also while `send` pauses between reports.
+                let ok = packets(model.static_, &zones, level, 1.0, len).is_ok_and(|r| send(&hid, model, &r));
+                last = std::time::Instant::now();
+                ok
             }),
         );
         Ok(())
@@ -217,8 +266,7 @@ impl RawHid {
 
 impl Device for RawHid {
     fn apply(&self, effect: Effect, color: Rgb, brightness: u8) -> Result<(), String> {
-        let zones: Vec<(u8, Rgb)> = if self.zones.is_empty() { vec![(0, color)] } else { self.zones.iter().map(|&z| (z, color)).collect() };
-        self.apply_zones(effect, &zones, brightness)
+        self.apply_zones(effect, &fill(&self.zones, color), brightness)
     }
 
     fn apply_zones(&self, effect: Effect, zones: &[(u8, Rgb)], brightness: u8) -> Result<(), String> {
@@ -241,8 +289,18 @@ impl Device for RawHid {
 /// How the app finds devices of `[hid]` profiles (see `devices::DRIVERS`).
 pub const DRIVER: super::Driver = super::Driver {
     discover: |d| {
-        for kind in super::kinds() {
-            d.found.extend(find(kind).into_iter().map(|r| super::Found { id: r.id.clone(), dev: Box::new(r) }));
+        // One HID enumeration for every [hid] model: of their vendor if they share one.
+        let kinds: Vec<&'static Kind> = super::kinds().iter().filter(|k| matches!(k.protocol, super::Protocol::Hid(_))).collect();
+        let mut vids: Vec<u16> = kinds.iter().filter_map(|k| if let super::Protocol::Hid(m) = k.protocol { Some(m.vid) } else { None }).collect();
+        vids.sort_unstable();
+        vids.dedup();
+        let list = match vids[..] {
+            [] => return,
+            [vid] => hid::enumerate(vid),
+            _ => hid::enumerate_all(),
+        };
+        for kind in kinds {
+            d.found.extend(find_in(kind, &list).into_iter().map(|r| super::Found { id: r.id.clone(), dev: Box::new(r) }));
         }
     },
     note: |i| {
@@ -254,6 +312,9 @@ pub const DRIVER: super::Driver = super::Driver {
 
 /// Hex of bytes, without the zero padding at the end.
 fn hex(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return String::new();
+    }
     let end = bytes.iter().rposition(|&b| b != 0).map_or(1, |p| p + 1);
     let mut s: Vec<String> = bytes[..end].iter().map(|b| format!("{b:02X}")).collect();
     if end < bytes.len() {
@@ -272,6 +333,10 @@ pub fn send_cli(args: &[String]) -> String {
     let (Some(Some(vid)), Some(Some(pid))) = (nums.first(), nums.get(1)) else { return format!("bad device \"{target}\"\n{usage}") };
     let page = nums.get(2).copied().flatten();
     let use_ = nums.get(3).copied().flatten();
+    let mode = mode.to_ascii_lowercase();
+    if !matches!(mode.as_str(), "feature" | "output" | "get") {
+        return format!("unknown mode \"{mode}\": feature, output or get; nothing sent\n{usage}");
+    }
     let feature = mode != "output";
     let found = hid::enumerate(*vid).into_iter().find(|i| {
         i.pid == *pid
@@ -285,7 +350,7 @@ pub fn send_cli(args: &[String]) -> String {
         "{:04X}:{:04X} usage {:04X}:{:04X}, feature {} / output {} / input {} bytes\n",
         info.vid, info.pid, info.usage_page, info.usage, info.feature_len, info.output_len, info.input_len
     );
-    let Some(hid) = Hid::open(&info.path, true, !feature).or_else(|| if feature { Hid::open(&info.path, false, false) } else { None }) else {
+    let Some(hid) = open(&info.path, if feature { Report::Feature } else { Report::Output }) else {
         return out + "cannot open\n";
     };
     for text in &args[2..] {
@@ -324,6 +389,7 @@ pub fn send_cli(args: &[String]) -> String {
                     }
                 }
             }
+            // "feature"
             _ => {
                 let ok = hid.set_feature(&buf);
                 out += &format!("> {}: {}\n", hex(&buf), if ok { "sent" } else { "failed" });
@@ -385,5 +451,33 @@ mod tests {
     fn hex_drops_trailing_zeros() {
         assert_eq!(hex(&[7, 0, 1, 0, 0]), "07 00 01 (+2 zeros)");
         assert_eq!(hex(&[0, 0]), "00 (+1 zeros)");
+        assert_eq!(hex(&[]), "");
+    }
+
+    #[test]
+    fn whole_device_color() {
+        let c = Rgb(1, 2, 3);
+        assert_eq!(fill(&[], c), vec![(0, c)]);
+        assert_eq!(fill(&[4, 5], c), vec![(4, c), (5, c)]);
+    }
+
+    #[test]
+    fn hid_send_rejects_unknown_modes() {
+        let args = |mode: &str| vec!["1234:5678".to_string(), mode.to_string(), "07 01".to_string()];
+        assert!(send_cli(&args("feture")).starts_with("unknown mode \"feture\""));
+        assert!(send_cli(&args("")).starts_with("unknown mode"));
+    }
+
+    #[test]
+    fn collections_of_one_device() {
+        let p = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+        let col1 = device_of(&p(r"\\?\HID#VID_1234&PID_5678&MI_01&Col01#8&2a3b4c5d&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}"));
+        let col2 = device_of(&p(r"\\?\hid#vid_1234&pid_5678&mi_01&col02#8&2a3b4c5d&0&0001#{4d1e55b2-f16f-11cf-88cb-001111000030}"));
+        let other = device_of(&p(r"\\?\hid#vid_1234&pid_5678&mi_01&col01#8&99999999&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}"));
+        let iface = device_of(&p(r"\\?\hid#vid_1234&pid_5678&mi_02#8&11111111&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}"));
+        assert_eq!(col1, col2);
+        assert_ne!(col1, other);
+        assert_ne!(col1, iface);
+        assert_eq!(col1, r"\\?\hid#vid_1234&pid_5678&mi_01#8&2a3b4c5d&0");
     }
 }
