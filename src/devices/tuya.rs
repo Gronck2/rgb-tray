@@ -1,8 +1,9 @@
 //! Tuya Wi-Fi bulbs over the local network: protocol 3.3 (0x55AA frames on TCP 6668, JSON
 //! encrypted with AES-128-ECB under the bulb's local key). Bulbs are listed in
 //! `%APPDATA%\rgbtray\tuya.toml` (`[[device]]` with `id`, `local_key`, `name`), fetched once from
-//! the Tuya cloud. The LAN address is found by trying each open port 6668 on the local /24
-//! network and kept there as `local_ip`. A bulb that doesn't answer is looked for again a few times.
+//! the Tuya cloud. The LAN address is found by trying each open port 6668 on the PC's /24
+//! networks and kept there as `local_ip`. A bulb that doesn't answer is looked for again a few
+//! times in the background, and isn't tried when the lighting is applied until it is found.
 //!
 //! A bulb takes one local client at a time: while the Smart Life app on a phone holds it, the
 //! connection is reset (22.10.2026). Breathing and color cycle are firmware scenes (DP 25),
@@ -10,10 +11,11 @@
 
 use super::{Device, Effect, Rgb};
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use windows_sys::Win32::Security::Cryptography::*;
 
 const PORT: u16 = 6668;
@@ -24,6 +26,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_millis(1500);
 const REPLY_TIMEOUT: Duration = Duration::from_secs(2);
 /// After a bulb didn't answer, it is looked for again after these many seconds (each after the previous).
 const RETRY_AFTER: [u64; 5] = [1, 3, 10, 30, 60];
+/// A bulb still missing after a search is looked for again on apply, but not sooner than this after it.
+const SEARCH_PAUSE: Duration = Duration::from_secs(60);
+/// After this many failed commands in a row, a bulb that answers status queries is not looked for again.
+const STUCK_AFTER: u32 = 3;
 
 // Data points of v2 bulbs (category "dj").
 const DP_SWITCH: &str = "20";
@@ -98,19 +104,37 @@ fn crc32(data: &[u8]) -> u32 {
     !crc
 }
 
-/// AES-128-ECB with PKCS#7 padding (Windows CNG).
-fn aes(key: &[u8; 16], data: &[u8], encrypt: bool) -> Option<Vec<u8>> {
-    unsafe {
+/// The CNG AES provider in ECB mode, opened once for the whole session.
+struct AesProvider(BCRYPT_ALG_HANDLE);
+
+// CNG algorithm handles may be used from several threads at once.
+unsafe impl Send for AesProvider {}
+unsafe impl Sync for AesProvider {}
+
+fn aes_provider() -> Option<BCRYPT_ALG_HANDLE> {
+    static PROVIDER: OnceLock<Option<AesProvider>> = OnceLock::new();
+    let p = PROVIDER.get_or_init(|| unsafe {
         let mut alg: BCRYPT_ALG_HANDLE = std::ptr::null_mut();
         if BCryptOpenAlgorithmProvider(&mut alg, BCRYPT_AES_ALGORITHM, std::ptr::null(), 0) != 0 {
             return None;
         }
         let mode: Vec<u16> = "ChainingModeECB\0".encode_utf16().collect();
+        if BCryptSetProperty(alg, BCRYPT_CHAINING_MODE, mode.as_ptr() as *const u8, (mode.len() * 2) as u32, 0) != 0 {
+            BCryptCloseAlgorithmProvider(alg, 0);
+            return None;
+        }
+        Some(AesProvider(alg))
+    });
+    p.as_ref().map(|p| p.0)
+}
+
+/// AES-128-ECB with PKCS#7 padding (Windows CNG).
+fn aes(key: &[u8; 16], data: &[u8], encrypt: bool) -> Option<Vec<u8>> {
+    let alg = aes_provider()?;
+    unsafe {
         let mut out = None;
         let mut hkey: BCRYPT_KEY_HANDLE = std::ptr::null_mut();
-        if BCryptSetProperty(alg, BCRYPT_CHAINING_MODE, mode.as_ptr() as *const u8, (mode.len() * 2) as u32, 0) == 0
-            && BCryptGenerateSymmetricKey(alg, &mut hkey, std::ptr::null_mut(), 0, key.as_ptr(), 16, 0) == 0
-        {
+        if BCryptGenerateSymmetricKey(alg, &mut hkey, std::ptr::null_mut(), 0, key.as_ptr(), 16, 0) == 0 {
             let mut buf = vec![0u8; data.len() + 16];
             let mut len = 0u32;
             let f = if encrypt { BCryptEncrypt } else { BCryptDecrypt };
@@ -121,7 +145,6 @@ fn aes(key: &[u8; 16], data: &[u8], encrypt: bool) -> Option<Vec<u8>> {
             }
             BCryptDestroyKey(hkey);
         }
-        BCryptCloseAlgorithmProvider(alg, 0);
         out
     }
 }
@@ -144,7 +167,27 @@ fn open_payload(key: &[u8; 16], payload: &[u8]) -> Option<serde_json::Value> {
     serde_json::from_slice(&aes(key, data, false)?).ok()
 }
 
-/// One message from the bulb: (command, payload). Replies carry a return code before the payload.
+/// A message body without CRC and suffix: its return code and payload. Replies carry a return
+/// code (0: done) before the payload; messages the bulb sends on its own start with the payload.
+fn split_reply(body: &[u8]) -> (Option<u32>, &[u8]) {
+    match body.get(..4).map(|w| u32::from_be_bytes(w.try_into().unwrap())) {
+        Some(code) if code >> 8 == 0 => (Some(code), &body[4..]),
+        _ => (None, body),
+    }
+}
+
+/// What a non-zero return code means, with the bulb's own words if it sent plain text.
+fn device_error(code: u32, payload: &[u8]) -> String {
+    let text = String::from_utf8_lossy(payload);
+    let text = text.trim();
+    if !text.is_empty() && text.chars().all(|c| c.is_ascii_graphic() || c == ' ') {
+        format!("the bulb answered error {code}: {text}")
+    } else {
+        format!("the bulb answered error {code}")
+    }
+}
+
+/// One message from the bulb: (command, payload). A reply with a non-zero return code is an error.
 fn read_frame(s: &mut TcpStream) -> Result<(u32, Vec<u8>), String> {
     let mut head = [0u8; 16];
     s.read_exact(&mut head).map_err(|e| e.to_string())?;
@@ -159,7 +202,10 @@ fn read_frame(s: &mut TcpStream) -> Result<(u32, Vec<u8>), String> {
     if crc != crc32(&[&head[..], &body[..len - 8]].concat()) {
         return Err("bad reply checksum".into());
     }
-    Ok((word(8), body[4..len - 8].to_vec()))
+    match split_reply(&body[..len - 8]) {
+        (Some(code), payload) if code != 0 => Err(device_error(code, payload)),
+        (_, payload) => Ok((word(8), payload.to_vec())),
+    }
 }
 
 fn now() -> String {
@@ -259,34 +305,124 @@ pub struct Bulb {
 }
 
 impl Device for Bulb {
+    /// A bulb that failed is skipped (no waiting for it) until the search finds it answering.
     fn apply(&self, effect: Effect, color: Rgb, brightness: u8) -> Result<(), String> {
-        let Some(ip) = self.entry.ip else {
-            rescan();
+        let id = &self.entry.id;
+        let Some(ip) = self.entry.ip.filter(|_| !health(id, |h| h.away)) else {
+            search();
             return Err(super::NO_LINK.into());
         };
-        let id = &self.entry.id;
         let json = serde_json::json!({ "devId": id, "uid": id, "t": now(), "dps": dps(effect, color, brightness, super::speed()) });
         match request(ip, &self.entry.key, CONTROL, &json) {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                health(id, Health::done);
+                Ok(())
+            }
             Err(e) => {
                 crate::log(&format!("{}: {ip}: {e}", device_id(&self.entry)));
-                rescan();
+                if health(id, Health::failed) {
+                    rescan();
+                }
                 Err(super::NO_LINK.into())
             }
         }
     }
 }
 
+/// How a bulb has been doing in this session.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Health {
+    /// Commands that failed in a row.
+    fails: u32,
+    /// Failed: not tried on apply until the search finds it answering.
+    away: bool,
+    /// Answers status queries but keeps failing commands: a failure doesn't start a search.
+    stuck: bool,
+}
+
+impl Health {
+    /// A command went through.
+    fn done(&mut self) {
+        *self = Health::default();
+    }
+
+    /// A command failed. Whether to look for the bulb now.
+    fn failed(&mut self) -> bool {
+        self.fails += 1;
+        self.away = true;
+        !self.stuck
+    }
+
+    /// The search found the bulb answering status queries: (apply the lighting to it again,
+    /// it has just been found to answer queries but not take commands).
+    fn answering(&mut self) -> (bool, bool) {
+        self.away = false;
+        if self.fails < STUCK_AFTER {
+            return (true, false);
+        }
+        let newly = !self.stuck;
+        self.stuck = true;
+        (false, newly)
+    }
+}
+
+static HEALTH: Mutex<Vec<(String, Health)>> = Mutex::new(Vec::new());
+
+/// Reads or changes a bulb's health.
+fn health<R>(id: &str, f: impl FnOnce(&mut Health) -> R) -> R {
+    let mut all = HEALTH.lock().unwrap();
+    let k = match all.iter().position(|(i, _)| i == id) {
+        Some(k) => k,
+        None => {
+            all.push((id.to_string(), Health::default()));
+            all.len() - 1
+        }
+    };
+    f(&mut all[k].1)
+}
+
 // ---------------------------------------------------------------- finding bulbs
 
-/// The PC's address on the network that leads outside (no packet is sent).
-fn local_ipv4() -> Option<Ipv4Addr> {
+/// The PC's address on the network that leads to `to` (no packet is sent).
+fn route_from(to: Ipv4Addr) -> Option<Ipv4Addr> {
     let s = UdpSocket::bind("0.0.0.0:0").ok()?;
-    s.connect("8.8.8.8:80").ok()?;
+    s.connect((to, 80)).ok()?;
     match s.local_addr().ok()?.ip() {
-        std::net::IpAddr::V4(ip) => Some(ip),
+        IpAddr::V4(ip) => Some(ip),
         _ => None,
     }
+}
+
+/// The PC's IPv4 addresses: every adapter's (the computer name resolves to them), the one
+/// towards the internet and the ones towards the saved bulb addresses (a VPN may take the
+/// internet route).
+fn local_ipv4s() -> Vec<Ipv4Addr> {
+    let mut out: Vec<Ipv4Addr> = std::env::var("COMPUTERNAME")
+        .ok()
+        .and_then(|name| (name.as_str(), 0).to_socket_addrs().ok())
+        .into_iter()
+        .flatten()
+        .filter_map(|a| match a.ip() {
+            IpAddr::V4(ip) => Some(ip),
+            _ => None,
+        })
+        .collect();
+    let towards = std::iter::once(Ipv4Addr::new(8, 8, 8, 8)).chain(entries().into_iter().filter_map(|e| e.ip));
+    out.extend(towards.filter_map(route_from));
+    out
+}
+
+/// The /24 networks of these addresses, each once; loopback, link-local and unset ones skipped.
+fn networks(addrs: &[Ipv4Addr]) -> Vec<[u8; 3]> {
+    let mut out: Vec<[u8; 3]> = Vec::new();
+    for ip in addrs.iter().filter(|ip| !ip.is_loopback() && !ip.is_link_local() && !ip.is_unspecified() && !ip.is_broadcast()) {
+        let o = ip.octets();
+        let net = [o[0], o[1], o[2]];
+        if !out.contains(&net) {
+            out.push(net);
+        }
+    }
+    out
 }
 
 /// The bulb answers a status query at this address.
@@ -295,27 +431,34 @@ fn answers(ip: Ipv4Addr, e: &Entry) -> bool {
     matches!(request(ip, &e.key, DP_QUERY, &json), Ok(Some(r)) if r["devId"] == e.id.as_str())
 }
 
-/// Addresses on the local /24 network with port 6668 open.
+/// Addresses on the PC's /24 networks with port 6668 open (one network at a time).
 fn open_ports() -> Vec<Ipv4Addr> {
-    let Some(me) = local_ipv4() else { return Vec::new() };
-    let o = me.octets();
-    std::thread::scope(|sc| {
-        let probes: Vec<_> = (1..=254u8)
-            .map(|i| Ipv4Addr::new(o[0], o[1], o[2], i))
-            .filter(|&ip| ip != me)
-            .map(|ip| sc.spawn(move || TcpStream::connect_timeout(&SocketAddr::from((ip, PORT)), CONNECT_TIMEOUT).is_ok().then_some(ip)))
-            .collect();
-        probes.into_iter().filter_map(|p| p.join().ok().flatten()).collect()
-    })
+    let me = local_ipv4s();
+    let mut out = Vec::new();
+    for o in networks(&me) {
+        std::thread::scope(|sc| {
+            let probes: Vec<_> = (1..=254u8)
+                .map(|i| Ipv4Addr::new(o[0], o[1], o[2], i))
+                .filter(|ip| !me.contains(ip))
+                .map(|ip| sc.spawn(move || TcpStream::connect_timeout(&SocketAddr::from((ip, PORT)), CONNECT_TIMEOUT).is_ok().then_some(ip)))
+                .collect();
+            out.extend(probes.into_iter().filter_map(|p| p.join().ok().flatten()));
+        });
+    }
+    out
 }
 
 static SCANNING: AtomicBool = AtomicBool::new(false);
+/// When the last search ended.
+static LAST_SEARCH: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Whether the bulb answers now: at its address, or found elsewhere on the network (saved).
-fn reach(e: &Entry, open: &[Ipv4Addr]) -> bool {
+/// The network is swept only when a bulb isn't at its address, once per round (`open`).
+fn reach(e: &Entry, open: &mut Option<Vec<Ipv4Addr>>) -> bool {
     if e.ip.is_some_and(|ip| answers(ip, e)) {
         return true;
     }
+    let open = open.get_or_insert_with(open_ports);
     let Some(ip) = open.iter().copied().filter(|&ip| Some(ip) != e.ip).find(|&ip| answers(ip, e)) else { return false };
     crate::log(&format!("{}: found at {ip}", device_id(e)));
     if let Some(text) = std::fs::read_to_string(path()).ok().and_then(|t| with_ip(&t, &e.id, ip)) {
@@ -324,32 +467,59 @@ fn reach(e: &Entry, open: &[Ipv4Addr]) -> bool {
     true
 }
 
-/// A bulb didn't answer: looks for the bulbs again in the background, a few times over about
-/// two minutes (a Wi-Fi bulb may not answer for a moment, 22.10.2026, or move to another
-/// address). When one is back, the lighting is applied again, so it gets what it missed.
+/// A bulb that isn't tried on apply (or has no address yet) is looked for.
+fn wanted(e: &Entry) -> bool {
+    e.ip.is_none() || health(&e.id, |h| h.away)
+}
+
+/// A missing bulb on apply: looks for it again, unless a search is running or has just ended.
+fn search() {
+    if LAST_SEARCH.lock().unwrap().is_some_and(|t| t.elapsed() < SEARCH_PAUSE) {
+        return;
+    }
+    rescan();
+}
+
+/// A bulb didn't answer: looks for the missing bulbs again in the background, a few times over
+/// about two minutes (a Wi-Fi bulb may not answer for a moment, 22.10.2026, or move to another
+/// address). When one is back, the lighting is applied again, so it gets what it missed. A bulb
+/// that answers status queries but keeps failing commands is left alone, not searched again.
 fn rescan() {
     if SCANNING.swap(true, Ordering::SeqCst) {
         return;
     }
     std::thread::spawn(|| {
-        let mut missing = entries().len();
         for (round, wait) in RETRY_AFTER.iter().enumerate() {
             std::thread::sleep(Duration::from_secs(*wait));
-            let open = open_ports();
-            let lost: Vec<Entry> = entries().into_iter().filter(|e| !reach(e, &open)).collect();
-            if lost.len() < missing {
-                crate::apply_all();
-            }
-            missing = lost.len();
-            if lost.is_empty() {
+            let missing: Vec<Entry> = entries().into_iter().filter(wanted).collect();
+            if missing.is_empty() {
                 break;
             }
+            let mut open = None;
+            let mut back = false;
+            let mut lost = Vec::new();
+            for e in missing {
+                if !reach(&e, &mut open) {
+                    lost.push(e);
+                    continue;
+                }
+                let (again, stuck) = health(&e.id, Health::answering);
+                if stuck {
+                    crate::log(&format!("{}: answers status queries but doesn't take commands; not looked for after a failure", device_id(&e)));
+                }
+                back |= again;
+            }
+            if back {
+                crate::apply_all();
+            }
             if round + 1 == RETRY_AFTER.len() {
+                let ports = open.as_ref().map_or(0, Vec::len);
                 for e in &lost {
-                    crate::log(&format!("{}: not found on the network ({} open Tuya ports)", device_id(e), open.len()));
+                    crate::log(&format!("{}: not found on the network ({ports} open Tuya ports)", device_id(e)));
                 }
             }
         }
+        *LAST_SEARCH.lock().unwrap() = Some(Instant::now());
         SCANNING.store(false, Ordering::SeqCst);
     });
 }
@@ -392,6 +562,50 @@ mod tests {
         with_header.extend(&enc);
         assert!(open_payload(&key, &with_header).is_some());
         assert!(open_payload(b"fedcba9876543210", &enc).is_none());
+    }
+
+    #[test]
+    fn reply_return_codes() {
+        // A reply: return code 0, then the payload.
+        assert_eq!(split_reply(&[0, 0, 0, 0, 0xAB]), (Some(0), &[0xAB][..]));
+        assert_eq!(split_reply(&[0, 0, 0, 0]), (Some(0), &[][..]));
+        let mut err = vec![0, 0, 0, 1];
+        err.extend(b"data format error");
+        assert_eq!(split_reply(&err), (Some(1), &b"data format error"[..]));
+        assert_eq!(device_error(1, b"data format error"), "the bulb answered error 1: data format error");
+        assert_eq!(device_error(2, &[0x9C, 0x01]), "the bulb answered error 2");
+        // A message the bulb sends on its own starts with the version.
+        let pushed = b"3.3\0\0\0\0\0\0\0\0\0\0\0\0xyz";
+        assert_eq!(split_reply(pushed), (None, &pushed[..]));
+    }
+
+    #[test]
+    fn bulb_health() {
+        let mut h = Health::default();
+        // A failure: searched for, skipped on apply until found.
+        assert!(h.failed());
+        assert!(h.away);
+        assert_eq!(h.answering(), (true, false));
+        assert!(!h.away);
+        // Answers queries, but commands keep failing: left alone after the third failure.
+        assert!(h.failed());
+        assert_eq!(h.answering(), (true, false));
+        assert!(h.failed());
+        assert_eq!(h.answering(), (false, true));
+        assert!(!h.away && h.stuck);
+        assert!(!h.failed());
+        assert_eq!(h.answering(), (false, false));
+        // A command that goes through starts over.
+        h.done();
+        assert_eq!(h, Health::default());
+    }
+
+    #[test]
+    fn local_networks() {
+        let ip = |a, b, c, d| Ipv4Addr::new(a, b, c, d);
+        let addrs = [ip(192, 168, 31, 10), ip(127, 0, 0, 1), ip(169, 254, 3, 4), ip(10, 8, 0, 2), ip(192, 168, 31, 10), ip(0, 0, 0, 0), ip(192, 168, 31, 77)];
+        assert_eq!(networks(&addrs), [[192, 168, 31], [10, 8, 0]]);
+        assert!(networks(&[]).is_empty());
     }
 
     #[test]
