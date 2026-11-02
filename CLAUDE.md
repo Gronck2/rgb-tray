@@ -63,7 +63,7 @@ Every G915 command is logged with milliseconds.
 - `main.rs`: entry point, CLI, hidden window and message loop, global state (statics), apply/reapply
   (wake from Modern Standby via `GUID_CONSOLE_DISPLAY_STATE`, hot-plug), hotkeys, battery poller,
   `--diagnose`, export/import.
-- `ui.rs`: the flyout panel (Direct2D/DirectWrite). `editor.rs`: per-key editor. `traymenu.rs`,
+- `ui.rs`: the flyout panel (Direct2D/DirectWrite). `editor.rs`: per-key editor. `draw.rs`: drawing and window helpers the windows share. `traymenu.rs`,
   `alert.rs` (low-battery window), `installer.rs` (the exe installs itself).
 - `config.rs`: TOML config. Devices are keyed `"<kind>-<serial>"`, e.g. `[devices."logitech-1A2B3C4D"]`.
 - `i18n.rs`: every UI string is written in place as `tr!("рус", "eng")`. `Text = (ru, en)` tuples are used for const tables.
