@@ -6,6 +6,7 @@ mod alert;
 mod config;
 mod conflicts;
 mod devices;
+mod draw;
 mod editor;
 mod hid;
 mod installer;

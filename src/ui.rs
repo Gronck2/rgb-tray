@@ -9,21 +9,20 @@ use std::sync::Mutex;
 
 use windows::core::w;
 use windows::Foundation::Numerics::Matrix3x2;
-use windows::Win32::Foundation::HWND as WinHwnd;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectWrite::*;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Registry::*;
 use windows_sys::Win32::System::SystemInformation::GetTickCount64;
-use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
+use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::devices::{kind_of, speed_factor, Class, Effect, Rgb, Speed, NORMAL_SPEED};
+use crate::draw::{cursor_monitor, dwm_set, hwnd_target, mouse_pos, register_class, taskbar_edge, track_leave, Paint, WM_MOUSELEAVE};
 
 // ---------------------------------------------------------------- layout (in DIPs)
 
@@ -90,8 +89,6 @@ const ICON_DELETE: &str = "\u{E74D}";
 const ICON_KEYBOARD: &str = "\u{E765}";
 const ICON_DOWNLOAD: &str = "\u{E896}";
 const ICON_OPEN: &str = "\u{E8A7}";
-
-const WM_MOUSELEAVE: u32 = 0x02A3;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Hit {
@@ -1264,34 +1261,15 @@ unsafe fn open() -> windows::core::Result<()> {
     crate::check_services(&cfg);
     let hinst = GetModuleHandleW(null());
     let class: Vec<u16> = "RgbTrayFlyout\0".encode_utf16().collect();
-    let mut wc: WNDCLASSW = zeroed();
-    wc.style = CS_DROPSHADOW;
-    wc.lpfnWndProc = Some(wndproc);
-    wc.hInstance = hinst;
-    wc.hCursor = LoadCursorW(null_mut(), IDC_ARROW);
-    wc.lpszClassName = class.as_ptr();
-    RegisterClassW(&wc); // fails harmlessly if already registered
+    register_class(&class, CS_DROPSHADOW, wndproc);
 
-    let mut pt: POINT = zeroed();
-    GetCursorPos(&mut pt);
-    let monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
-    let mut mi: MONITORINFO = zeroed();
-    mi.cbSize = size_of::<MONITORINFO>() as u32;
-    GetMonitorInfoW(monitor, &mut mi);
-    let (mut dpi_x, mut dpi_y) = (96u32, 96u32);
-    GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
-    let scale = dpi_x as f32 / 96.0;
+    let (pt, mi, dpi) = cursor_monitor(MONITOR_DEFAULTTONEAREST);
+    let scale = dpi as f32 / 96.0;
     let (w, h) = ((W * scale).round() as i32, (panel_h() * scale).round() as i32);
     let margin = (12.0 * scale) as i32;
     let work = mi.rcWork;
     // Open next to the taskbar, wherever it is docked.
-    let mut abd: windows_sys::Win32::UI::Shell::APPBARDATA = zeroed();
-    abd.cbSize = size_of::<windows_sys::Win32::UI::Shell::APPBARDATA>() as u32;
-    let edge = if windows_sys::Win32::UI::Shell::SHAppBarMessage(windows_sys::Win32::UI::Shell::ABM_GETTASKBARPOS, &mut abd) != 0 {
-        abd.uEdge
-    } else {
-        3 // ABE_BOTTOM
-    };
+    let edge = taskbar_edge();
     // A panel bigger than the work area sticks to its top-left (`clamp` panics on min > max).
     let near_x = (pt.x - w / 2).clamp(work.left + margin, (work.right - w - margin).max(work.left + margin));
     let near_y = (pt.y - h / 2).clamp(work.top + margin, (work.bottom - h - margin).max(work.top + margin));
@@ -1327,10 +1305,8 @@ unsafe fn open() -> windows::core::Result<()> {
     }
     let theme = theme();
     // Rounded corners and a dark border in dark mode (Windows 11).
-    let round: u32 = 2; // DWMWCP_ROUND
-    DwmSetWindowAttribute(hwnd, 33, &round as *const u32 as _, 4);
-    let dark: u32 = theme.dark as u32;
-    DwmSetWindowAttribute(hwnd, 20, &dark as *const u32 as _, 4);
+    dwm_set(hwnd, 33, 2); // DWMWCP_ROUND
+    dwm_set(hwnd, 20, theme.dark as u32);
 
     let fly = Flyout {
         hwnd,
@@ -1485,23 +1461,20 @@ impl View {
         t.iter().all(|d| d.color == first.color).then(|| first.rgb())
     }
 }
+
+impl Paint for Flyout {
+    fn brush(&self) -> &ID2D1SolidColorBrush {
+        self.brush.as_ref().unwrap()
+    }
+}
+
 impl Flyout {
     fn ensure_target(&mut self) -> windows::core::Result<()> {
         if self.rt.is_some() {
             return Ok(());
         }
         unsafe {
-            let mut rc: RECT = zeroed();
-            GetClientRect(self.hwnd, &mut rc);
-            let dpi = 96.0 * self.scale;
-            let props = D2D1_RENDER_TARGET_PROPERTIES { dpiX: dpi, dpiY: dpi, ..Default::default() };
-            let hwnd_props = D2D1_HWND_RENDER_TARGET_PROPERTIES {
-                hwnd: WinHwnd(self.hwnd),
-                pixelSize: D2D_SIZE_U { width: (rc.right - rc.left) as u32, height: (rc.bottom - rc.top) as u32 },
-                presentOptions: D2D1_PRESENT_OPTIONS_NONE,
-            };
-            let rt = self.d2d.CreateHwndRenderTarget(&props, &hwnd_props)?;
-            rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+            let rt = hwnd_target(&self.d2d, self.hwnd, self.scale)?;
             self.brush = Some(rt.CreateSolidColorBrush(&self.theme.text, None)?);
             self.rt = Some(rt);
         }
@@ -1546,38 +1519,6 @@ impl Flyout {
             0.55
         };
         self.circle(rt, tx, s.cy(), thumb * inner, t.accent);
-    }
-
-    unsafe fn fill(&self, rt: &ID2D1RenderTarget, r: R, radius: f32, c: D2D1_COLOR_F) {
-        let b = self.brush.as_ref().unwrap();
-        b.SetColor(&c);
-        rt.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: r.d2d(), radiusX: radius, radiusY: radius }, b);
-    }
-
-    unsafe fn stroke(&self, rt: &ID2D1RenderTarget, r: R, radius: f32, c: D2D1_COLOR_F, width: f32) {
-        let b = self.brush.as_ref().unwrap();
-        b.SetColor(&c);
-        let r = r.inset(width / 2.0);
-        rt.DrawRoundedRectangle(&D2D1_ROUNDED_RECT { rect: r.d2d(), radiusX: radius, radiusY: radius }, b, width, None);
-    }
-
-    unsafe fn circle(&self, rt: &ID2D1RenderTarget, x: f32, y: f32, radius: f32, c: D2D1_COLOR_F) {
-        let b = self.brush.as_ref().unwrap();
-        b.SetColor(&c);
-        rt.FillEllipse(&D2D1_ELLIPSE { point: D2D_POINT_2F { x, y }, radiusX: radius, radiusY: radius }, b);
-    }
-
-    unsafe fn ring(&self, rt: &ID2D1RenderTarget, x: f32, y: f32, radius: f32, c: D2D1_COLOR_F, width: f32) {
-        let b = self.brush.as_ref().unwrap();
-        b.SetColor(&c);
-        rt.DrawEllipse(&D2D1_ELLIPSE { point: D2D_POINT_2F { x, y }, radiusX: radius, radiusY: radius }, b, width, None);
-    }
-
-    unsafe fn text(&self, rt: &ID2D1RenderTarget, s: &str, fmt: &IDWriteTextFormat, r: R, c: D2D1_COLOR_F) {
-        let b = self.brush.as_ref().unwrap();
-        b.SetColor(&c);
-        let s: Vec<u16> = s.encode_utf16().collect();
-        rt.DrawText(&s, fmt, &r.d2d(), b, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
     }
 
     /// Color dot: solid color, rainbow for the spectrum effect, hollow ring when off.
@@ -2599,12 +2540,6 @@ fn rehit(hit: Hit, id: &str) -> Option<Hit> {
     Some(hit.on_row(i))
 }
 
-fn mouse_pos(lparam: LPARAM, scale: f32) -> (f32, f32) {
-    let x = (lparam & 0xFFFF) as i16 as f32;
-    let y = ((lparam >> 16) & 0xFFFF) as i16 as f32;
-    (x / scale, y / scale)
-}
-
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_PAINT => {
@@ -2619,8 +2554,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let changed = with_flyout(|f| {
                 let (x, y) = mouse_pos(lparam, f.scale);
                 if !f.tracking_leave {
-                    let mut tme = TRACKMOUSEEVENT { cbSize: size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
-                    TrackMouseEvent(&mut tme);
+                    track_leave(hwnd);
                     f.tracking_leave = true;
                 }
                 if f.drag.is_some() {

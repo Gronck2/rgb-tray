@@ -2,31 +2,26 @@
 //! It does not take focus, so typing or a game is not interrupted.
 
 use std::cell::RefCell;
-use std::mem::{size_of, zeroed};
+use std::mem::zeroed;
 use std::ptr::{null, null_mut};
 
 use windows::core::w;
-use windows::Win32::Foundation::HWND as WinHwnd;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectWrite::*;
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
-use windows_sys::Win32::UI::Shell::{SHAppBarMessage, ABM_GETTASKBARPOS, APPBARDATA};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::devices::{Battery, CRITICAL_BATTERY};
+use crate::draw::{colorref, cursor_monitor, dwm_set, hwnd_target, mouse_pos, register_class, taskbar_edge, track_leave, Paint, WM_MOUSELEAVE};
 use crate::ui::{col, text_format, theme, Theme, R};
 
 const W: f32 = 380.0;
 const H: f32 = 172.0;
 const PAD: f32 = 20.0;
 const BTN_Y: f32 = H - PAD - 32.0;
-const WM_MOUSELEAVE: u32 = 0x02A3;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Hit {
@@ -87,9 +82,7 @@ fn formats() -> windows::core::Result<Formats> {
 
 /// Colored window border so it stands out.
 unsafe fn set_border(hwnd: HWND, battery: Battery) {
-    let c = level_color(battery);
-    let border: u32 = (c.r * 255.0) as u32 | ((c.g * 255.0) as u32) << 8 | ((c.b * 255.0) as u32) << 16;
-    DwmSetWindowAttribute(hwnd, 34, &border as *const u32 as _, 4);
+    dwm_set(hwnd, 34, colorref(level_color(battery)));
 }
 
 /// The close cross in the top-right corner (the only way to dismiss) and the snooze button.
@@ -145,31 +138,16 @@ pub fn dismiss_for(key: &str) {
 unsafe fn open(key: String, name: &str, battery: Battery) -> windows::core::Result<()> {
     let hinst = GetModuleHandleW(null());
     let class: Vec<u16> = "RgbTrayBatteryAlert\0".encode_utf16().collect();
-    let mut wc: WNDCLASSW = zeroed();
-    wc.style = CS_DROPSHADOW;
-    wc.lpfnWndProc = Some(wndproc);
-    wc.hInstance = hinst;
-    wc.hCursor = LoadCursorW(null_mut(), IDC_ARROW);
-    wc.lpszClassName = class.as_ptr();
-    RegisterClassW(&wc);
+    register_class(&class, CS_DROPSHADOW, wndproc);
 
     // Same corner as the tray icon, next to the taskbar.
-    let mut pt: POINT = zeroed();
-    GetCursorPos(&mut pt);
-    let monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
-    let mut mi: MONITORINFO = zeroed();
-    mi.cbSize = size_of::<MONITORINFO>() as u32;
-    GetMonitorInfoW(monitor, &mut mi);
-    let (mut dpi, mut dpi_y) = (96u32, 96u32);
-    GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi, &mut dpi_y);
+    let (_, mi, dpi) = cursor_monitor(MONITOR_DEFAULTTOPRIMARY);
     let scale = dpi as f32 / 96.0;
     let (w, h) = ((W * scale).round() as i32, (H * scale).round() as i32);
     let margin = (12.0 * scale) as i32;
     // Centered at the edge where the taskbar is (top or bottom), hard to miss.
     let work = mi.rcWork;
-    let mut abd: APPBARDATA = zeroed();
-    abd.cbSize = size_of::<APPBARDATA>() as u32;
-    let edge = if SHAppBarMessage(ABM_GETTASKBARPOS, &mut abd) != 0 { abd.uEdge } else { 3 };
+    let edge = taskbar_edge();
     let x = work.left + ((work.right - work.left) - w) / 2;
     let y = if edge == 3 { work.bottom - h - 4 * margin } else { work.top + 4 * margin };
 
@@ -194,10 +172,8 @@ unsafe fn open(key: String, name: &str, battery: Battery) -> windows::core::Resu
         return Err(windows::core::Error::from_win32());
     }
     let theme = theme();
-    let round: u32 = 2;
-    DwmSetWindowAttribute(hwnd, 33, &round as *const u32 as _, 4);
-    let dark: u32 = theme.dark as u32;
-    DwmSetWindowAttribute(hwnd, 20, &dark as *const u32 as _, 4);
+    dwm_set(hwnd, 33, 2); // DWMWCP_ROUND
+    dwm_set(hwnd, 20, theme.dark as u32);
     set_border(hwnd, battery);
 
     let alert = Alert { hwnd, scale, d2d, rt: None, brush: None, fmt, theme, key, name: name.to_string(), battery, hover: None, tracking: false };
@@ -206,21 +182,17 @@ unsafe fn open(key: String, name: &str, battery: Battery) -> windows::core::Resu
     Ok(())
 }
 
+impl Paint for Alert {
+    fn brush(&self) -> &ID2D1SolidColorBrush {
+        self.brush.as_ref().unwrap()
+    }
+}
+
 impl Alert {
     fn paint(&mut self) {
         unsafe {
             if self.rt.is_none() {
-                let mut rc: RECT = zeroed();
-                GetClientRect(self.hwnd, &mut rc);
-                let dpi = 96.0 * self.scale;
-                let props = D2D1_RENDER_TARGET_PROPERTIES { dpiX: dpi, dpiY: dpi, ..Default::default() };
-                let hp = D2D1_HWND_RENDER_TARGET_PROPERTIES {
-                    hwnd: WinHwnd(self.hwnd),
-                    pixelSize: D2D_SIZE_U { width: (rc.right - rc.left) as u32, height: (rc.bottom - rc.top) as u32 },
-                    presentOptions: D2D1_PRESENT_OPTIONS_NONE,
-                };
-                let Ok(rt) = self.d2d.CreateHwndRenderTarget(&props, &hp) else { return };
-                rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+                let Ok(rt) = hwnd_target(&self.d2d, self.hwnd, self.scale) else { return };
                 self.brush = rt.CreateSolidColorBrush(&self.theme.text, None).ok();
                 self.rt = Some(rt);
             }
@@ -235,25 +207,6 @@ impl Alert {
                 }
             }
         }
-    }
-
-    unsafe fn fill(&self, rt: &ID2D1RenderTarget, r: R, radius: f32, c: D2D1_COLOR_F) {
-        let b = self.brush.as_ref().unwrap();
-        b.SetColor(&c);
-        rt.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: r.d2d(), radiusX: radius, radiusY: radius }, b);
-    }
-
-    unsafe fn stroke(&self, rt: &ID2D1RenderTarget, r: R, radius: f32, c: D2D1_COLOR_F, width: f32) {
-        let b = self.brush.as_ref().unwrap();
-        b.SetColor(&c);
-        rt.DrawRoundedRectangle(&D2D1_ROUNDED_RECT { rect: r.inset(width / 2.0).d2d(), radiusX: radius, radiusY: radius }, b, width, None);
-    }
-
-    unsafe fn text(&self, rt: &ID2D1RenderTarget, s: &str, fmt: &IDWriteTextFormat, r: R, c: D2D1_COLOR_F) {
-        let b = self.brush.as_ref().unwrap();
-        b.SetColor(&c);
-        let s: Vec<u16> = s.encode_utf16().collect();
-        rt.DrawText(&s, fmt, &r.d2d(), b, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
     }
 
     unsafe fn draw(&self, rt: &ID2D1RenderTarget) {
@@ -330,8 +283,7 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32, percent: u8) -> wind
 }
 
 fn hit_at(lparam: LPARAM, scale: f32) -> Option<Hit> {
-    let x = (lparam & 0xFFFF) as i16 as f32 / scale;
-    let y = ((lparam >> 16) & 0xFFFF) as i16 as f32 / scale;
+    let (x, y) = mouse_pos(lparam, scale);
     buttons().into_iter().find(|(r, _, _)| r.contains(x, y)).map(|(_, h, _)| h)
 }
 
@@ -351,8 +303,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let changed = ALERT.with(|c| {
                 c.borrow_mut().as_mut().map(|a| {
                     if !a.tracking {
-                        let mut tme = TRACKMOUSEEVENT { cbSize: size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
-                        TrackMouseEvent(&mut tme);
+                        track_leave(hwnd);
                         a.tracking = true;
                     }
                     let h = hit_at(lparam, a.scale);

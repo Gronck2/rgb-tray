@@ -1,30 +1,25 @@
 //! Right-click menu of the tray icon, drawn in the style of the panel.
 
 use std::cell::RefCell;
-use std::mem::{size_of, zeroed};
+use std::mem::zeroed;
 use std::ptr::{null, null_mut};
 
 use windows::core::w;
-use windows::Win32::Foundation::HWND as WinHwnd;
-use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectWrite::*;
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_ESCAPE};
-use windows_sys::Win32::UI::Shell::{SHAppBarMessage, ABM_GETTASKBARPOS, APPBARDATA};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
+use crate::draw::{cursor_monitor, dwm_set, hwnd_target, mouse_pos, register_class, taskbar_edge, track_leave, Paint, WM_MOUSELEAVE};
 use crate::ui::{text_format, theme, Theme, R};
 
 const W: f32 = 290.0;
 const PAD: f32 = 4.0;
 const ITEM_H: f32 = 36.0;
 const GAP: f32 = 9.0;
-const WM_MOUSELEAVE: u32 = 0x02A3;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Item {
@@ -142,28 +137,13 @@ pub fn show() {
 unsafe fn open() -> windows::core::Result<()> {
     let hinst = GetModuleHandleW(null());
     let class: Vec<u16> = "RgbTrayMenu\0".encode_utf16().collect();
-    let mut wc: WNDCLASSW = zeroed();
-    wc.style = CS_DROPSHADOW;
-    wc.lpfnWndProc = Some(wndproc);
-    wc.hInstance = hinst;
-    wc.hCursor = LoadCursorW(null_mut(), IDC_ARROW);
-    wc.lpszClassName = class.as_ptr();
-    RegisterClassW(&wc);
+    register_class(&class, CS_DROPSHADOW, wndproc);
 
-    let mut pt: POINT = zeroed();
-    GetCursorPos(&mut pt);
-    let monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
-    let mut mi: MONITORINFO = zeroed();
-    mi.cbSize = size_of::<MONITORINFO>() as u32;
-    GetMonitorInfoW(monitor, &mut mi);
-    let (mut dpi, mut dpi_y) = (96u32, 96u32);
-    GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi, &mut dpi_y);
+    let (pt, mi, dpi) = cursor_monitor(MONITOR_DEFAULTTONEAREST);
     let scale = dpi as f32 / 96.0;
     let (w, h) = ((W * scale).round() as i32, (height() * scale).round() as i32);
     let work = mi.rcWork;
-    let mut abd: APPBARDATA = zeroed();
-    abd.cbSize = size_of::<APPBARDATA>() as u32;
-    let edge = if SHAppBarMessage(ABM_GETTASKBARPOS, &mut abd) != 0 { abd.uEdge } else { 3 };
+    let edge = taskbar_edge();
     // Opens from the cursor towards the screen center, inside the work area.
     let x = match edge {
         0 => pt.x,
@@ -186,10 +166,8 @@ unsafe fn open() -> windows::core::Result<()> {
         return Err(windows::core::Error::from_win32());
     }
     let theme = theme();
-    let round: u32 = 3; // DWMWCP_ROUNDSMALL, like Windows menus
-    DwmSetWindowAttribute(hwnd, 33, &round as *const u32 as _, 4);
-    let dark: u32 = theme.dark as u32;
-    DwmSetWindowAttribute(hwnd, 20, &dark as *const u32 as _, 4);
+    dwm_set(hwnd, 33, 3); // DWMWCP_ROUNDSMALL, like Windows menus
+    dwm_set(hwnd, 20, theme.dark as u32);
 
     let keyboard = crate::PRESENT.lock().unwrap().iter().find(|id| crate::devices::caps(id).per_key).cloned();
     // One lock of the config: a guard taken inside the struct literal below would live to the
@@ -219,6 +197,12 @@ unsafe fn open() -> windows::core::Result<()> {
     Ok(())
 }
 
+impl Paint for Menu {
+    fn brush(&self) -> &ID2D1SolidColorBrush {
+        self.brush.as_ref().unwrap()
+    }
+}
+
 impl Menu {
     fn enabled(&self, item: Item) -> bool {
         item != Item::Keys || self.keyboard.is_some()
@@ -227,17 +211,7 @@ impl Menu {
     fn paint(&mut self) {
         unsafe {
             if self.rt.is_none() {
-                let mut rc: RECT = zeroed();
-                GetClientRect(self.hwnd, &mut rc);
-                let dpi = 96.0 * self.scale;
-                let props = D2D1_RENDER_TARGET_PROPERTIES { dpiX: dpi, dpiY: dpi, ..Default::default() };
-                let hp = D2D1_HWND_RENDER_TARGET_PROPERTIES {
-                    hwnd: WinHwnd(self.hwnd),
-                    pixelSize: D2D_SIZE_U { width: (rc.right - rc.left) as u32, height: (rc.bottom - rc.top) as u32 },
-                    presentOptions: D2D1_PRESENT_OPTIONS_NONE,
-                };
-                let Ok(rt) = self.d2d.CreateHwndRenderTarget(&props, &hp) else { return };
-                rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+                let Ok(rt) = hwnd_target(&self.d2d, self.hwnd, self.scale) else { return };
                 self.brush = rt.CreateSolidColorBrush(&self.theme.text, None).ok();
                 self.rt = Some(rt);
             }
@@ -252,31 +226,6 @@ impl Menu {
                 }
             }
         }
-    }
-
-    unsafe fn fill(&self, rt: &ID2D1RenderTarget, r: R, radius: f32, c: D2D1_COLOR_F) {
-        let b = self.brush.as_ref().unwrap();
-        b.SetColor(&c);
-        rt.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: r.d2d(), radiusX: radius, radiusY: radius }, b);
-    }
-
-    unsafe fn circle(&self, rt: &ID2D1RenderTarget, x: f32, y: f32, radius: f32, c: D2D1_COLOR_F) {
-        let b = self.brush.as_ref().unwrap();
-        b.SetColor(&c);
-        rt.FillEllipse(&D2D1_ELLIPSE { point: D2D_POINT_2F { x, y }, radiusX: radius, radiusY: radius }, b);
-    }
-
-    unsafe fn stroke(&self, rt: &ID2D1RenderTarget, r: R, radius: f32, c: D2D1_COLOR_F, width: f32) {
-        let b = self.brush.as_ref().unwrap();
-        b.SetColor(&c);
-        rt.DrawRoundedRectangle(&D2D1_ROUNDED_RECT { rect: r.inset(width / 2.0).d2d(), radiusX: radius, radiusY: radius }, b, width, None);
-    }
-
-    unsafe fn text(&self, rt: &ID2D1RenderTarget, s: &str, fmt: &IDWriteTextFormat, r: R, c: D2D1_COLOR_F) {
-        let b = self.brush.as_ref().unwrap();
-        b.SetColor(&c);
-        let s: Vec<u16> = s.encode_utf16().collect();
-        rt.DrawText(&s, fmt, &r.d2d(), b, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
     }
 
     unsafe fn draw(&self, rt: &ID2D1RenderTarget) {
@@ -342,8 +291,7 @@ impl Menu {
 }
 
 fn item_at(lparam: LPARAM, scale: f32) -> Option<Item> {
-    let x = (lparam & 0xFFFF) as i16 as f32 / scale;
-    let y = ((lparam >> 16) & 0xFFFF) as i16 as f32 / scale;
+    let (x, y) = mouse_pos(lparam, scale);
     layout().into_iter().find(|(r, _)| r.contains(x, y)).and_then(|(_, row)| match row {
         Row::Item(i) => Some(i),
         _ => None,
@@ -391,8 +339,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let changed = MENU.with(|m| {
                 m.borrow_mut().as_mut().map(|m| {
                     if !m.tracking {
-                        let mut tme = TRACKMOUSEEVENT { cbSize: size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
-                        TrackMouseEvent(&mut tme);
+                        track_leave(hwnd);
                         m.tracking = true;
                     }
                     let h = item_at(lparam, m.scale);

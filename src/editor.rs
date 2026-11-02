@@ -3,27 +3,26 @@
 //! Changes go to the keyboard immediately through a dedicated worker thread.
 
 use std::cell::RefCell;
-use std::mem::{size_of, zeroed};
+use std::mem::zeroed;
 use std::ptr::{null, null_mut};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::Mutex;
 
 use windows::core::w;
-use windows::Win32::Foundation::HWND as WinHwnd;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectWrite::*;
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
+use windows_sys::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::config::Scheme;
 use crate::devices::Device;
 use crate::devices::{Effect, Rgb};
+use crate::draw::{colorref, cursor_monitor, dwm_set, hwnd_target, mouse_pos, register_class, track_leave, Paint, WM_MOUSELEAVE};
 use crate::keymap::{self, KeyDef};
 use crate::ui::{col, rgb_col, text_format, theme, Theme, PALETTE, R};
 
@@ -535,21 +534,9 @@ unsafe fn set_title(hwnd: HWND) {
 unsafe fn create_window() -> windows::core::Result<()> {
     let hinst = GetModuleHandleW(null());
     let class: Vec<u16> = "RgbTrayKeyEditor\0".encode_utf16().collect();
-    let mut wc: WNDCLASSW = zeroed();
-    wc.lpfnWndProc = Some(wndproc);
-    wc.hInstance = hinst;
-    wc.hCursor = LoadCursorW(null_mut(), IDC_ARROW);
-    wc.lpszClassName = class.as_ptr();
-    RegisterClassW(&wc);
+    register_class(&class, 0, wndproc);
 
-    let mut pt: POINT = zeroed();
-    GetCursorPos(&mut pt);
-    let monitor = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
-    let mut mi: MONITORINFO = zeroed();
-    mi.cbSize = size_of::<MONITORINFO>() as u32;
-    GetMonitorInfoW(monitor, &mut mi);
-    let (mut dpi, mut dpi_y) = (96u32, 96u32);
-    GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi, &mut dpi_y);
+    let (_, mi, dpi) = cursor_monitor(MONITOR_DEFAULTTONEAREST);
     let mut scale = dpi as f32 / 96.0;
     let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
     let outer = |scale: f32| {
@@ -581,11 +568,8 @@ unsafe fn create_window() -> windows::core::Result<()> {
     }
     set_title(hwnd);
     let theme = theme();
-    let dark: u32 = theme.dark as u32;
-    DwmSetWindowAttribute(hwnd, 20, &dark as *const u32 as _, 4); // dark title bar
-    let bg = theme.bg;
-    let caption: u32 = (bg.r * 255.0) as u32 | ((bg.g * 255.0) as u32) << 8 | ((bg.b * 255.0) as u32) << 16;
-    DwmSetWindowAttribute(hwnd, 35, &caption as *const u32 as _, 4); // caption color
+    dwm_set(hwnd, 20, theme.dark as u32); // dark title bar
+    dwm_set(hwnd, 35, colorref(theme.bg)); // caption color
 
     let ed = Editor {
         hwnd,
@@ -667,23 +651,19 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Re
 
 // ---------------------------------------------------------------- painting
 
+impl Paint for Editor {
+    fn brush(&self) -> &ID2D1SolidColorBrush {
+        self.brush.as_ref().unwrap()
+    }
+}
+
 impl Editor {
     fn ensure_target(&mut self) -> windows::core::Result<()> {
         if self.rt.is_some() {
             return Ok(());
         }
         unsafe {
-            let mut rc: RECT = zeroed();
-            GetClientRect(self.hwnd, &mut rc);
-            let dpi = 96.0 * self.scale;
-            let props = D2D1_RENDER_TARGET_PROPERTIES { dpiX: dpi, dpiY: dpi, ..Default::default() };
-            let hwnd_props = D2D1_HWND_RENDER_TARGET_PROPERTIES {
-                hwnd: WinHwnd(self.hwnd),
-                pixelSize: D2D_SIZE_U { width: (rc.right - rc.left) as u32, height: (rc.bottom - rc.top) as u32 },
-                presentOptions: D2D1_PRESENT_OPTIONS_NONE,
-            };
-            let rt = self.d2d.CreateHwndRenderTarget(&props, &hwnd_props)?;
-            rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+            let rt = hwnd_target(&self.d2d, self.hwnd, self.scale)?;
             self.brush = Some(rt.CreateSolidColorBrush(&self.theme.text, None)?);
             self.rt = Some(rt);
         }
@@ -708,38 +688,6 @@ impl Editor {
                 }
             }
         }
-    }
-
-    unsafe fn fill(&self, rt: &ID2D1RenderTarget, r: R, radius: f32, c: D2D1_COLOR_F) {
-        let b = self.brush.as_ref().unwrap();
-        b.SetColor(&c);
-        rt.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: r.d2d(), radiusX: radius, radiusY: radius }, b);
-    }
-
-    unsafe fn stroke(&self, rt: &ID2D1RenderTarget, r: R, radius: f32, c: D2D1_COLOR_F, width: f32) {
-        let b = self.brush.as_ref().unwrap();
-        b.SetColor(&c);
-        let r = r.inset(width / 2.0);
-        rt.DrawRoundedRectangle(&D2D1_ROUNDED_RECT { rect: r.d2d(), radiusX: radius, radiusY: radius }, b, width, None);
-    }
-
-    unsafe fn circle(&self, rt: &ID2D1RenderTarget, x: f32, y: f32, radius: f32, c: D2D1_COLOR_F) {
-        let b = self.brush.as_ref().unwrap();
-        b.SetColor(&c);
-        rt.FillEllipse(&D2D1_ELLIPSE { point: D2D_POINT_2F { x, y }, radiusX: radius, radiusY: radius }, b);
-    }
-
-    unsafe fn ring(&self, rt: &ID2D1RenderTarget, x: f32, y: f32, radius: f32, c: D2D1_COLOR_F, width: f32) {
-        let b = self.brush.as_ref().unwrap();
-        b.SetColor(&c);
-        rt.DrawEllipse(&D2D1_ELLIPSE { point: D2D_POINT_2F { x, y }, radiusX: radius, radiusY: radius }, b, width, None);
-    }
-
-    unsafe fn text(&self, rt: &ID2D1RenderTarget, s: &str, fmt: &IDWriteTextFormat, r: R, c: D2D1_COLOR_F) {
-        let b = self.brush.as_ref().unwrap();
-        b.SetColor(&c);
-        let s: Vec<u16> = s.encode_utf16().collect();
-        rt.DrawText(&s, fmt, &r.d2d(), b, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
     }
 
     fn text_width(&self, s: &str, fmt: &IDWriteTextFormat) -> f32 {
@@ -1110,13 +1058,6 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
     invalidate();
 }
 
-fn mouse_pos(lparam: LPARAM, scale: f32) -> (f32, f32) {
-    let x = (lparam & 0xFFFF) as i16 as f32;
-    let y = ((lparam >> 16) & 0xFFFF) as i16 as f32;
-    (x / scale, y / scale)
-}
-
-const WM_MOUSELEAVE: u32 = 0x02A3;
 const MK_LBUTTON: usize = 0x0001;
 const MK_RBUTTON: usize = 0x0002;
 
@@ -1154,8 +1095,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let paint = with_editor(|e| {
                 let (x, y) = mouse_pos(lparam, e.scale);
                 if !e.tracking_leave {
-                    let mut tme = TRACKMOUSEEVENT { cbSize: size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
-                    TrackMouseEvent(&mut tme);
+                    track_leave(hwnd);
                     e.tracking_leave = true;
                 }
                 let h = e.hit_test(x, y);
