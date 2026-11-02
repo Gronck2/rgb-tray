@@ -21,7 +21,7 @@ const fn m(usage: u8) -> u8 {
 /// (LampArray). None for the logo, brightness and media keys, which have no such usage.
 pub fn usage_of(code: u8) -> Option<u32> {
     match code {
-        LOGO | BRIGHTNESS | MEDIA_PLAY | MEDIA_MUTE | MEDIA_NEXT | MEDIA_PREV | 0 => None,
+        LOGO | BRIGHTNESS | MEDIA_PLAY | MEDIA_MUTE | MEDIA_NEXT | MEDIA_PREV => None,
         c @ 0x68..=0x6F => Some(c as u32 + 0x78),
         c => Some(c as u32 + 0x03),
     }
@@ -54,6 +54,16 @@ pub struct KeyDef {
     pub y: f32,
     pub w: f32,
     pub h: f32,
+}
+
+impl KeyDef {
+    /// A letter key: a Latin letter, or with `cyrillic` also a key with a Cyrillic letter
+    /// on it (not the "/" printed on the backslash key).
+    pub fn is_letter(&self, cyrillic: bool) -> bool {
+        let latin = self.label.len() == 1 && self.label.chars().all(|c| c.is_ascii_alphabetic());
+        let ru = cyrillic && !self.ru.is_empty() && self.ru.chars().all(char::is_alphabetic);
+        !is_special(self.code) && (latin || ru)
+    }
 }
 
 /// Every key a layout may name: (name in the layout files, code, label, Cyrillic legend, icon label).
@@ -302,8 +312,12 @@ impl Layout {
         if c == ' ' {
             return self.ansi.iter().find(|kd| kd.code == k(0x2C)).map(|kd| kd.code);
         }
-        // The logo's "G" is not the letter.
-        self.ansi.iter().find(|kd| !is_special(kd.code) && kd.label.chars().count() == 1 && (kd.label == up || kd.ru == up)).map(|kd| kd.code)
+        // The logo's "G" is not the letter. A key's own legend wins over a Cyrillic one ("/" is
+        // the slash key, not the backslash key with "/" in its Russian legend), and the main
+        // block over the keypad.
+        let keys = || self.ansi.iter().filter(|kd| !is_special(kd.code) && kd.label.chars().count() == 1);
+        let keypad = |kd: &&KeyDef| (k(0x54)..=k(0x63)).contains(&kd.code);
+        keys().find(|kd| kd.label == up && !keypad(kd)).or_else(|| keys().find(|kd| kd.label == up)).or_else(|| keys().find(|kd| kd.ru == up)).map(|kd| kd.code)
     }
 
     pub fn code_by_label(&self, label: &str) -> Option<u8> {
@@ -405,5 +419,27 @@ mod tests {
         assert_eq!(l.code_for_char('€'), None);
         // On a full-size keyboard digits are the number row, not the keypad.
         assert_eq!(get(FULL).code_for_char('7'), Some(k(0x24)));
+        // A key's own legend wins over a Russian one: "/" is the slash key, not backslash (Russian "/").
+        assert_eq!(l.code_for_char('/'), Some(k(0x38)));
+        assert_eq!(get(FULL).code_for_char('/'), Some(k(0x38)));
+        assert_eq!(l.code_for_char('\\'), Some(k(0x31)));
+        assert_eq!(l.code_for_char('ю'), Some(k(0x37)));
+        assert_eq!(l.code_for_char('.'), Some(k(0x37)));
+        // A character only the keypad has is still found.
+        assert_eq!(get(FULL).code_for_char('*'), Some(k(0x55)));
+    }
+
+    #[test]
+    fn letter_keys() {
+        let key = |label: &str| *get(G915_TKL).keys(false).iter().find(|k| k.label == label && !is_special(k.code)).unwrap();
+        assert!(key("Q").is_letter(false) && key("Q").is_letter(true));
+        assert!(!key(";").is_letter(false) && key(";").is_letter(true));
+        assert!(key("`").is_letter(true));
+        // Backslash has "/" in its Russian legend, not a letter.
+        assert!(!key("\\").is_letter(true) && !key("\\").is_letter(false));
+        assert!(!key("1").is_letter(true) && !key("Esc").is_letter(true));
+        // The logo's "G" is not the letter.
+        let logo = *get(G915_TKL).keys(false).iter().find(|k| k.code == LOGO).unwrap();
+        assert!(!logo.is_letter(false));
     }
 }

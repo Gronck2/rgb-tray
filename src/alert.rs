@@ -15,6 +15,7 @@ use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows_sys::Win32::UI::Shell::{SHAppBarMessage, ABM_GETTASKBARPOS, APPBARDATA};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
@@ -25,6 +26,7 @@ const W: f32 = 380.0;
 const H: f32 = 172.0;
 const PAD: f32 = 20.0;
 const BTN_Y: f32 = H - PAD - 32.0;
+const WM_MOUSELEAVE: u32 = 0x02A3;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Hit {
@@ -53,6 +55,8 @@ struct Alert {
     name: String,
     battery: Battery,
     hover: Option<Hit>,
+    /// Asked for WM_MOUSELEAVE, so hover goes away with the mouse.
+    tracking: bool,
 }
 
 thread_local! {
@@ -65,6 +69,27 @@ fn wrapping(f: IDWriteTextFormat) -> IDWriteTextFormat {
         let _ = f.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
     }
     f
+}
+
+fn formats() -> windows::core::Result<Formats> {
+    let dw: IDWriteFactory = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)? };
+    let (ui, display) = (w!("Segoe UI Variable Text"), w!("Segoe UI Variable Display"));
+    let (lead, center) = (DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_CENTER);
+    Ok(Formats {
+        title: text_format(&dw, display, 16.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, lead)?,
+        name: text_format(&dw, ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL, lead)?,
+        big: text_format(&dw, display, 28.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
+        body: wrapping(text_format(&dw, ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL, lead)?),
+        button: text_format(&dw, ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL, center)?,
+        icon: text_format(&dw, w!("Segoe Fluent Icons"), 12.0, DWRITE_FONT_WEIGHT_NORMAL, center)?,
+    })
+}
+
+/// Colored window border so it stands out.
+unsafe fn set_border(hwnd: HWND, battery: Battery) {
+    let c = level_color(battery);
+    let border: u32 = (c.r * 255.0) as u32 | ((c.g * 255.0) as u32) << 8 | ((c.b * 255.0) as u32) << 16;
+    DwmSetWindowAttribute(hwnd, 34, &border as *const u32 as _, 4);
 }
 
 /// The close cross in the top-right corner (the only way to dismiss) and the snooze button.
@@ -98,6 +123,8 @@ pub fn show(key: String, name: &str, battery: Battery) {
             })
         });
         if let Some(h) = existing {
+            // The lighting color may have changed since it opened.
+            set_border(h, battery);
             InvalidateRect(h, null(), 0);
             return;
         }
@@ -146,6 +173,9 @@ unsafe fn open(key: String, name: &str, battery: Battery) -> windows::core::Resu
     let x = work.left + ((work.right - work.left) - w) / 2;
     let y = if edge == 3 { work.bottom - h - 4 * margin } else { work.top + 4 * margin };
 
+    // What can fail comes before the window: a window without its state would be stuck.
+    let d2d = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
+    let fmt = formats()?;
     let hwnd = CreateWindowExW(
         WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
         class.as_ptr(),
@@ -160,40 +190,17 @@ unsafe fn open(key: String, name: &str, battery: Battery) -> windows::core::Resu
         hinst,
         null(),
     );
+    if hwnd.is_null() {
+        return Err(windows::core::Error::from_win32());
+    }
     let theme = theme();
     let round: u32 = 2;
     DwmSetWindowAttribute(hwnd, 33, &round as *const u32 as _, 4);
     let dark: u32 = theme.dark as u32;
     DwmSetWindowAttribute(hwnd, 20, &dark as *const u32 as _, 4);
-    // Colored window border so it stands out.
-    let c = level_color(battery);
-    let border: u32 = (c.r * 255.0) as u32 | ((c.g * 255.0) as u32) << 8 | ((c.b * 255.0) as u32) << 16;
-    DwmSetWindowAttribute(hwnd, 34, &border as *const u32 as _, 4);
+    set_border(hwnd, battery);
 
-    let dw: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-    let ui = w!("Segoe UI Variable Text");
-    let (lead, center) = (DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_CENTER);
-    let fmt = Formats {
-        title: text_format(&dw, w!("Segoe UI Variable Display"), 16.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, lead)?,
-        name: text_format(&dw, ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL, lead)?,
-        big: text_format(&dw, w!("Segoe UI Variable Display"), 28.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
-        body: wrapping(text_format(&dw, ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL, lead)?),
-        button: text_format(&dw, ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL, center)?,
-        icon: text_format(&dw, w!("Segoe Fluent Icons"), 12.0, DWRITE_FONT_WEIGHT_NORMAL, center)?,
-    };
-    let alert = Alert {
-        hwnd,
-        scale,
-        d2d: D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?,
-        rt: None,
-        brush: None,
-        fmt,
-        theme,
-        key,
-        name: name.to_string(),
-        battery,
-        hover: None,
-    };
+    let alert = Alert { hwnd, scale, d2d, rt: None, brush: None, fmt, theme, key, name: name.to_string(), battery, hover: None, tracking: false };
     ALERT.with(|c| *c.borrow_mut() = Some(alert));
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     Ok(())
@@ -220,8 +227,12 @@ impl Alert {
             let rt = self.rt.clone().unwrap();
             rt.BeginDraw();
             self.draw(&rt);
-            if rt.EndDraw(None, None).is_err() {
+            if let Err(e) = rt.EndDraw(None, None) {
                 self.rt = None;
+                if e.code() == windows::Win32::Foundation::D2DERR_RECREATE_TARGET {
+                    // Nothing was shown: draw again on a new target.
+                    InvalidateRect(self.hwnd, null(), 0);
+                }
             }
         }
     }
@@ -298,9 +309,6 @@ impl Alert {
 /// Renders a sample alert into a PNG file, for checking the look.
 pub fn snapshot(path: &str, dark: Option<bool>, scale: f32, percent: u8) -> windows::core::Result<()> {
     crate::ui::render_png(path, W, H, scale, |rt, d2d| unsafe {
-        let dw: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-        let ui = w!("Segoe UI Variable Text");
-        let (lead, center) = (DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_CENTER);
         let theme = crate::ui::theme_for(dark);
         let a = Alert {
             hwnd: null_mut(),
@@ -308,19 +316,13 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32, percent: u8) -> wind
             d2d,
             rt: None,
             brush: Some(rt.CreateSolidColorBrush(&theme.text, None)?),
-            fmt: Formats {
-                title: text_format(&dw, w!("Segoe UI Variable Display"), 16.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, lead)?,
-                name: text_format(&dw, ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL, lead)?,
-                big: text_format(&dw, w!("Segoe UI Variable Display"), 28.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
-                body: wrapping(text_format(&dw, ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL, lead)?),
-                button: text_format(&dw, ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL, center)?,
-                icon: text_format(&dw, w!("Segoe Fluent Icons"), 12.0, DWRITE_FONT_WEIGHT_NORMAL, center)?,
-            },
+            fmt: formats()?,
             theme,
             key: "logitech".into(),
             name: "Logitech G915 TKL".into(),
             battery: Battery { percent, charging: false },
             hover: None,
+            tracking: false,
         };
         a.draw(rt);
         Ok(())
@@ -348,6 +350,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_MOUSEMOVE => {
             let changed = ALERT.with(|c| {
                 c.borrow_mut().as_mut().map(|a| {
+                    if !a.tracking {
+                        let mut tme = TRACKMOUSEEVENT { cbSize: size_of::<TRACKMOUSEEVENT>() as u32, dwFlags: TME_LEAVE, hwndTrack: hwnd, dwHoverTime: 0 };
+                        TrackMouseEvent(&mut tme);
+                        a.tracking = true;
+                    }
                     let h = hit_at(lparam, a.scale);
                     let changed = h != a.hover;
                     a.hover = h;
@@ -357,6 +364,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if changed == Some(true) {
                 InvalidateRect(hwnd, null(), 0);
             }
+            0
+        }
+        WM_MOUSELEAVE => {
+            ALERT.with(|c| {
+                if let Some(a) = c.borrow_mut().as_mut() {
+                    a.tracking = false;
+                    a.hover = None;
+                }
+            });
+            InvalidateRect(hwnd, null(), 0);
             0
         }
         WM_LBUTTONUP => {
