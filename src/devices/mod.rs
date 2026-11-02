@@ -121,6 +121,12 @@ pub trait Device {
     fn battery(&self) -> Option<Battery> {
         None
     }
+
+    /// The HID interface (NUL-terminated path) the lighting goes through, if one: `discover()`
+    /// drives each interface through one driver only.
+    fn hid_path(&self) -> Option<&[u16]> {
+        None
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -519,14 +525,25 @@ pub fn discover() -> Discovery {
     for driver in DRIVERS {
         (driver.discover)(&mut d);
     }
-    // One device reachable two ways (e.g. a keyboard on cable and receiver) is driven once.
-    let mut seen = Vec::new();
-    d.found.retain(|f| {
-        let first = !seen.contains(&f.id);
-        seen.push(f.id.clone());
-        first
-    });
+    dedup(&mut d.found);
     d
+}
+
+/// Keeps the first of the devices with the same id (one device reachable two ways, e.g. a
+/// keyboard on cable and receiver) or the same HID interface (a `[hid]` profile and the QMK/VIA
+/// driver both taking one): the first driver in `DRIVERS` order wins.
+fn dedup(found: &mut Vec<Found>) {
+    let mut ids: Vec<String> = Vec::new();
+    let mut paths: Vec<Vec<u16>> = Vec::new();
+    found.retain(|f| {
+        let path = f.dev.hid_path();
+        if ids.contains(&f.id) || path.is_some_and(|p| paths.iter().any(|q| q == p)) {
+            return false;
+        }
+        ids.push(f.id.clone());
+        paths.extend(path.map(<[u16]>::to_vec));
+        true
+    });
 }
 
 #[cfg(test)]
@@ -608,6 +625,31 @@ mod tests {
         assert_eq!(path_hash(&w("\\\\?\\HID#VID_0483")), path_hash(&w("\\\\?\\hid#vid_0483\0junk")));
         assert_ne!(path_hash(&w("a")), path_hash(&w("b")));
         assert_eq!(path_hash(&w("a")).len(), 8);
+    }
+
+    #[test]
+    fn one_driver_per_device_and_interface() {
+        struct Dummy(Option<Vec<u16>>);
+        impl Device for Dummy {
+            fn apply(&self, _: Effect, _: Rgb, _: u8) -> Result<(), String> {
+                Ok(())
+            }
+            fn hid_path(&self) -> Option<&[u16]> {
+                self.0.as_deref()
+            }
+        }
+        let found = |id: &str, path: Option<&str>| Found { id: id.into(), dev: Box::new(Dummy(path.map(|p| p.encode_utf16().chain([0]).collect()))) };
+        let mut list = vec![
+            found("logitech-1", Some("a")),
+            found("logitech-1", Some("b")),
+            found("pad-1", Some("c")),
+            found("via-1", Some("c")),
+            found("tuya-1", None),
+            found("tuya-2", None),
+            found("via-2", Some("d")),
+        ];
+        dedup(&mut list);
+        assert_eq!(list.iter().map(|f| f.id.as_str()).collect::<Vec<_>>(), ["logitech-1", "pad-1", "tuya-1", "tuya-2", "via-2"]);
     }
 
     #[test]

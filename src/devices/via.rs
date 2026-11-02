@@ -8,8 +8,10 @@
 //! Effect numbers differ between firmwares, except 0 (off) and 1 (static color), so breathing
 //! and spectrum are played by the app, unless a known model says which firmware effect to use.
 
+use std::time::Duration;
+
 use super::{animation, Device, Effect, Rgb};
-use crate::hid::{self, Hid};
+use crate::hid::{self, Hid, Patience};
 
 const USAGE_PAGE: u16 = 0xFF60;
 const USAGE: u16 = 0x61;
@@ -25,7 +27,7 @@ const EFFECT_OFF: u8 = 0;
 const EFFECT_STATIC: u8 = 1;
 
 /// QMK effect speed (0..=255, about 128 normal) of a speed factor (¼..4 over the range).
-fn qmk_speed(factor: f32) -> u8 {
+pub(crate) fn qmk_speed(factor: f32) -> u8 {
     let s = (50.0 + 25.0 * factor.max(1e-3).log2()).clamp(0.0, 100.0);
     (s * 255.0 / 100.0) as u8
 }
@@ -139,32 +141,22 @@ fn probe(hid: &Hid) -> Option<Channel> {
 /// Sends a command and returns its answer (bytes after the report id), None if the firmware
 /// doesn't handle it or doesn't answer.
 fn request(hid: &Hid, bytes: &[u8]) -> Option<[u8; 32]> {
-    // Answers left over from animation frames, which aren't waited for.
-    let mut stale = [0u8; 33];
-    for _ in 0..64 {
-        if !matches!(hid.read(&mut stale, 0), Ok(Some(_))) {
-            break;
-        }
-    }
     let mut buf = [0u8; 33];
     buf[1..1 + bytes.len()].copy_from_slice(bytes);
-    if !hid.write(&buf) {
-        return None;
-    }
+    let echo = &buf[1..1 + bytes.len().min(3)];
     let mut resp = [0u8; 33];
-    for _ in 0..4 {
-        match hid.read(&mut resp, 300) {
-            Ok(Some(_)) if resp[1] == UNHANDLED => return None,
-            Ok(Some(_)) if resp[1..1 + bytes.len().min(3)] == buf[1..1 + bytes.len().min(3)] => {
-                let mut out = [0u8; 32];
-                out.copy_from_slice(&resp[1..]);
-                return Some(out);
-            }
-            Ok(Some(_)) => continue,
-            _ => break,
+    // Up to 64 answers left over from animation frames (which aren't waited for) are dropped first.
+    hid.exchange(&buf, &mut resp, 64, Patience::Reads(4, Duration::from_millis(300)), |r| match r[1] {
+        UNHANDLED => Some(None),
+        _ if r[1..1 + echo.len()] == *echo => {
+            let mut out = [0u8; 32];
+            out.copy_from_slice(&r[1..]);
+            Some(Some(out))
         }
-    }
-    None
+        _ => None,
+    })
+    .ok()
+    .flatten()
 }
 
 impl Via {
@@ -233,6 +225,10 @@ fn value_of(Rgb(r, g, b): Rgb, brightness: u8) -> u8 {
 }
 
 impl Device for Via {
+    fn hid_path(&self) -> Option<&[u16]> {
+        Some(&self.path)
+    }
+
     fn apply(&self, effect: Effect, color: Rgb, brightness: u8) -> Result<(), String> {
         animation::stop(&self.path);
         match effect {

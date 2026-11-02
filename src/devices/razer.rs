@@ -51,6 +51,7 @@ pub fn is_supported(pid: u16) -> bool {
 
 pub struct Razer {
     hid: Hid,
+    path: Vec<u16>,
     key: &'static str,
     model: &'static RazerModel,
     /// Unique id ("<kind>-<serial>"); None when a wireless device doesn't answer (no link),
@@ -74,7 +75,7 @@ impl Razer {
         for d in best.into_iter().filter_map(|i| {
             let (key, model) = model_of(i.pid)?;
             // Mouse collections can't be opened for read/write, but feature reports work.
-            let mut d = Razer { hid: Hid::open(&i.path, false, false)?, key, model, id: None };
+            let mut d = Razer { hid: Hid::open(&i.path, false, false)?, path: i.path.clone(), key, model, id: None };
             d.id = device_id(key, d.model.battery, d.command(0x00, 0x82, &[]), || super::path_hash(&i.path));
             Some(d)
         }) {
@@ -156,6 +157,10 @@ impl Razer {
 }
 
 impl Device for Razer {
+    fn hid_path(&self) -> Option<&[u16]> {
+        Some(&self.path)
+    }
+
     fn apply(&self, effect: Effect, color: Rgb, brightness: u8) -> Result<(), String> {
         let leds: Vec<(u8, Rgb)> = self.model.leds.iter().map(|&led| (led, color)).collect();
         self.apply_leds(effect, &leds, brightness)

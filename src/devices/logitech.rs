@@ -4,10 +4,10 @@
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::{Battery, Device, Effect, Rgb};
-use crate::hid::{self, Hid};
+use crate::hid::{self, Hid, Patience};
 
 const VID: u16 = 0x046D;
 pub const RECEIVER_PIDS: [u16; 6] = [0xC539, 0xC53A, 0xC53F, 0xC541, 0xC545, 0xC547];
@@ -73,12 +73,13 @@ static SILENT_RECEIVER: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 
 pub struct Logitech {
     hid: Hid,
+    path: Vec<u16>,
     dev: u8,
     sw: u8,
     feat: u8,
     feat_keys: u8,
     feat_battery: u8,
-    /// Effect IDs supported by each zone, indexed by effect index.
+    /// Effect IDs supported by each zone, indexed by effect index (empty when found by `probe_all`).
     pub zones: Vec<Vec<u16>>,
     /// Unique id of this keyboard ("logitech-<unit id>").
     pub id: String,
@@ -88,11 +89,21 @@ impl Logitech {
     /// Every connected keyboard. Each Logitech HID++ interface is tried (several receivers may
     /// be plugged in, e.g. one of a Logitech mouse); one keyboard per receiver.
     pub fn find_all(sw: u8) -> Vec<Logitech> {
+        Self::search(sw, true)
+    }
+
+    /// Every connected keyboard, found by feature lookups only: its lighting zones aren't read
+    /// (dozens of requests), so it can't be lit. For battery polls and link checks.
+    pub fn probe_all(sw: u8) -> Vec<Logitech> {
+        Self::search(sw, false)
+    }
+
+    fn search(sw: u8, zones: bool) -> Vec<Logitech> {
         let infos = hid::enumerate(VID).into_iter().filter(|i| i.usage_page == 0xFF00 && i.usage == 0x0002);
         let mut out = Vec::new();
         let mut silent = false;
         for info in infos {
-            match Self::find_on(&info, sw) {
+            match Self::find_on(&info, sw, zones) {
                 Ok(kb) => {
                     let mut seen = SEEN.lock().unwrap();
                     seen.retain(|(p, _)| *p != info.path);
@@ -124,15 +135,19 @@ impl Logitech {
         seen.iter().filter(|(p, id)| paths.contains(p) && !found.contains(id)).map(|(_, id)| id.clone()).collect()
     }
 
-    /// The keyboard on one interface; Err(true) when the receiver's keyboard slot didn't answer.
-    fn find_on(info: &hid::HidInfo, sw: u8) -> Result<Logitech, bool> {
+    /// The keyboard on one interface, with its lighting zones read if `zones`; Err(true) when the
+    /// receiver's keyboard slot didn't answer.
+    fn find_on(info: &hid::HidInfo, sw: u8, zones: bool) -> Result<Logitech, bool> {
         let hid = Hid::open(&info.path, true, true).ok_or(false)?;
         // Through a LIGHTSPEED receiver the keyboard sits in slot 1; over cable it answers as 0xFF.
         let receiver = RECEIVER_PIDS.contains(&info.pid);
         let dev_indexes: &[u8] = if receiver { &[1, 2] } else { &[0xFF] };
         let mut silent = false;
         for &dev in dev_indexes {
-            let r = match request(&hid, dev, sw, 0, 0, &FEATURE_RGB_EFFECTS.to_be_bytes()) {
+            // One try only: retrying a sleeping keyboard's slots took ~3 s on every search. The
+            // keyboard the dropped packet woke up is found on the next search, which its
+            // connection notification starts (`spawn_watcher`).
+            let r = match request_tries(&hid, dev, sw, 0, 0, &FEATURE_RGB_EFFECTS.to_be_bytes(), 1) {
                 Ok(r) => r,
                 Err(e) => {
                     crate::log(&format!("logitech dev {dev}: {e}"));
@@ -144,6 +159,10 @@ impl Logitech {
                 continue;
             }
             let feat_keys = request(&hid, dev, sw, 0, 0, &FEATURE_PER_KEY.to_be_bytes()).map(|r| r[4]).unwrap_or(0);
+            // Effects alone (e.g. a mouse in this slot) aren't this keyboard: it has per-key colors.
+            if feat_keys == 0 {
+                continue;
+            }
             let feat_battery = request(&hid, dev, sw, 0, 0, &FEATURE_BATTERY_VOLTAGE.to_be_bytes()).map(|r| r[4]).unwrap_or(0);
             let feat_info = request(&hid, dev, sw, 0, 0, &FEATURE_DEVICE_INFO.to_be_bytes()).map(|r| r[4]).unwrap_or(0);
             // Different features always have different indexes; equal ones mean mixed-up answers.
@@ -158,8 +177,8 @@ impl Logitech {
                 f => request(&hid, dev, sw, f, 0, &[]).ok().map(|r| format!("{:02X}{:02X}{:02X}{:02X}", r[5], r[6], r[7], r[8])),
             };
             let id = format!("logitech-{}", unit.unwrap_or_else(|| super::path_hash(&info.path)));
-            let mut kb = Logitech { hid, dev, sw, feat: r[4], feat_keys, feat_battery, zones: Vec::new(), id };
-            if kb.read_zones().is_ok() && !kb.zones.is_empty() {
+            let mut kb = Logitech { hid, path: info.path.clone(), dev, sw, feat: r[4], feat_keys, feat_battery, zones: Vec::new(), id };
+            if !zones || (kb.read_zones().is_ok() && !kb.zones.is_empty()) {
                 return Ok(kb);
             }
             return Err(false);
@@ -178,16 +197,27 @@ impl Logitech {
         let ids = self.zones.get(zone).ok_or(format!("no zone {zone}"))?;
         let idx = ids.iter().position(|&e| e == effect).ok_or(format!("zone {zone} has no effect {effect:#06X}"))?;
         self.req(5, &[0x01, 0x01])?;
-        if let Some(st) = ids.iter().position(|&e| e == EFFECT_STATIC) {
-            let mut args = vec![zone as u8, st as u8, params[0], params[1], params[2]];
-            args.extend_from_slice(&[0; 7]);
-            args.push(0x01);
-            self.req(1, &args)?;
-        }
-        let mut args = vec![zone as u8, idx as u8];
-        args.extend_from_slice(params);
-        args.push(0x01);
+        self.static_first(zone, ids, Rgb(params[0], params[1], params[2]))?;
+        self.set_zone_effect(zone, idx, params)
+    }
+
+    /// 0x8071 SetZoneEffect: the effect at `idx` in the zone's list, with its parameters.
+    fn set_zone_effect(&self, zone: usize, idx: usize, params: &[u8; 10]) -> Result<(), String> {
+        let mut args = [0u8; 13];
+        args[0] = zone as u8;
+        args[1] = idx as u8;
+        args[2..12].copy_from_slice(params);
+        args[12] = 0x01;
         self.req(1, &args).map(|_| ())
+    }
+
+    /// A steady color on the zone, if it has the static effect: going straight from one
+    /// animation to another hangs the G915, passing through a steady color first doesn't.
+    fn static_first(&self, zone: usize, ids: &[u16], color: Rgb) -> Result<(), String> {
+        match ids.iter().position(|&e| e == EFFECT_STATIC) {
+            Some(idx) => self.set_zone_effect(zone, idx, &steady(color)),
+            None => Ok(()),
+        }
     }
 
     /// 0x8071 SWControl with raw bytes: [1 (set), control flags (bit 0 all clusters, bit 1 power
@@ -227,11 +257,9 @@ impl Logitech {
         for (zone, ids) in self.zones.iter().enumerate() {
             // "Off" hangs the logo (see `apply`); steady black does the same job there.
             let effect = if zone == 0 { EFFECT_STATIC } else { EFFECT_OFF };
-            let idx = ids.iter().position(|&e| e == effect).unwrap_or(0);
-            let mut args = vec![zone as u8, idx as u8];
-            args.extend_from_slice(&[0; 10]);
-            args.push(0x01);
-            self.req(1, &args)?;
+            // A zone without it is left alone: index 0 would be whatever effect it lists first.
+            let Some(idx) = ids.iter().position(|&e| e == effect) else { continue };
+            self.set_zone_effect(zone, idx, &[0; 10])?;
         }
         self.update_keys(keys, brightness)
     }
@@ -266,6 +294,10 @@ impl Logitech {
 }
 
 impl Device for Logitech {
+    fn hid_path(&self) -> Option<&[u16]> {
+        Some(&self.path)
+    }
+
     fn apply(&self, effect: Effect, color: Rgb, brightness: u8) -> Result<(), String> {
         crate::log(&format!("{}: {effect:?} {color:?} brightness {brightness}", self.id));
         // Steady colors and "off" are per-key colors all alike. The firmware effect engine
@@ -278,10 +310,11 @@ impl Device for Logitech {
         }
         // Take lighting control from the onboard mode.
         self.req(5, &[0x01, 0x01])?;
-        let Rgb(r, g, b) = color.scaled(brightness);
+        let scaled = color.scaled(brightness);
+        let Rgb(r, g, b) = scaled;
         let (id, params): (u16, [u8; 10]) = match effect {
             Effect::Off => (EFFECT_OFF, [0; 10]),
-            Effect::Static => (EFFECT_STATIC, [r, g, b, 0, 0, 0, 0, 0, 0, 0]),
+            Effect::Static => (EFFECT_STATIC, steady(scaled)),
             Effect::Breathe => {
                 // A pre-dimmed color pulses too faintly to see at low brightness; the
                 // effect has its own intensity parameter (1..=100) instead.
@@ -304,7 +337,7 @@ impl Device for Logitech {
                 (EFFECT_RIPPLE, [r, g, b, 0, sh, sl, 0, 0, 0, 0])
             }
             // Not in this firmware (the panel doesn't offer them): the color, steadily.
-            Effect::Reactive | Effect::Starlight => (EFFECT_STATIC, [r, g, b, 0, 0, 0, 0, 0, 0, 0]),
+            Effect::Reactive | Effect::Starlight => (EFFECT_STATIC, steady(scaled)),
         };
         let [ch, cl] = period_ms(CYCLE_PERIOD_MS).to_be_bytes();
         for (zone, ids) in self.zones.iter().enumerate() {
@@ -313,28 +346,20 @@ impl Device for Logitech {
             // switched off and on. The logo breathes as a steady color instead, and "off" is
             // steady black everywhere.
             let (id, params) = match (zone, id) {
-                (0, EFFECT_BREATHE) => (EFFECT_STATIC, [r, g, b, 0, 0, 0, 0, 0, 0, 0]),
+                (0, EFFECT_BREATHE) => (EFFECT_STATIC, steady(scaled)),
                 (_, EFFECT_OFF) => (EFFECT_STATIC, [0; 10]),
                 // A zone without wave (the logo) cycles along; one without ripple shows the color.
                 (_, EFFECT_WAVE) if !ids.contains(&EFFECT_WAVE) => (EFFECT_CYCLE, [0, 0, 0, 0, 0, ch, cl, brightness.clamp(1, 100), 0, 0]),
-                (_, EFFECT_RIPPLE) if !ids.contains(&EFFECT_RIPPLE) => (EFFECT_STATIC, [r, g, b, 0, 0, 0, 0, 0, 0, 0]),
+                (_, EFFECT_RIPPLE) if !ids.contains(&EFFECT_RIPPLE) => (EFFECT_STATIC, steady(scaled)),
                 _ => (id, params),
             };
             // Going straight from one animation to another (breathing → spectrum) also hangs the
             // firmware; passing through a steady color first doesn't.
             if id != EFFECT_STATIC {
-                if let Some(idx) = ids.iter().position(|&e| e == EFFECT_STATIC) {
-                    let mut args = vec![zone as u8, idx as u8, r, g, b];
-                    args.extend_from_slice(&[0; 7]);
-                    args.push(0x01);
-                    self.req(1, &args)?;
-                }
+                self.static_first(zone, ids, scaled)?;
             }
             let Some(idx) = ids.iter().position(|&e| e == id) else { continue };
-            let mut args = vec![zone as u8, idx as u8];
-            args.extend_from_slice(&params);
-            args.push(0x01);
-            self.req(1, &args)?;
+            self.set_zone_effect(zone, idx, &params)?;
         }
         Ok(())
     }
@@ -366,41 +391,32 @@ impl Device for Logitech {
 /// lookup returning the index of another). Stale input is therefore drained before every
 /// request, and after a retry the late duplicate answer is swallowed.
 fn request(hid: &Hid, dev: u8, sw: u8, feat: u8, func: u8, args: &[u8]) -> Result<[u8; 20], String> {
-    drain(hid, Duration::ZERO);
+    request_tries(hid, dev, sw, feat, func, args, 3)
+}
+
+/// `request` with up to `tries` attempts (at least one).
+fn request_tries(hid: &Hid, dev: u8, sw: u8, feat: u8, func: u8, args: &[u8], tries: usize) -> Result<[u8; 20], String> {
     let mut result = request_once(hid, dev, sw, feat, func, args);
     let mut retried = false;
-    for _ in 0..2 {
+    for _ in 1..tries {
         match &result {
             Err(e) if e == NO_RESPONSE => {
                 retried = true;
-                drain(hid, Duration::ZERO);
                 result = request_once(hid, dev, sw, feat, func, args);
             }
             _ => break,
         }
     }
     if retried && result.is_ok() {
-        drain(hid, Duration::from_millis(600));
+        // The late duplicate answer.
+        hid.drain(&mut [0u8; 20], usize::MAX, Duration::from_millis(600));
     }
     result
 }
 
-/// Discards pending input reports; with a non-zero `wait`, also those arriving within it.
-fn drain(hid: &Hid, wait: Duration) {
-    let deadline = Instant::now() + wait;
-    let mut r = [0u8; 20];
-    loop {
-        let left = deadline.saturating_duration_since(Instant::now());
-        match hid.read(&mut r, left.as_millis() as u32) {
-            Ok(Some(_)) => continue,
-            _ => break,
-        }
-    }
-}
-
 const NO_RESPONSE: &str = "HID++: no response";
 
-/// Sends one request and waits for its response, skipping traffic of other apps.
+/// Drops stale input, sends one request and waits for its response, skipping traffic of other apps.
 fn request_once(hid: &Hid, dev: u8, sw: u8, feat: u8, func: u8, args: &[u8]) -> Result<[u8; 20], String> {
     let mut msg = [0u8; 20];
     msg[0] = LONG;
@@ -411,31 +427,33 @@ fn request_once(hid: &Hid, dev: u8, sw: u8, feat: u8, func: u8, args: &[u8]) -> 
     if crate::trace_enabled() {
         crate::log(&format!("hid++ > {:02X?}", &msg[..4 + args.len()]));
     }
-    if !hid.write(&msg) {
-        return Err(format!("HID++: write failed ({})", std::io::Error::last_os_error()));
-    }
-    let deadline = Instant::now() + Duration::from_millis(500);
-    let mut r = [0u8; 20];
-    while let Some(left) = deadline.checked_duration_since(Instant::now()) {
-        match hid.read(&mut r, left.as_millis() as u32) {
-            Err(()) => return Err("HID++: device disconnected".into()),
-            Ok(None) => break,
-            Ok(Some(_)) => {}
-        }
+    let mut buf = [0u8; 20];
+    let answer = |r: &[u8]| {
         if r[0] != LONG || r[1] != dev {
-            continue;
+            return None;
         }
         if r[2] == 0xFF && r[3] == feat && r[4] == msg[3] {
-            return Err(format!("HID++: error {:#04x} (feat {feat:#04x} fn {func})", r[5]));
+            return Some(Err(format!("HID++: error {:#04x} (feat {feat:#04x} fn {func})", r[5])));
         }
         if r[2] == feat && r[3] == msg[3] {
             if crate::trace_enabled() {
                 crate::log(&format!("hid++ < {:02X?}", &r[..8]));
             }
-            return Ok(r);
+            return Some(Ok(r.try_into().unwrap_or([0; 20])));
         }
+        None
+    };
+    match hid.exchange(&msg, &mut buf, usize::MAX, Patience::Total(Duration::from_millis(500)), answer) {
+        Ok(result) => result,
+        Err(hid::Exchange::Write(e)) => Err(format!("HID++: write failed ({e})")),
+        Err(hid::Exchange::Gone) => Err("HID++: device disconnected".into()),
+        Err(hid::Exchange::NoAnswer) => Err(NO_RESPONSE.into()),
     }
-    Err(NO_RESPONSE.into())
+}
+
+/// 0x8071 effect parameters of a steady color.
+fn steady(Rgb(r, g, b): Rgb) -> [u8; 10] {
+    [r, g, b, 0, 0, 0, 0, 0, 0, 0]
 }
 
 /// Calls `on_change` whenever a device connects to or loses its link with a receiver
@@ -480,8 +498,8 @@ pub fn spawn_watcher(on_change: impl Fn() + Send + Sync + 'static) {
 /// How the app finds Logitech keyboards (see `devices::DRIVERS`).
 pub const DRIVER: super::Driver = super::Driver {
     discover,
-    batteries: || Logitech::find_all(SW_ID_POLL).into_iter().filter_map(|kb| Some((kb.id.clone(), kb.battery()?))).collect(),
-    answering: || Logitech::find_all(SW_ID_POLL).into_iter().map(|k| k.id).collect(),
+    batteries: || Logitech::probe_all(SW_ID_POLL).into_iter().filter_map(|kb| Some((kb.id.clone(), kb.battery()?))).collect(),
+    answering: || Logitech::probe_all(SW_ID_POLL).into_iter().map(|k| k.id).collect(),
     open_for_keys: |id| match id.starts_with("logitech-") {
         true => Logitech::find_id(SW_ID_EDITOR, id).map(|k| Box::new(k) as Box<dyn Device>),
         false => None,
