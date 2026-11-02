@@ -508,21 +508,32 @@ fn spawn_battery_poller() {
     });
 }
 
-/// The receiver doesn't always announce a keyboard waking up, so while some device has no
-/// link it is looked for every half minute; once it answers, everything is re-applied.
+/// The receiver doesn't announce a keyboard waking up, so while some device has no link it is
+/// looked for: a Logitech keyboard every 3 s (the firmware shows its own effect until then;
+/// a probe of a sleeping one costs ~0.5 s), every device every half minute. Once one answers,
+/// everything is re-applied.
 fn spawn_link_watch() {
-    std::thread::spawn(|| loop {
-        std::thread::sleep(std::time::Duration::from_secs(30));
-        let missing = NO_LINK.lock().unwrap().clone();
-        if missing.is_empty() {
-            continue;
-        }
-        let back = {
-            let _guard = APPLY_LOCK.lock().unwrap();
-            devices::answering()
-        };
-        if missing.iter().any(|id| back.contains(id)) {
-            post(WM_REAPPLY_SOON);
+    std::thread::spawn(|| {
+        let mut tick = 0u32;
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            tick = (tick + 1) % 10;
+            let missing = NO_LINK.lock().unwrap().clone();
+            let all = tick == 0;
+            if missing.is_empty() || !(all || missing.iter().any(|id| id.starts_with("logitech-"))) {
+                continue;
+            }
+            let back = {
+                let _guard = APPLY_LOCK.lock().unwrap();
+                if all {
+                    devices::answering()
+                } else {
+                    devices::logitech::Logitech::probe_all(devices::logitech::SW_ID_POLL).into_iter().map(|k| k.id).collect()
+                }
+            };
+            if missing.iter().any(|id| back.contains(id)) {
+                post(WM_REAPPLY_SOON);
+            }
         }
     });
 }

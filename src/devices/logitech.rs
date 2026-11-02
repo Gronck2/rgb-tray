@@ -144,13 +144,16 @@ impl Logitech {
         let dev_indexes: &[u8] = if receiver { &[1, 2] } else { &[0xFF] };
         let mut silent = false;
         for &dev in dev_indexes {
-            // One try only: retrying a sleeping keyboard's slots took ~3 s on every search. The
-            // keyboard the dropped packet woke up is found on the next search, which its
-            // connection notification starts (`spawn_watcher`).
-            let r = match request_tries(&hid, dev, sw, 0, 0, &FEATURE_RGB_EFFECTS.to_be_bytes(), 1) {
+            // One short try: retrying a sleeping keyboard's slots took ~3 s on every search. An
+            // awake keyboard answers in ~30 ms. A waking one doesn't announce itself (no
+            // connection notification), so the link watch looks for it every few seconds.
+            let r = match request_within(&hid, dev, sw, 0, 0, &FEATURE_RGB_EFFECTS.to_be_bytes(), LOOKUP_WAIT) {
                 Ok(r) => r,
                 Err(e) => {
-                    crate::log(&format!("logitech dev {dev}: {e}"));
+                    // The link watch's frequent probes of a sleeping keyboard aren't news.
+                    if zones {
+                        crate::log(&format!("logitech dev {dev}: {e}"));
+                    }
                     silent |= receiver && dev == 1 && e == NO_RESPONSE;
                     continue;
                 }
@@ -416,8 +419,17 @@ fn request_tries(hid: &Hid, dev: u8, sw: u8, feat: u8, func: u8, args: &[u8], tr
 
 const NO_RESPONSE: &str = "HID++: no response";
 
+/// How long a request waits for its answer; the first lookup of a search waits less.
+const REQUEST_WAIT: Duration = Duration::from_millis(500);
+const LOOKUP_WAIT: Duration = Duration::from_millis(250);
+
 /// Drops stale input, sends one request and waits for its response, skipping traffic of other apps.
 fn request_once(hid: &Hid, dev: u8, sw: u8, feat: u8, func: u8, args: &[u8]) -> Result<[u8; 20], String> {
+    request_within(hid, dev, sw, feat, func, args, REQUEST_WAIT)
+}
+
+/// `request_once` waiting at most `wait` for the answer.
+fn request_within(hid: &Hid, dev: u8, sw: u8, feat: u8, func: u8, args: &[u8], wait: Duration) -> Result<[u8; 20], String> {
     let mut msg = [0u8; 20];
     msg[0] = LONG;
     msg[1] = dev;
@@ -443,7 +455,7 @@ fn request_once(hid: &Hid, dev: u8, sw: u8, feat: u8, func: u8, args: &[u8]) -> 
         }
         None
     };
-    match hid.exchange(&msg, &mut buf, usize::MAX, Patience::Total(Duration::from_millis(500)), answer) {
+    match hid.exchange(&msg, &mut buf, usize::MAX, Patience::Total(wait), answer) {
         Ok(result) => result,
         Err(hid::Exchange::Write(e)) => Err(format!("HID++: write failed ({e})")),
         Err(hid::Exchange::Gone) => Err("HID++: device disconnected".into()),
