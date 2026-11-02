@@ -90,13 +90,6 @@ pub fn parse_packet(text: &str) -> Result<Vec<Byte>, String> {
     Ok(bytes)
 }
 
-/// Effect speed byte of a speed factor (¼..4 over the range).
-// Same curve as `via::qmk_speed`; use that one once it is pub(crate).
-fn speed_byte(factor: f32) -> u8 {
-    let s = (50.0 + 25.0 * factor.max(1e-3).log2()).clamp(0.0, 100.0);
-    (s * 255.0 / 100.0) as u8
-}
-
 /// One color for the whole device: every zone's LED id with it, or LED id 0 without zones.
 pub fn fill(zones: &[u8], color: Rgb) -> Vec<(u8, Rgb)> {
     if zones.is_empty() {
@@ -130,7 +123,7 @@ pub fn packets(templates: &[Packet], zones: &[(u8, Rgb)], brightness: u8, speed:
                     Byte::Blue => color.2,
                     Byte::Brightness => (255 * brightness.min(100) as u32 / 100) as u8,
                     Byte::Percent => brightness.min(100),
-                    Byte::Speed => speed_byte(speed),
+                    Byte::Speed => super::via::qmk_speed(speed),
                     Byte::Zone => zone,
                 };
             }
@@ -265,6 +258,10 @@ impl RawHid {
 }
 
 impl Device for RawHid {
+    fn hid_path(&self) -> Option<&[u16]> {
+        Some(&self.path)
+    }
+
     fn apply(&self, effect: Effect, color: Rgb, brightness: u8) -> Result<(), String> {
         self.apply_zones(effect, &fill(&self.zones, color), brightness)
     }
@@ -442,9 +439,9 @@ mod tests {
 
     #[test]
     fn speed_bytes() {
-        assert_eq!(speed_byte(1.0), 127);
-        assert_eq!(speed_byte(0.25), 0);
-        assert_eq!(speed_byte(4.0), 255);
+        assert_eq!(crate::devices::via::qmk_speed(1.0), 127);
+        assert_eq!(crate::devices::via::qmk_speed(0.25), 0);
+        assert_eq!(crate::devices::via::qmk_speed(4.0), 255);
     }
 
     #[test]
