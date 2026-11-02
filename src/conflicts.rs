@@ -14,10 +14,30 @@ pub struct App {
     pub name: &'static str,
     /// Executable names (any case) of the parts that write to devices.
     pub processes: &'static [&'static str],
-    /// Device kinds it fights over; empty = any device.
-    kinds: &'static [&'static str],
+    /// Devices it fights over.
+    devices: Devices,
     /// What to do about it, short enough for one line of a warning card.
     pub remedy: Text,
+}
+
+/// Which devices a program drives.
+enum Devices {
+    Any,
+    /// These device kinds (`Kind::key`).
+    Kinds(&'static [&'static str]),
+    /// Every model of the Razer protocol, whichever profile it comes from.
+    Razer,
+}
+
+impl App {
+    /// The program drives devices of this model.
+    fn drives(&self, kind: &crate::devices::Kind) -> bool {
+        match self.devices {
+            Devices::Any => true,
+            Devices::Kinds(keys) => keys.contains(&kind.key),
+            Devices::Razer => matches!(kind.protocol, crate::devices::Protocol::Razer(_)),
+        }
+    }
 }
 
 pub const APPS: &[App] = &[
@@ -25,31 +45,31 @@ pub const APPS: &[App] = &[
         key: "ghub",
         name: "Logitech G HUB",
         processes: &["lghub_agent.exe", "lghub.exe", "lghub_system_tray.exe"],
-        kinds: &["logitech"],
+        devices: Devices::Kinds(&["logitech"]),
         remedy: ("Закройте G HUB в трее", "Quit G HUB from the tray"),
     },
     App {
         key: "synapse",
         name: "Razer Synapse",
         processes: &["Razer Synapse Service.exe", "Razer Synapse 3.exe", "Razer Synapse.exe", "RazerAppEngine.exe"],
-        kinds: &["naga", "dock"],
+        devices: Devices::Razer,
         remedy: ("Закройте Synapse в трее", "Quit Synapse from the tray"),
     },
     App {
         key: "aura",
         name: "ASUS Aura (Armoury Crate)",
         processes: &["LightingService.exe"],
-        kinds: &["asus"],
+        devices: Devices::Kinds(&["asus"]),
         remedy: ("Остановите службу LightingService", "Stop the LightingService service"),
     },
     App {
         key: "signalrgb",
         name: "SignalRGB",
         processes: &["SignalRgb.exe", "SignalRgbLauncher.exe"],
-        kinds: &[],
+        devices: Devices::Any,
         remedy: ("Закройте SignalRGB в трее", "Quit SignalRGB from the tray"),
     },
-    App { key: "openrgb", name: "OpenRGB", processes: &["OpenRGB.exe"], kinds: &[], remedy: ("Закройте OpenRGB", "Quit OpenRGB") },
+    App { key: "openrgb", name: "OpenRGB", processes: &["OpenRGB.exe"], devices: Devices::Any, remedy: ("Закройте OpenRGB", "Quit OpenRGB") },
 ];
 
 /// A running program and the devices it fights over.
@@ -67,8 +87,7 @@ pub fn find(running: &[String], devices: &[String], ignored: &[String]) -> Vec<C
         .filter(|app| !ignored.iter().any(|k| k == app.key))
         .filter(|app| app.processes.iter().any(|p| running.iter().any(|r| r.eq_ignore_ascii_case(p))))
         .filter_map(|app| {
-            let affected: Vec<String> =
-                devices.iter().filter(|id| app.kinds.is_empty() || app.kinds.contains(&crate::devices::kind_of(id).key)).cloned().collect();
+            let affected: Vec<String> = devices.iter().filter(|id| app.drives(crate::devices::kind_of(id))).cloned().collect();
             (!affected.is_empty()).then_some(Conflict { app, devices: affected })
         })
         .collect()
@@ -128,6 +147,14 @@ mod tests {
         assert_eq!(keys(&c), ["synapse"]);
         assert_eq!(c[0].devices, s(&["dock-AB12", "naga-1234"]));
         assert!(find(&running, &s(&["logitech-1A2B3C4D", "asus"]), &[]).is_empty());
+    }
+
+    #[test]
+    fn synapse_fights_over_every_razer_model() {
+        let running = s(&["Razer Synapse 3.exe"]);
+        let c = find(&running, &s(&["nagax-1234", "nagalefthanded-5678", "logitech-1A2B3C4D", "macropad-9F3E"]), &[]);
+        assert_eq!(keys(&c), ["synapse"]);
+        assert_eq!(c[0].devices, s(&["nagax-1234", "nagalefthanded-5678"]));
     }
 
     #[test]

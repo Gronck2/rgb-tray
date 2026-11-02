@@ -3,6 +3,8 @@
 use std::mem::zeroed;
 use std::ptr::{null, null_mut};
 
+use crate::wide;
+use windows_sys::Win32::Foundation::{GetLastError, ERROR_INSUFFICIENT_BUFFER};
 use windows_sys::Win32::System::Services::*;
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
@@ -11,10 +13,6 @@ use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
 /// (e.g. when an ASUS keyboard runs an animated effect), after which the keyboard ignores
 /// effects until it is switched off and on.
 pub const LOGI_LAMPARRAY: &str = "logi_lamparray_service";
-
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
 
 /// The service is installed and running or set to start (so it would come back).
 pub fn interferes(name: &str) -> bool {
@@ -30,15 +28,23 @@ pub fn interferes(name: &str) -> bool {
         }
         let mut status: SERVICE_STATUS = zeroed();
         let running = QueryServiceStatus(svc, &mut status) != 0 && status.dwCurrentState != SERVICE_STOPPED;
+        // The start type: None when it can't be read.
         let mut needed = 0u32;
-        QueryServiceConfigW(svc, null_mut(), 0, &mut needed);
-        // u64 elements keep the structure aligned.
-        let mut buf = vec![0u64; (needed as usize).div_ceil(8).max(1)];
-        let config = buf.as_mut_ptr() as *mut QUERY_SERVICE_CONFIGW;
-        let disabled = QueryServiceConfigW(svc, config, (buf.len() * 8) as u32, &mut needed) != 0 && (*config).dwStartType == SERVICE_DISABLED;
+        let start_type = if QueryServiceConfigW(svc, null_mut(), 0, &mut needed) == 0 && GetLastError() == ERROR_INSUFFICIENT_BUFFER {
+            // u64 elements keep the structure aligned.
+            let mut buf = vec![0u64; (needed as usize).div_ceil(8).max(1)];
+            let config = buf.as_mut_ptr() as *mut QUERY_SERVICE_CONFIGW;
+            (QueryServiceConfigW(svc, config, (buf.len() * 8) as u32, &mut needed) != 0).then(|| (*config).dwStartType)
+        } else {
+            None
+        };
+        if start_type.is_none() {
+            crate::log(&format!("service {name}: start type unknown (error {})", GetLastError()));
+        }
         CloseServiceHandle(svc);
         CloseServiceHandle(scm);
-        running || !disabled
+        // An unknown start type counts only if the service runs.
+        running || start_type.is_some_and(|t| t != SERVICE_DISABLED)
     }
 }
 

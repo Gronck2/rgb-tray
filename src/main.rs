@@ -41,6 +41,11 @@ const WM_REAPPLY_SOON: u32 = WM_APP + 2;
 const WM_APPLIED: u32 = WM_APP + 3;
 /// Posted by the battery poller with fresh levels.
 const WM_BATTERY: u32 = WM_APP + 4;
+/// Posted when device ids in the config changed off the window's thread: register the hotkeys again
+/// (RegisterHotKey binds to the calling thread).
+const WM_REGISTER_HOTKEYS: u32 = WM_APP + 5;
+/// Posted by a second launch of the app: open the panel.
+const WM_SHOW_PANEL: u32 = WM_APP + 6;
 
 const TIMER_REAPPLY: usize = 1;
 /// Second pass after wake: the ASUS keyboard may reset to white a few seconds later.
@@ -93,9 +98,7 @@ fn check_services(cfg: &Config) {
     LAMPARRAY_WARN.store(has_logitech && services::interferes(services::LOGI_LAMPARRAY), Ordering::Relaxed);
     DYNAMIC_LIGHTING_WARN.store(dynamic_lighting_on(), Ordering::Relaxed);
     // Not `active_ids()`: callers may hold the config lock.
-    let mut active = PRESENT.lock().unwrap().clone();
-    active.extend(NO_LINK.lock().unwrap().iter().cloned());
-    *CONFLICTS.lock().unwrap() = conflicts::find(&conflicts::running(), &active, &cfg.ignored_apps);
+    *CONFLICTS.lock().unwrap() = conflicts::find(&conflicts::running(), &present_and_no_link(), &cfg.ignored_apps);
 }
 
 /// Hides the warning about a program for good ("I keep it running on purpose").
@@ -121,18 +124,16 @@ fn dynamic_lighting_on() -> bool {
     }
 }
 
-/// Opens Windows Settings at Dynamic Lighting.
-/// Opens a web page in the default browser.
+/// Opens a web page in the default browser (or any URL Windows knows how to open).
 fn open_url(url: &str) {
     unsafe {
         ShellExecuteW(null_mut(), wide("open").as_ptr(), wide(url).as_ptr(), null(), null(), SW_SHOWNORMAL);
     }
 }
 
+/// Opens Windows Settings at Dynamic Lighting.
 fn open_dynamic_lighting_settings() {
-    unsafe {
-        ShellExecuteW(null_mut(), wide("open").as_ptr(), wide("ms-settings:personalization-lighting").as_ptr(), null(), null(), SW_SHOWNORMAL);
-    }
+    open_url("ms-settings:personalization-lighting");
 }
 
 /// Turns the Logitech LampArray service off (asks for administrator rights), then refreshes
@@ -169,6 +170,9 @@ fn wide(s: &str) -> Vec<u16> {
 fn log(msg: &str) {
     #[cfg(debug_assertions)]
     eprintln!("{msg}");
+    // Many threads log: one at a time, so two of them can't rotate the log at once.
+    static LOG_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = LOG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let path = Config::dir().join("rgbtray.log");
     let _ = std::fs::create_dir_all(Config::dir());
     // A full log becomes the previous one, so the lines before a problem survive.
@@ -193,9 +197,15 @@ fn post(msg: u32) {
 
 /// Devices shown on the panel: connected ones and those without a link, in panel order.
 fn active_ids() -> Vec<String> {
+    let ids = present_and_no_link();
+    config().sorted(ids)
+}
+
+/// Connected devices, then those without a link (unsorted; takes no config lock).
+fn present_and_no_link() -> Vec<String> {
     let mut ids = PRESENT.lock().unwrap().clone();
     ids.extend(NO_LINK.lock().unwrap().iter().cloned());
-    config().sorted(ids)
+    ids
 }
 
 /// An `apply_all` is waiting for the devices: later calls join it rather than queue another.
@@ -243,8 +253,13 @@ fn apply_all() {
         log(&format!("apply: {ids:?}"));
         let cfg = {
             let mut cfg = config();
+            let hotkeys_before = device_hotkeys(&cfg);
             if cfg.register(&ids) {
                 cfg.save();
+                // Settings adopted under a new id take their hotkey with them.
+                if device_hotkeys(&cfg) != hotkeys_before {
+                    post(WM_REGISTER_HOTKEYS);
+                }
             }
             cfg.clone()
         };
@@ -427,6 +442,9 @@ fn forget_device(id: &str) {
     let mut cfg = config();
     cfg.forget(id);
     cfg.save();
+    drop(cfg);
+    // Its hotkey goes with it.
+    register_hotkeys();
 }
 
 fn rename_device(id: &str, name: &str) {
@@ -575,11 +593,16 @@ fn register_hotkeys() {
         }
         let mut devices = DEVICE_HOTKEYS.lock().unwrap();
         devices.clear();
-        for (id, h) in cfg.devices.iter().filter_map(|(id, d)| Some((id, d.hotkey?))).take(MAX_HOTKEYS as usize) {
-            register(MAX_HOTKEYS + devices.len() as i32, h, &cfg.display_name(id));
-            devices.push(id.clone());
+        for (id, h) in device_hotkeys(&cfg) {
+            register(MAX_HOTKEYS + devices.len() as i32, h, &cfg.display_name(&id));
+            devices.push(id);
         }
     }
+}
+
+/// Devices with a hotkey, in the order their hotkeys are registered.
+fn device_hotkeys(cfg: &Config) -> Vec<(String, config::Hotkey)> {
+    cfg.devices.iter().filter_map(|(id, d)| Some((id.clone(), d.hotkey?))).take(MAX_HOTKEYS as usize).collect()
 }
 
 /// A hotkey belongs to one preset or device only: the others lose it.
@@ -604,10 +627,15 @@ fn set_device_hotkey(id: &str, hotkey: Option<config::Hotkey>) {
     register_hotkeys();
 }
 
-/// A device hotkey: switches the device off, or back on as it was.
+/// A device hotkey: switches the device off, or back on as it was. A device no longer in the
+/// settings (forgotten, or adopted under a new id) is not brought back.
 fn toggle_device(id: &str) {
     let mut cfg = config();
-    cfg.device_mut(id).toggle();
+    let Some(dc) = cfg.devices.get_mut(id) else {
+        log(&format!("hotkey: {id} is not in the settings"));
+        return;
+    };
+    dc.toggle();
     log(&format!("hotkey: {id} {}", if cfg.device(id).switched_off { "off" } else { "on" }));
     cfg.save();
     drop(cfg);
@@ -1105,8 +1133,9 @@ unsafe fn settings_file_dialog(save: bool, name: &str) -> Option<std::path::Path
     let mut buf = [0u16; 1024];
     // Characters Windows doesn't allow in file names.
     let name: String = name.chars().map(|c| if r#"<>:"/\|?*"#.contains(c) { '_' } else { c }).collect();
-    let name = wide(&name);
     if save {
+        // A name too long for the buffer is cut, keeping the closing zero.
+        let name: Vec<u16> = name.encode_utf16().take(buf.len() - 1).collect();
         buf[..name.len()].copy_from_slice(&name);
     }
     let filter: Vec<u16> =
@@ -1283,7 +1312,12 @@ unsafe fn pick_color(owner: HWND, initial: Rgb) -> Option<Rgb> {
     cc.lpCustColors = custom.as_mut_ptr();
     cc.Flags = CC_RGBINIT | CC_FULLOPEN | CC_ANYCOLOR;
     let ok = ChooseColorW(&mut cc) != 0;
-    config().custom_colors = custom.to_vec();
+    let mut cfg = config();
+    if cfg.custom_colors != custom {
+        cfg.custom_colors = custom.to_vec();
+        cfg.save();
+    }
+    drop(cfg);
     ok.then(|| {
         let v = cc.rgbResult;
         Rgb(v as u8, (v >> 8) as u8, (v >> 16) as u8)
@@ -1306,6 +1340,13 @@ unsafe fn make_icon(effect: Effect, c: Rgb, low_battery: bool) -> HICON {
     bi.bmiHeader.biCompression = BI_RGB;
     let mut bits = null_mut();
     let color_bmp = CreateDIBSection(null_mut(), &bi, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
+    // Out of GDI resources: no new icon, the tray keeps the old one.
+    if color_bmp.is_null() || bits.is_null() {
+        if !color_bmp.is_null() {
+            DeleteObject(color_bmp);
+        }
+        return null_mut();
+    }
     let px = std::slice::from_raw_parts_mut(bits as *mut u32, (S * S) as usize);
     let center = (S as f32 - 1.0) / 2.0;
     for y in 0..S {
@@ -1383,7 +1424,9 @@ unsafe fn update_tray(hwnd: HWND, action: u32) {
         let low = status.iter().any(|(k, b)| b.is_low() && !no_link.contains(k));
         (dc.effect, dc.rgb(), tip, low)
     };
-    let icon = make_icon(effect, color, low);
+    let made = make_icon(effect, color, low);
+    // No new icon (out of GDI resources): the old one stays.
+    let icon = if made.is_null() { ICON.load(Ordering::Relaxed) as HICON } else { made };
     let mut nid: NOTIFYICONDATAW = zeroed();
     nid.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
     nid.hWnd = hwnd;
@@ -1395,9 +1438,11 @@ unsafe fn update_tray(hwnd: HWND, action: u32) {
         nid.szTip[i] = ch;
     }
     Shell_NotifyIconW(action, &nid);
-    let old = ICON.swap(icon as isize, Ordering::Relaxed);
-    if old != 0 {
-        DestroyIcon(old as HICON);
+    if !made.is_null() {
+        let old = ICON.swap(made as isize, Ordering::Relaxed);
+        if old != 0 {
+            DestroyIcon(old as HICON);
+        }
     }
 }
 
@@ -1484,6 +1529,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             0
         }
+        WM_REGISTER_HOTKEYS => {
+            register_hotkeys();
+            0
+        }
+        WM_SHOW_PANEL => {
+            // Opened, not toggled: an open panel is only brought to the front.
+            let flyout = FindWindowW(wide("RgbTrayFlyout").as_ptr(), null());
+            if flyout.is_null() {
+                ui::toggle();
+            } else {
+                SetForegroundWindow(flyout);
+            }
+            0
+        }
         WM_REAPPLY_SOON => {
             SetTimer(hwnd, TIMER_REAPPLY, 1000, None);
             0
@@ -1523,8 +1582,7 @@ fn main() {
         diagnose(args.get(i + 1).map(std::path::PathBuf::from));
         return;
     }
-    // `--lamparray-test <out.txt> <rrggbb> <seconds>`: takes over every LampArray device,
-    // fills it with the color, writes what the devices report, and hands them back.
+    // `--logitech-effect-test`: G915 firmware effect variants, 2 s dark between steps, steps logged.
     if args.iter().any(|a| a == "--logitech-effect-test") {
         logitech_effect_test();
         return;
@@ -1533,6 +1591,8 @@ fn main() {
         logitech_battery_led_test();
         return;
     }
+    // `--lamparray-test <out.txt> <rrggbb> <seconds>`: takes over every LampArray device,
+    // fills it with the color, writes what the devices report, and hands them back.
     if let Some(i) = args.iter().position(|a| a == "--lamparray-test") {
         lamparray_test(&args[i + 1..]);
         return;
@@ -1618,13 +1678,21 @@ fn main() {
     unsafe {
         let mutex_name = wide("Local\\rgbtray-single-instance");
         CreateMutexW(null(), 0, mutex_name.as_ptr());
+        let class = wide("RgbTrayWindow");
         if GetLastError() == ERROR_ALREADY_EXISTS {
+            // Already running: launching it again opens its panel.
+            let existing = FindWindowW(class.as_ptr(), null());
+            if !existing.is_null() {
+                let mut pid = 0u32;
+                GetWindowThreadProcessId(existing, &mut pid);
+                AllowSetForegroundWindow(pid);
+                PostMessageW(existing, WM_SHOW_PANEL, 0, 0);
+            }
             return;
         }
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
         let hinst = GetModuleHandleW(null());
-        let class = wide("RgbTrayWindow");
         let mut wc: WNDCLASSW = zeroed();
         wc.lpfnWndProc = Some(wndproc);
         wc.hInstance = hinst;
