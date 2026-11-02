@@ -95,6 +95,9 @@ struct Ids {
     multi_count: usize,
 }
 
+/// Top value of each color channel (red, green, blue, intensity) in one report.
+type Maxima = [u32; 4];
+
 pub struct LampArray {
     /// "lamparray-<hash of the HID path>": these devices have no readable serial number.
     pub id: String,
@@ -103,7 +106,46 @@ pub struct LampArray {
     pp: Preparsed,
     len: usize,
     ids: Ids,
+    /// Channel maxima of the range and multi updates, read once from the descriptor.
+    range_max: Maxima,
+    multi_max: Maxima,
     pub attributes: Attributes,
+}
+
+/// The id of the device behind a LampArray interface.
+fn device_id(info: &HidInfo) -> String {
+    format!("lamparray-{}", super::path_hash(&info.path))
+}
+
+/// A channel's top value: the logical maximum, or every bit set when the descriptor gives none
+/// that makes sense (a 1-byte 0xFF is read as -1).
+fn channel_max(min: i32, max: i32, bits: u16) -> u32 {
+    if max > min && max > 0 {
+        max as u32
+    } else if bits == 0 {
+        255
+    } else {
+        ((1u64 << bits.min(32)) - 1) as u32
+    }
+}
+
+/// An 8-bit color component on a channel that goes up to `max`.
+fn scale(v: u8, max: u32) -> u32 {
+    ((v as u64 * max as u64 + 127) / 255) as u32
+}
+
+/// Lamp colors as runs of consecutive lamp ids in one color: (first, last, color). A lamp
+/// listed twice takes the last color.
+fn runs(lamps: impl IntoIterator<Item = (u16, Rgb)>) -> Vec<(u16, u16, Rgb)> {
+    let colors: std::collections::BTreeMap<u16, Rgb> = lamps.into_iter().collect();
+    let mut out: Vec<(u16, u16, Rgb)> = Vec::new();
+    for (id, c) in colors {
+        match out.last_mut() {
+            Some(run) if run.2 == c && run.1.checked_add(1) == Some(id) => run.1 = id,
+            _ => out.push((id, id, c)),
+        }
+    }
+    out
 }
 
 /// LampArray interfaces of real devices. Virtual ones ("VHF") are bridges that vendor
@@ -140,8 +182,15 @@ impl LampArray {
             multi: if multi_count > 0 { multi } else { 0 },
             multi_count,
         };
-        let id = format!("lamparray-{}", super::path_hash(&info.path));
-        let mut la = LampArray { id, path: info.path.clone(), hid, pp, len: info.feature_len as usize, ids, attributes: Attributes::default() };
+        let maxima = |report: u8| {
+            [RED_CHANNEL, GREEN_CHANNEL, BLUE_CHANNEL, INTENSITY_CHANNEL].map(|usage| {
+                value_caps(&pp, usage).into_iter().find(|c| c.ReportID == report).map_or(255, |c| channel_max(c.LogicalMin, c.LogicalMax, c.BitSize))
+            })
+        };
+        let (range_max, multi_max) = (maxima(ids.range), maxima(ids.multi));
+        let id = device_id(info);
+        let len = info.feature_len as usize;
+        let mut la = LampArray { id, path: info.path.clone(), hid, pp, len, ids, range_max, multi_max, attributes: Attributes::default() };
         la.attributes = la.read_attributes()?;
         Ok(la)
     }
@@ -157,7 +206,8 @@ impl LampArray {
         })
     }
 
-    /// Attributes of every lamp, asked one by one.
+    /// Attributes of every lamp, asked one by one. Stops at the first failure, so the list may
+    /// be shorter than the lamp count.
     pub fn lamps(&self) -> Vec<Lamp> {
         let mut out = Vec::new();
         if self.ids.request == 0 {
@@ -201,30 +251,32 @@ impl LampArray {
 
     /// Lamps `first..=last` in one color.
     pub fn fill_range(&self, first: u16, last: u16, c: Rgb) -> bool {
+        self.range_update(first, last, c, true)
+    }
+
+    /// One range update; `complete`: the device shows what it got so far.
+    fn range_update(&self, first: u16, last: u16, c: Rgb, complete: bool) -> bool {
         let Some(mut r) = self.report(self.ids.range) else { return false };
-        self.set_value(&mut r, UPDATE_FLAGS, UPDATE_COMPLETE);
+        self.set_value(&mut r, UPDATE_FLAGS, if complete { UPDATE_COMPLETE } else { 0 });
         self.set_value(&mut r, LAMP_ID_START, first as u32);
         self.set_value(&mut r, LAMP_ID_END, last as u32);
-        let max = |usage| self.logical_max(self.ids.range, usage).unwrap_or(255);
-        let scale = |v: u8, usage| (v as u32 * max(usage) + 127) / 255;
-        self.set_value(&mut r, RED_CHANNEL, scale(c.0, RED_CHANNEL));
-        self.set_value(&mut r, GREEN_CHANNEL, scale(c.1, GREEN_CHANNEL));
-        self.set_value(&mut r, BLUE_CHANNEL, scale(c.2, BLUE_CHANNEL));
+        let [red, green, blue, intensity] = self.range_max;
+        self.set_value(&mut r, RED_CHANNEL, scale(c.0, red));
+        self.set_value(&mut r, GREEN_CHANNEL, scale(c.1, green));
+        self.set_value(&mut r, BLUE_CHANNEL, scale(c.2, blue));
         // Black lamps are switched off; others at full intensity (the color carries brightness).
         let lit = c != Rgb(0, 0, 0);
-        self.set_value(&mut r, INTENSITY_CHANNEL, if lit { max(INTENSITY_CHANNEL) } else { 0 });
+        self.set_value(&mut r, INTENSITY_CHANNEL, if lit { intensity } else { 0 });
         self.hid.set_feature(&r)
     }
 
     /// Colors single lamps (brightness already applied): several per report with LampMultiUpdate,
-    /// one by one otherwise. Only the last report says the update is complete.
+    /// by runs of range updates otherwise. Only the last report says the update is complete.
     pub fn set_lamps(&self, lamps: &[(u16, Rgb)]) -> bool {
         if self.ids.multi == 0 || self.ids.multi_count == 0 {
-            return lamps.iter().all(|&(id, c)| self.fill_range(id, id, c));
+            return self.fill_runs(lamps.iter().copied());
         }
-        let max = |usage| self.logical_max(self.ids.multi, usage).unwrap_or(255);
-        let (red, green, blue, intensity) = (max(RED_CHANNEL), max(GREEN_CHANNEL), max(BLUE_CHANNEL), max(INTENSITY_CHANNEL));
-        let scale = |v: u8, m: u32| ((v as u32 * m + 127) / 255) as u8;
+        let [red, green, blue, intensity] = self.multi_max;
         let chunks: Vec<&[(u16, Rgb)]> = lamps.chunks(self.ids.multi_count).collect();
         for (k, chunk) in chunks.iter().enumerate() {
             let Some(mut r) = self.report(self.ids.multi) else { return false };
@@ -233,9 +285,9 @@ impl LampArray {
             let ids: Vec<u32> = chunk.iter().map(|l| l.0 as u32).collect();
             let channel = |f: &dyn Fn(Rgb) -> u32| chunk.iter().map(|l| f(l.1)).collect::<Vec<u32>>();
             let ok = self.set_slots(&mut r, LAMP_ID, &ids)
-                & self.set_slots(&mut r, RED_CHANNEL, &channel(&|c| scale(c.0, red) as u32))
-                & self.set_slots(&mut r, GREEN_CHANNEL, &channel(&|c| scale(c.1, green) as u32))
-                & self.set_slots(&mut r, BLUE_CHANNEL, &channel(&|c| scale(c.2, blue) as u32))
+                & self.set_slots(&mut r, RED_CHANNEL, &channel(&|c| scale(c.0, red)))
+                & self.set_slots(&mut r, GREEN_CHANNEL, &channel(&|c| scale(c.1, green)))
+                & self.set_slots(&mut r, BLUE_CHANNEL, &channel(&|c| scale(c.2, blue)))
                 & self.set_slots(&mut r, INTENSITY_CHANNEL, &channel(&|c| if c == Rgb(0, 0, 0) { 0 } else { intensity }));
             if !ok {
                 return false;
@@ -311,10 +363,6 @@ impl LampArray {
 
     fn set_value(&self, report: &mut [u8], usage: u16, v: u32) -> bool {
         unsafe { HidP_SetUsageValue(HidP_Feature, PAGE, 0, usage, v, self.pp.0, report.as_mut_ptr(), report.len() as u32) == HIDP_STATUS_SUCCESS }
-    }
-
-    fn logical_max(&self, report: u8, usage: u16) -> Option<u32> {
-        value_caps(&self.pp, usage).into_iter().find(|c| c.ReportID == report).map(|c| c.LogicalMax.max(0) as u32)
     }
 }
 
@@ -439,6 +487,8 @@ struct Layout {
     zones: Vec<Zone>,
     /// (HID keyboard usage, lamp id): a key can have several lamps.
     keys: Vec<(u32, u16)>,
+    /// Every lamp was read; a partial layout is read again the next time.
+    complete: bool,
 }
 
 /// Layouts of the devices found, so lamps are read only once per device.
@@ -465,21 +515,39 @@ fn key_lamps(id: &str, usage: u32) -> Vec<u16> {
 }
 
 impl LampArray {
-    /// Remembers this device's zones and key lamps under `id`, reading the lamps the first time.
+    /// Remembers this device's zones and key lamps under `id`, reading the lamps until every
+    /// one of them has been read once.
     pub fn register_zones(&self, id: &str) {
-        let known = LAYOUTS.lock().unwrap().iter().find(|l| l.path == self.path).map(|l| (l.zones.clone(), l.keys.clone()));
-        let (zones, keys) = known.unwrap_or_else(|| {
-            let lamps = self.lamps();
-            (zones_from(&lamps), lamps.iter().filter(|l| l.key != 0).map(|l| (l.key, l.id)).collect())
-        });
+        let known = LAYOUTS.lock().unwrap().iter().find(|l| l.path == self.path && l.complete).map(|l| (l.zones.clone(), l.keys.clone()));
+        let (zones, keys, complete) = match known {
+            Some((zones, keys)) => (zones, keys, true),
+            None => {
+                let mut lamps = self.lamps();
+                if lamps.len() < self.attributes.lamp_count as usize {
+                    lamps = self.lamps();
+                }
+                let complete = lamps.len() >= self.attributes.lamp_count as usize;
+                if !complete {
+                    crate::log(&format!("{}: read {} of {} lamps; read again next time", self.id, lamps.len(), self.attributes.lamp_count));
+                }
+                (zones_from(&lamps), lamps.iter().filter(|l| l.key != 0).map(|l| (l.key, l.id)).collect(), complete)
+            }
+        };
         let mut all = LAYOUTS.lock().unwrap();
         all.retain(|l| l.id != id && l.path != self.path);
-        all.push(Layout { id: id.to_string(), path: self.path.clone(), zones, keys });
+        all.push(Layout { id: id.to_string(), path: self.path.clone(), zones, keys, complete });
     }
 
     /// Colors each zone (zone number, color); lamps outside the zones keep their color.
     fn fill_zones(&self, zones: &[(Vec<u16>, Rgb)]) -> bool {
-        zones.iter().all(|(lamps, c)| lamps.iter().all(|&id| self.fill_range(id, id, *c)))
+        self.fill_runs(zones.iter().flat_map(|(lamps, c)| lamps.iter().map(move |&id| (id, *c))))
+    }
+
+    /// Colors single lamps with range updates: lamps next to each other in one color go in one
+    /// report, and only the last report completes the update.
+    fn fill_runs(&self, lamps: impl IntoIterator<Item = (u16, Rgb)>) -> bool {
+        let runs = runs(lamps);
+        runs.iter().enumerate().all(|(k, &(first, last, c))| self.range_update(first, last, c, k + 1 == runs.len()))
     }
 
     /// The lamps of each configured zone, with its color.
@@ -526,24 +594,30 @@ static TAKEN: Mutex<Vec<Vec<u16>>> = Mutex::new(Vec::new());
 /// LampArray devices without a driver of their own in this app. A device that has one (e.g. the
 /// ASUS keyboard: Aura) is left to it; `RGBTRAY_LAMPARRAY_ALL` takes those too, for testing.
 pub fn find_all() -> Vec<LampArray> {
+    ours().iter().filter_map(open_registered).collect()
+}
+
+/// The LampArray interfaces this driver takes (see `find_all`), not opened.
+fn ours() -> Vec<HidInfo> {
     let all = std::env::var_os("RGBTRAY_LAMPARRAY_ALL").is_some();
     let infos = hid::enumerate_all();
     let native = |i: &HidInfo| infos.iter().any(|o| o.vid == i.vid && o.pid == i.pid && super::interface_note(o).is_some_and(|n| n.starts_with("SUPPORTED")));
-    let mut out = Vec::new();
-    for info in interfaces() {
-        if !all && native(&info) {
-            continue;
+    interfaces().into_iter().filter(|i| all || !native(i)).collect()
+}
+
+/// Opens one interface and remembers its zones and name.
+fn open_registered(info: &HidInfo) -> Option<LampArray> {
+    match LampArray::open(info) {
+        Ok(la) => {
+            la.register_zones(&la.id);
+            super::set_name(&la.id, &super::device_name(info));
+            Some(la)
         }
-        match LampArray::open(&info) {
-            Ok(la) => {
-                la.register_zones(&la.id);
-                super::set_name(&la.id, &super::device_name(&info));
-                out.push(la);
-            }
-            Err(e) => crate::log(&format!("lamparray: {e}")),
+        Err(e) => {
+            crate::log(&format!("lamparray: {e}"));
+            None
         }
     }
-    out
 }
 
 impl LampArray {
@@ -636,9 +710,15 @@ impl Device for LampArray {
     }
 }
 
+/// Feature value fields of a usage. The buffer holds every feature value field of the device:
+/// descriptors that declare one field per lamp slot (ASUS) have many.
 fn value_caps(pp: &Preparsed, usage: u16) -> Vec<HIDP_VALUE_CAPS> {
     unsafe {
-        let mut n: u16 = 16;
+        let mut all: HIDP_CAPS = std::mem::zeroed();
+        if HidP_GetCaps(pp.0, &mut all) != HIDP_STATUS_SUCCESS {
+            return Vec::new();
+        }
+        let mut n: u16 = all.NumberFeatureValueCaps.max(1);
         let mut caps: Vec<HIDP_VALUE_CAPS> = vec![std::mem::zeroed(); n as usize];
         if HidP_GetSpecificValueCaps(HidP_Feature, PAGE, 0, usage, caps.as_mut_ptr(), &mut n, pp.0) != HIDP_STATUS_SUCCESS {
             return Vec::new();
@@ -705,8 +785,9 @@ pub fn describe(info: &HidInfo) -> String {
 /// How the app finds HID LampArray devices without a driver of their own (see `devices::DRIVERS`).
 pub const DRIVER: super::Driver = super::Driver {
     discover: |d| d.found.extend(find_all().into_iter().map(|l| super::Found { id: l.id.clone(), dev: Box::new(l) })),
+    // Only the interface with this id is opened.
     open_for_keys: |id| match id.starts_with("lamparray-") {
-        true => find_all().into_iter().find(|d| d.id == id).map(|d| Box::new(d) as Box<dyn Device>),
+        true => ours().iter().find(|i| device_id(i) == id).and_then(open_registered).map(|d| Box::new(d) as Box<dyn Device>),
         false => None,
     },
     note: |i| match (i.usage_page, i.usage) {
@@ -777,6 +858,36 @@ mod tests {
     fn lamps_in_one_row_are_left_and_right() {
         let lamps = [lamp(0, 0, 0, 2, 0), lamp(1, 100, 0, 2, 0), lamp(2, 50, 0, 4, 0)];
         assert_eq!(names(&zones_from(&lamps)), ["←", "→", "Logo"]);
+    }
+
+    #[test]
+    fn channel_maxima_and_scaling() {
+        assert_eq!(channel_max(0, 255, 8), 255);
+        // A 1-byte 0xFF logical maximum is read as -1: every bit of the field.
+        assert_eq!(channel_max(0, -1, 8), 255);
+        assert_eq!(channel_max(0, 0, 16), 0xFFFF);
+        assert_eq!(channel_max(0, 1, 8), 1);
+        assert_eq!(channel_max(0, -1, 32), u32::MAX);
+        assert_eq!(scale(255, 255), 255);
+        assert_eq!(scale(128, 255), 128);
+        assert_eq!(scale(0, 0xFFFF), 0);
+        assert_eq!(scale(255, 0xFFFF), 0xFFFF);
+        assert_eq!(scale(128, 0xFFFF), 0x8080);
+        assert_eq!(scale(255, u32::MAX), u32::MAX);
+        assert_eq!(scale(255, 1), 1);
+    }
+
+    #[test]
+    fn lamps_group_into_runs() {
+        let (r, g) = (Rgb(255, 0, 0), Rgb(0, 255, 0));
+        assert_eq!(runs([(2, r), (0, r), (1, r), (3, g), (5, g)]), [(0, 2, r), (3, 3, g), (5, 5, g)]);
+        // The ASUS zones: one lamp each, in any order.
+        let asus: Vec<(u16, Rgb)> = [1u16, 3, 0, 2, 4, 5, 6, 7].iter().map(|&id| (id, if id < 4 { r } else { g })).collect();
+        assert_eq!(runs(asus), [(0, 3, r), (4, 7, g)]);
+        // A lamp listed twice takes the last color.
+        assert_eq!(runs([(0, r), (0, g)]), [(0, 0, g)]);
+        assert_eq!(runs([(u16::MAX, r)]), [(u16::MAX, u16::MAX, r)]);
+        assert!(runs([]).is_empty());
     }
 
     #[test]
