@@ -39,7 +39,7 @@ const WARNING_H: f32 = 64.0;
 const PAGE_SIZE: usize = 5;
 /// The page switch under "All devices": ‹ dots ›.
 const PAGER_H: f32 = 22.0;
-// The section under the device list; its coordinates are relative to its top (`lower_y()`),
+// The section under the device list; its coordinates are relative to its top (`Layout::lower_y`),
 // since the list grows with the number of devices.
 const COLOR_LABEL_Y: f32 = 8.0;
 const SWATCH_Y: f32 = COLOR_LABEL_Y + 24.0;
@@ -299,35 +299,44 @@ fn last_seen_label(last_seen: u64) -> String {
     }
 }
 
-/// Top of the section under the device list.
-fn lower_y_of(rows: &[(R, Row)]) -> f32 {
-    rows.last().map_or(CARD_Y, |(r, _)| r.y + r.h + (CARD_STEP - CARD_H))
+/// The parts of the panel that grow with the settings: the device list and the preset chips.
+/// Built once per message or paint, since building locks the shared state and sorts the devices.
+struct Layout {
+    rows: Vec<(R, Row)>,
+    chips: Vec<(R, Hit, String)>,
 }
 
-fn lower_y() -> f32 {
-    lower_y_of(&rows())
+impl Layout {
+    fn new() -> Layout {
+        Layout { rows: rows(), chips: preset_chips() }
+    }
+
+    /// Top of the section under the device list.
+    fn lower_y(&self) -> f32 {
+        self.rows.last().map_or(CARD_Y, |(r, _)| r.y + r.h + (CARD_STEP - CARD_H))
+    }
+
+    /// Rows of preset chips: as many as the presets need, so "Save current" is always there.
+    fn preset_rows(&self) -> usize {
+        self.chips.iter().map(|c| ((c.0.y - PRESET_Y) / PRESET_STEP).round() as usize + 1).max().unwrap_or(1)
+    }
+
+    // The footer sits under the presets (relative to the top of the section under the device list).
+    fn divider_y(&self) -> f32 {
+        PRESET_Y + PRESET_STEP * self.preset_rows() as f32 + 6.0
+    }
+
+    fn footer_y(&self) -> f32 {
+        self.divider_y() + 10.0
+    }
+
+    fn panel_h(&self) -> f32 {
+        self.lower_y() + self.footer_y() + 50.0
+    }
 }
 
 fn panel_h() -> f32 {
-    lower_y() + lower_h()
-}
-
-/// Rows of preset chips: as many as the presets need, so "Save current" is always there.
-fn preset_rows() -> usize {
-    preset_chips().iter().map(|c| ((c.0.y - PRESET_Y) / PRESET_STEP).round() as usize + 1).max().unwrap_or(1)
-}
-
-// The footer sits under the presets (relative to the top of the section under the device list).
-fn divider_y() -> f32 {
-    PRESET_Y + PRESET_STEP * preset_rows() as f32 + 6.0
-}
-
-fn footer_y() -> f32 {
-    divider_y() + 10.0
-}
-
-fn lower_h() -> f32 {
-    footer_y() + 50.0
+    Layout::new().panel_h()
 }
 
 #[derive(Clone, Copy)]
@@ -390,39 +399,33 @@ fn pin_rect() -> R {
     R { x: W - PAD - 32.0 - 36.0, y: 12.0, w: 32.0, h: 32.0 }
 }
 
-/// The "Клавиши" button of a keyboard card, on the line of the device name.
-fn keys_button_rect(card: R) -> R {
+/// The refresh button at the right end of the header.
+fn refresh_rect() -> R {
+    R { x: W - PAD - 32.0, y: 12.0, w: 32.0, h: 32.0 }
+}
+
+/// The button on the line of the device name: "Клавиши" of a keyboard card, "Забыть" of a
+/// disconnected device's card (left of its color dot).
+fn card_button_rect(card: R) -> R {
     R { x: card.x + card.w - 44.0 - 82.0, y: card.y + 5.0, w: 82.0, h: 22.0 }
 }
 
-/// Width of a device name as drawn on its card (cached; measuring needs DirectWrite).
+/// Width of a device name as drawn on its card.
 fn name_width(name: &str) -> f32 {
-    /// The text format used for measuring, and measured (name, width) pairs.
-    type Widths = (Option<IDWriteTextFormat>, Vec<(String, f32)>);
     thread_local! {
-        static CACHE: RefCell<Widths> = const { RefCell::new((None, Vec::new())) };
+        /// The text format used for measuring.
+        static FORMAT: Option<IDWriteTextFormat> = unsafe { DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED) }
+            .and_then(|dw| text_format(&dw, w!("Segoe UI Variable Text"), 14.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING))
+            .ok();
     }
-    CACHE.with(|c| {
-        let mut c = c.borrow_mut();
-        if let Some((_, w)) = c.1.iter().find(|(n, _)| n == name) {
-            return *w;
-        }
-        if c.0.is_none() {
-            c.0 = unsafe { DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED) }
-                .and_then(|dw| text_format(&dw, w!("Segoe UI Variable Text"), 14.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING))
-                .ok();
-        }
-        let w = c.0.as_ref().map_or(name.chars().count() as f32 * 7.5, |f| text_width(name, f));
-        c.1.push((name.to_string(), w));
-        w
-    })
+    FORMAT.with(|f| f.as_ref().map_or(name.chars().count() as f32 * 7.5, |f| text_width(name, f)))
 }
 
 /// Name area of a device card, up to its buttons.
 fn name_rect(card: R, row: &Row) -> R {
     let buttons_x = match row {
-        Row::Device(id) if crate::devices::caps(id).per_key => keys_button_rect(card).x,
-        Row::Archived(_) => forget_button_rect(card).x,
+        Row::Device(id) if crate::devices::caps(id).per_key => card_button_rect(card).x,
+        Row::Archived(_) => card_button_rect(card).x,
         _ => card.x + card.w - 50.0,
     };
     // Room for the pencil after the name, and the hotkey button of a connected device.
@@ -452,14 +455,26 @@ fn update_skip_rect(card: R) -> R {
     let b = warning_button_rect(card);
     R { x: b.x - 6.0 - b.w, ..b }
 }
-/// The "forget" button of a disconnected device's card, left of its color dot.
-fn forget_button_rect(card: R) -> R {
-    R { x: card.x + card.w - 44.0 - 82.0, y: card.y + 5.0, w: 82.0, h: 22.0 }
-}
 
+/// Width of a text in a format (cached: measuring builds a DirectWrite layout, and the same
+/// texts are measured on every paint).
 fn text_width(s: &str, fmt: &IDWriteTextFormat) -> f32 {
+    /// (font family, size, weight, text) → width.
+    type Key = (String, u32, i32, String);
+    thread_local! {
+        static CACHE: RefCell<std::collections::HashMap<Key, f32>> = RefCell::new(std::collections::HashMap::new());
+    }
+    let key = unsafe {
+        let mut family = [0u16; 64];
+        let _ = fmt.GetFontFamilyName(&mut family);
+        let len = family.iter().position(|&c| c == 0).unwrap_or(family.len());
+        (String::from_utf16_lossy(&family[..len]), fmt.GetFontSize().to_bits(), fmt.GetFontWeight().0, s.to_string())
+    };
+    if let Some(w) = CACHE.with(|c| c.borrow().get(&key).copied()) {
+        return w;
+    }
     let w: Vec<u16> = s.encode_utf16().collect();
-    unsafe {
+    let width = unsafe {
         DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED)
             .and_then(|dw| dw.CreateTextLayout(&w, fmt, 2000.0, 100.0))
             .and_then(|l| {
@@ -467,12 +482,21 @@ fn text_width(s: &str, fmt: &IDWriteTextFormat) -> f32 {
                 l.GetMetrics(&mut m).map(|_| m.widthIncludingTrailingWhitespace)
             })
             .unwrap_or(s.chars().count() as f32 * 6.5)
-    }
+    };
+    CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        // Typed names add a text per key press: keep the cache small.
+        if c.len() > 1000 {
+            c.clear();
+        }
+        c.insert(key, width);
+    });
+    width
 }
 
 /// Clickable parts of the header and the device list (panel coordinates).
 fn card_layout(rows: &[(R, Row)]) -> Vec<(R, Hit)> {
-    let mut v = vec![(R { x: W - PAD - 32.0, y: 12.0, w: 32.0, h: 32.0 }, Hit::Reapply), (pin_rect(), Hit::Pin)];
+    let mut v = vec![(refresh_rect(), Hit::Reapply), (pin_rect(), Hit::Pin)];
     for (i, (r, row)) in rows.iter().enumerate() {
         match row {
             Row::Pager(_, pages) => {
@@ -484,8 +508,8 @@ fn card_layout(rows: &[(R, Row)]) -> Vec<(R, Hit)> {
         }
         // Buttons on a card come first, so hit-testing finds them before the card.
         match row {
-            Row::Device(id) if crate::devices::caps(id).per_key => v.push((keys_button_rect(*r), Hit::Keys(i))),
-            Row::Archived(_) => v.push((forget_button_rect(*r), Hit::Forget(i))),
+            Row::Device(id) if crate::devices::caps(id).per_key => v.push((card_button_rect(*r), Hit::Keys(i))),
+            Row::Archived(_) => v.push((card_button_rect(*r), Hit::Forget(i))),
             Row::ServiceWarning => v.push((warning_button_rect(*r), Hit::DisableService)),
             Row::LightingWarning => v.push((warning_button_rect(*r), Hit::LightingSettings)),
             Row::AppWarning(_) => v.push((warning_button_rect(*r), Hit::IgnoreApp(i))),
@@ -510,53 +534,49 @@ fn card_layout(rows: &[(R, Row)]) -> Vec<(R, Hit)> {
 }
 
 /// Clickable parts of the section under the device list (relative to its top).
-fn lower_layout() -> Vec<(R, Hit)> {
+fn lower_layout(l: &Layout) -> Vec<(R, Hit)> {
     let mut v = Vec::new();
     for i in 0..PALETTE.len() {
         v.push((swatch_rect(i), Hit::Swatch(i)));
     }
     v.push((swatch_rect(PALETTE.len()), Hit::Custom));
     let seg_w = (W - 2.0 * PAD) / 4.0;
-    for i in (0..4).filter(|&i| effect_enabled(Effect::ALL[i])) {
+    let enabled = effects_enabled();
+    for i in (0..4).filter(|&i| enabled[i]) {
         v.push((R { x: PAD + i as f32 * seg_w, y: SEG_Y, w: seg_w, h: SEG_H }, Hit::Effect(i)));
     }
     v.push((slider_rect(), Hit::Slider));
     if speed_shown() {
         v.push((speed_rect(), Hit::Speed));
     }
-    v.push((R { x: PAD - 4.0, y: footer_y(), w: 250.0, h: 36.0 }, Hit::Autostart));
-    v.push((R { x: W - PAD - 92.0, y: footer_y(), w: 92.0, h: 36.0 }, Hit::Exit));
+    v.push((R { x: PAD - 4.0, y: l.footer_y(), w: 250.0, h: 36.0 }, Hit::Autostart));
+    v.push((R { x: W - PAD - 92.0, y: l.footer_y(), w: 92.0, h: 36.0 }, Hit::Exit));
     v
 }
 
 fn hit_test(x: f32, y: f32) -> Option<Hit> {
+    let l = Layout::new();
     // An open menu takes every click.
-    if let Some((panel, items)) = menu_layout() {
+    if let Some((panel, items)) = menu_layout(&l) {
         return Some(match items.iter().find(|(r, _)| r.contains(x, y)) {
             Some(&(_, item)) => Hit::Menu(item),
             None if panel.contains(x, y) => Hit::MenuBody,
             None => Hit::MenuOutside,
         });
     }
-    panel_hit_test(x, y)
+    panel_hit_test(&l, x, y)
 }
 
-fn panel_hit_test(x: f32, y: f32) -> Option<Hit> {
-    let rows = rows();
-    let top = lower_y_of(&rows);
+fn panel_hit_test(l: &Layout, x: f32, y: f32) -> Option<Hit> {
+    let top = l.lower_y();
     if y < top {
-        return card_layout(&rows).into_iter().find(|(r, _)| r.contains(x, y)).map(|(_, h)| h);
+        return card_layout(&l.rows).into_iter().find(|(r, _)| r.contains(x, y)).map(|(_, h)| h);
     }
     let y = y - top;
     // The zone switch exists only for devices with several zones (whole device + each zone).
     let zone_count = selected_zones().len();
     let zones = if zone_count > 0 { zone_rects() } else { Vec::new() }.into_iter().enumerate();
-    zones
-        .map(|(k, r)| (r, Hit::Zone(k)))
-        .chain(preset_chips().into_iter().map(|(r, h, _)| (r, h)))
-        .chain(lower_layout())
-        .find(|(r, _)| r.contains(x, y))
-        .map(|(_, h)| h)
+    zones.map(|(k, r)| (r, Hit::Zone(k))).chain(l.chips.iter().map(|&(r, h, _)| (r, h))).chain(lower_layout(l)).find(|(r, _)| r.contains(x, y)).map(|(_, h)| h)
 }
 fn preset_label(p: &crate::config::Preset) -> String {
     match p.hotkey {
@@ -742,14 +762,14 @@ fn menu_target() -> Option<MenuTarget> {
 
 /// The menu card and its items, placed next to the click and kept inside the panel. A device's
 /// menu has only the hotkey part.
-fn menu_layout() -> Option<(R, Vec<(R, MenuItem)>)> {
+fn menu_layout(l: &Layout) -> Option<(R, Vec<(R, MenuItem)>)> {
     let (target, ax, ay, _) = MENU.lock().unwrap().clone()?;
     let preset = matches!(target, MenuTarget::Preset(_));
     let key_rows = 12 / MENU_KEY_COLS + 1;
     let actions = if preset { 4.0 * MENU_ITEM_H + MENU_GAP + MENU_ITEM_H } else { 0.0 };
     let h = 6.0 + MENU_HEADER_H + actions + MENU_GAP + MENU_LABEL_H + (key_rows + 1) as f32 * MENU_KEY_STEP + 6.0;
     let x = ax.clamp(8.0, W - 8.0 - MENU_W);
-    let y = if ay + h <= panel_h() - 8.0 { ay } else { (ay - h).max(8.0) };
+    let y = if ay + h <= l.panel_h() - 8.0 { ay } else { (ay - h).max(8.0) };
     let panel = R { x, y, w: MENU_W, h };
     let mut items = Vec::new();
     let row = |y: f32| R { x: x + 4.0, y, w: MENU_W - 8.0, h: MENU_ITEM_H };
@@ -999,9 +1019,10 @@ fn target_ids() -> Vec<String> {
     selected().map_or_else(crate::active_ids, |id| vec![id])
 }
 
-/// Some device the controls change can show this effect.
-fn effect_enabled(e: Effect) -> bool {
-    target_ids().iter().any(|id| crate::devices::caps(id).has_effect(e))
+/// For each of `Effect::ALL`: some device the controls change can show it.
+fn effects_enabled() -> [bool; 4] {
+    let ids = target_ids();
+    Effect::ALL.map(|e| ids.iter().any(|id| crate::devices::caps(id).has_effect(e)))
 }
 
 /// Labels of the zone switch: the whole device, then each zone.
@@ -1088,6 +1109,33 @@ fn invalidate() {
             fit_height(h);
             InvalidateRect(h, null(), 0);
         }
+    }
+}
+
+/// Redraws the panel for a change that keeps its height (hover, a slider being dragged).
+fn repaint() {
+    if let Some(h) = flyout_hwnd() {
+        unsafe { InvalidateRect(h, null(), 0) };
+    }
+}
+
+/// Points the hover at what is under the cursor now: a click can change the layout under a
+/// mouse that doesn't move.
+unsafe fn update_hover(hwnd: HWND) {
+    let mut pt: POINT = zeroed();
+    GetCursorPos(&mut pt);
+    ScreenToClient(hwnd, &mut pt);
+    let mut rc: RECT = zeroed();
+    GetClientRect(hwnd, &mut rc);
+    let inside = pt.x >= rc.left && pt.x < rc.right && pt.y >= rc.top && pt.y < rc.bottom;
+    let changed = with_flyout(|f| {
+        let h = if inside { hit_test(pt.x as f32 / f.scale, pt.y as f32 / f.scale) } else { None };
+        let changed = h != f.hover;
+        f.hover = h;
+        changed
+    });
+    if changed == Some(true) {
+        repaint();
     }
 }
 
@@ -1269,7 +1317,13 @@ unsafe fn open() -> windows::core::Result<()> {
         }
     }
 
+    // Everything that can fail comes before the window, so a failure leaves no window behind.
+    let d2d: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
+    let fmt = formats()?;
     let hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, class.as_ptr(), class.as_ptr(), WS_POPUP, x, y, w, h, null_mut(), null_mut(), hinst, null());
+    if hwnd.is_null() {
+        return Err(windows::core::Error::from_win32());
+    }
     let theme = theme();
     // Rounded corners and a dark border in dark mode (Windows 11).
     let round: u32 = 2; // DWMWCP_ROUND
@@ -1277,14 +1331,13 @@ unsafe fn open() -> windows::core::Result<()> {
     let dark: u32 = theme.dark as u32;
     DwmSetWindowAttribute(hwnd, 20, &dark as *const u32 as _, 4);
 
-    let d2d: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
     let fly = Flyout {
         hwnd,
         scale,
         d2d,
         rt: None,
         brush: None,
-        fmt: formats()?,
+        fmt,
         theme,
         hover: None,
         drag: None,
@@ -1344,21 +1397,21 @@ struct DeviceView {
 
 /// Snapshot of everything the panel shows.
 struct View {
-    rows: Vec<(R, Row)>,
+    layout: Layout,
     /// Connected, unlinked and archived devices (on every page of the list).
     devices: Vec<DeviceView>,
     brightness: u8,
     speed: u8,
     speed_shown: bool,
+    /// For each of `Effect::ALL`: some device the controls change can show it.
+    effects_enabled: [bool; 4],
     selected: Option<String>,
-    /// Top of the section under the device list.
-    lower_y: f32,
 }
 
 fn view() -> View {
     let speed_shown = speed_shown();
-    let rows = rows();
-    let lower_y = lower_y_of(&rows);
+    let effects_enabled = effects_enabled();
+    let layout = Layout::new();
     let selected = selected();
     // Every device, not only the page shown: "All devices" and the controls cover them all.
     let active = crate::active_ids();
@@ -1385,15 +1438,15 @@ fn view() -> View {
         })
         .collect();
     View {
-        rows,
+        layout,
         devices,
         // The slider edits the overall brightness, or the selected device's share of it.
         brightness: selected.as_ref().map_or(cfg.brightness, |id| cfg.device(id).brightness),
         // Like brightness: the overall speed, or the selected device's shift from it.
         speed: selected.as_ref().map_or(cfg.speed, |id| cfg.device(id).speed),
         speed_shown,
+        effects_enabled,
         selected,
-        lower_y,
     }
 }
 
@@ -1465,8 +1518,10 @@ impl Flyout {
             self.draw(&rt, &v);
             if let Err(e) = rt.EndDraw(None, None) {
                 if e.code() == windows::Win32::Foundation::D2DERR_RECREATE_TARGET {
+                    // Draw again on a new target.
                     self.rt = None;
                     self.brush = None;
+                    InvalidateRect(self.hwnd, null(), 0);
                 }
             }
         }
@@ -1559,7 +1614,7 @@ impl Flyout {
 
         // Header.
         self.text(rt, tr!("Подсветка", "Lighting"), &f.title, R { x: PAD, y: 12.0, w: 200.0, h: 32.0 }, t.text);
-        let refresh = R { x: W - PAD - 32.0, y: 12.0, w: 32.0, h: 32.0 };
+        let refresh = refresh_rect();
         if hover(Hit::Reapply) {
             self.fill(rt, refresh, 4.0, t.card_hover);
         }
@@ -1575,12 +1630,12 @@ impl Flyout {
         self.text(rt, if pinned { ICON_PINNED } else { ICON_PIN }, &f.icon_small, pin, if pinned { t.accent } else { t.text });
 
         // Device list.
-        for (i, (r, row)) in v.rows.iter().enumerate() {
+        for (i, (r, row)) in v.layout.rows.iter().enumerate() {
             self.draw_row(rt, v, i, *r, row);
         }
 
         // Everything below the list is laid out relative to its top.
-        rt.SetTransform(&Matrix3x2::translation(0.0, v.lower_y));
+        rt.SetTransform(&Matrix3x2::translation(0.0, v.layout.lower_y()));
         // Color palette.
         self.text(rt, tr!("Цвет", "Color"), &f.label, R { x: PAD, y: COLOR_LABEL_Y, w: 200.0, h: 20.0 }, t.text);
         let zones = selected_zones();
@@ -1644,7 +1699,7 @@ impl Flyout {
             // An effect none of the devices can show is pale and can't be clicked.
             let fg = if on {
                 t.on_accent
-            } else if effect_enabled(Effect::ALL[i]) {
+            } else if v.effects_enabled[i] {
                 t.text
             } else {
                 D2D1_COLOR_F { a: t.text2.a * 0.5, ..t.text2 }
@@ -1675,40 +1730,22 @@ impl Flyout {
         // Global presets.
         self.text(rt, tr!("Пресеты", "Presets"), &f.label, R { x: PAD, y: PRESET_LABEL_Y, w: 120.0, h: 20.0 }, t.text);
         let capture = CAPTURE.load(Ordering::Relaxed);
-        if capture != usize::MAX {
-            self.text(
-                rt,
-                tr!("Нажмите сочетание · Del — убрать · Esc", "Press a shortcut · Del — remove · Esc"),
-                &f.sub_right,
-                R { x: W - PAD - 250.0, y: PRESET_LABEL_Y, w: 250.0, h: 20.0 },
-                t.accent,
-            );
+        let (hint, hint_color) = if capture != usize::MAX {
+            (tr!("Нажмите сочетание · Del — убрать · Esc", "Press a shortcut · Del — remove · Esc"), t.accent)
         } else if renaming_any() {
-            self.text(
-                rt,
-                tr!("Enter — сохранить · Esc — отмена", "Enter — save · Esc — cancel"),
-                &f.sub_right,
-                R { x: W - PAD - 250.0, y: PRESET_LABEL_Y, w: 250.0, h: 20.0 },
-                t.accent,
-            );
+            (tr!("Enter — сохранить · Esc — отмена", "Enter — save · Esc — cancel"), t.accent)
         } else {
-            self.text(
-                rt,
-                tr!("ПКМ — сохранить, клавиша, имя", "Right-click: save, hotkey, name"),
-                &f.sub_right,
-                R { x: W - PAD - 250.0, y: PRESET_LABEL_Y, w: 250.0, h: 20.0 },
-                t.text2,
-            );
-        }
+            (tr!("ПКМ — сохранить, клавиша, имя", "Right-click: save, hotkey, name"), t.text2)
+        };
+        self.text(rt, hint, &f.sub_right, R { x: W - PAD - 250.0, y: PRESET_LABEL_Y, w: 250.0, h: 20.0 }, hint_color);
         let active: Vec<bool> = {
             let cfg = crate::config();
             cfg.presets.iter().map(|p| cfg.matches(p)).collect()
         };
         let renaming = RENAME.load(Ordering::Relaxed);
-        let chips = preset_chips();
         let is_on = |i: usize| active.get(i) == Some(&true) && renaming != i;
         // Chips with their labels (or the rename field), then the "+" chip.
-        for (r, hit, label) in chips.iter().filter(|c| matches!(c.1, Hit::Preset(_) | Hit::SavePreset)) {
+        for (r, hit, label) in &v.layout.chips {
             let (r, hit) = (*r, *hit);
             let i = match hit {
                 Hit::Preset(i) => i,
@@ -1740,8 +1777,9 @@ impl Flyout {
         }
 
         // Footer.
-        self.fill(rt, R { x: 0.0, y: divider_y(), w: W, h: 1.0 }, 0.0, t.stroke);
-        let sw = R { x: PAD, y: footer_y() + 8.0, w: 40.0, h: 20.0 };
+        let footer_y = v.layout.footer_y();
+        self.fill(rt, R { x: 0.0, y: v.layout.divider_y(), w: W, h: 1.0 }, 0.0, t.stroke);
+        let sw = R { x: PAD, y: footer_y + 8.0, w: 40.0, h: 20.0 };
         if self.autostart {
             self.fill(rt, sw, 10.0, t.accent);
             self.circle(rt, sw.x + sw.w - 10.0, sw.cy(), if hover(Hit::Autostart) { 7.0 } else { 6.0 }, t.on_accent);
@@ -1750,8 +1788,8 @@ impl Flyout {
             self.stroke(rt, sw, 10.0, t.text2, 1.0);
             self.circle(rt, sw.x + 10.0, sw.cy(), if hover(Hit::Autostart) { 6.0 } else { 5.0 }, t.text2);
         }
-        self.text(rt, tr!("Запускать вместе с Windows", "Start with Windows"), &f.sub, R { x: sw.x + 50.0, y: footer_y(), w: 200.0, h: 36.0 }, t.text);
-        let exit = R { x: W - PAD - 92.0, y: footer_y(), w: 92.0, h: 36.0 };
+        self.text(rt, tr!("Запускать вместе с Windows", "Start with Windows"), &f.sub, R { x: sw.x + 50.0, y: footer_y, w: 200.0, h: 36.0 }, t.text);
+        let exit = R { x: W - PAD - 92.0, y: footer_y, w: 92.0, h: 36.0 };
         if hover(Hit::Exit) {
             self.fill(rt, exit, 4.0, t.card_hover);
         }
@@ -1759,7 +1797,22 @@ impl Flyout {
         self.text(rt, tr!("Выход", "Exit"), &f.sub, R { x: exit.x + 34.0, y: exit.y, w: 56.0, h: exit.h }, t.text);
 
         rt.SetTransform(&Matrix3x2::identity());
-        self.draw_menu(rt);
+        self.draw_menu(rt, &v.layout);
+    }
+
+    /// An accent-tinted card (a warning or the update) with its icon, a title and two lines of
+    /// text that end before `text_right`; its buttons are drawn by the caller.
+    unsafe fn tinted_card(&self, rt: &ID2D1RenderTarget, r: R, icon: &str, [title, line1, line2]: [&str; 3], text_right: f32) {
+        let t = &self.theme;
+        let f = &self.fmt;
+        self.fill(rt, r, 6.0, t.card);
+        self.fill(rt, r, 6.0, D2D1_COLOR_F { a: 0.14, ..t.accent });
+        self.stroke(rt, r, 6.0, t.accent, 1.0);
+        self.text(rt, icon, &f.icon, R { x: r.x + 10.0, y: r.y, w: 32.0, h: r.h }, t.accent);
+        let text_w = text_right - r.x - 58.0;
+        self.text(rt, title, &f.name, R { x: r.x + 50.0, y: r.y + 10.0, w: text_w, h: 20.0 }, t.text);
+        self.text(rt, line1, &f.sub, R { x: r.x + 50.0, y: r.y + 30.0, w: text_w, h: 16.0 }, t.text2);
+        self.text(rt, line2, &f.sub, R { x: r.x + 50.0, y: r.y + 44.0, w: text_w, h: 16.0 }, t.text2);
     }
 
     /// One row of the device list.
@@ -1798,15 +1851,9 @@ impl Flyout {
                 ),
                 _ => return,
             };
-            self.fill(rt, r, 6.0, t.card);
-            self.fill(rt, r, 6.0, D2D1_COLOR_F { a: 0.14, ..t.accent });
-            self.stroke(rt, r, 6.0, t.accent, 1.0);
-            self.text(rt, ICON_DOWNLOAD, &f.icon, R { x: r.x + 10.0, y: r.y, w: 32.0, h: r.h }, t.accent);
             let b = warning_button_rect(r);
-            let text_w = if button.is_some() { update_skip_rect(r).x } else { b.x + b.w } - r.x - 58.0;
-            self.text(rt, &title, &f.name, R { x: r.x + 50.0, y: r.y + 10.0, w: text_w, h: 20.0 }, t.text);
-            self.text(rt, &line1, &f.sub, R { x: r.x + 50.0, y: r.y + 30.0, w: text_w, h: 16.0 }, t.text2);
-            self.text(rt, &line2, &f.sub, R { x: r.x + 50.0, y: r.y + 44.0, w: text_w, h: 16.0 }, t.text2);
+            let text_right = if button.is_some() { update_skip_rect(r).x } else { b.x + b.w };
+            self.tinted_card(rt, r, ICON_DOWNLOAD, [&title, &line1, &line2], text_right);
             if let Some(icon) = button {
                 self.fill(rt, b, 4.0, if hover(Hit::UpdateInstall) { D2D1_COLOR_F { a: 0.85, ..t.accent } } else { t.accent });
                 self.text(rt, icon, &f.icon_small, b, t.on_accent);
@@ -1852,16 +1899,8 @@ impl Flyout {
             _ => None,
         };
         if let Some((title, line1, line2, button, hit)) = warning {
-            let (title, line1, line2) = (title.as_str(), line1.as_str(), line2.as_str());
-            self.fill(rt, r, 6.0, t.card);
-            self.fill(rt, r, 6.0, D2D1_COLOR_F { a: 0.14, ..t.accent });
-            self.stroke(rt, r, 6.0, t.accent, 1.0);
-            self.text(rt, ICON_WARNING, &f.icon, R { x: r.x + 10.0, y: r.y, w: 32.0, h: r.h }, t.accent);
             let b = warning_button_rect(r);
-            let text_w = b.x - r.x - 58.0;
-            self.text(rt, title, &f.name, R { x: r.x + 50.0, y: r.y + 10.0, w: text_w, h: 20.0 }, t.text);
-            self.text(rt, line1, &f.sub, R { x: r.x + 50.0, y: r.y + 30.0, w: text_w, h: 16.0 }, t.text2);
-            self.text(rt, line2, &f.sub, R { x: r.x + 50.0, y: r.y + 44.0, w: text_w, h: 16.0 }, t.text2);
+            self.tinted_card(rt, r, ICON_WARNING, [&title, &line1, &line2], b.x);
             self.fill(rt, b, 4.0, if hover(hit) { D2D1_COLOR_F { a: 0.85, ..t.accent } } else { t.accent });
             self.text(rt, button, &f.icon_small, b, t.on_accent);
             return;
@@ -2062,15 +2101,15 @@ impl Flyout {
 
         match row {
             Row::Device(id) if crate::devices::caps(id).per_key => {
-                let kb = keys_button_rect(r);
+                let kb = card_button_rect(r);
                 self.fill(rt, kb, 4.0, if hover(Hit::Keys(i)) { t.card_hover } else { t.bg });
                 self.stroke(rt, kb, 4.0, t.stroke, 1.0);
                 self.text(rt, ICON_KEYBOARD, &f.icon_tiny, R { x: kb.x + 4.0, y: kb.y, w: 22.0, h: kb.h }, t.text);
                 self.text(rt, tr!("Клавиши", "Keys"), &f.sub, R { x: kb.x + 26.0, y: kb.y, w: kb.w - 28.0, h: kb.h }, t.text);
             }
-            Row::Archived(id) if archived => {
+            Row::Archived(id) => {
                 // Forgetting asks for a second click.
-                let fb = forget_button_rect(r);
+                let fb = card_button_rect(r);
                 let armed = FORGET_ARMED.lock().unwrap().as_deref() == Some(id.as_str());
                 if armed {
                     self.fill(rt, fb, 4.0, t.accent);
@@ -2088,8 +2127,8 @@ impl Flyout {
     }
 
     /// The preset menu: a raised card over a dimmed panel.
-    unsafe fn draw_menu(&self, rt: &ID2D1RenderTarget) {
-        let (Some((panel, items)), Some(target)) = (menu_layout(), menu_target()) else { return };
+    unsafe fn draw_menu(&self, rt: &ID2D1RenderTarget, l: &Layout) {
+        let (Some((panel, items)), Some(target)) = (menu_layout(l), menu_target()) else { return };
         let (name, hotkey, same) = match &target {
             MenuTarget::Preset(i) => {
                 let Some(preset) = crate::config().presets.get(*i).cloned() else { return };
@@ -2104,7 +2143,7 @@ impl Flyout {
         let f = &self.fmt;
         let hover = |h: Hit| self.hover == Some(h);
 
-        self.fill(rt, R { x: 0.0, y: 0.0, w: W, h: panel_h() }, 0.0, col(0, 0, 0, if t.dark { 0.35 } else { 0.18 }));
+        self.fill(rt, R { x: 0.0, y: 0.0, w: W, h: l.panel_h() }, 0.0, col(0, 0, 0, if t.dark { 0.35 } else { 0.18 }));
         // Soft shadow: a few widening translucent layers.
         for k in 1..=6 {
             let d = k as f32 * 2.0;
@@ -2269,10 +2308,11 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32, card: usize, zone: u
                 open_menu(MenuTarget::Device(id), PAD + 40.0, 160.0);
             }
         }
-        Some(_) => open_menu(MenuTarget::Preset(0), PAD + 40.0, lower_y() + PRESET_Y + 20.0),
+        Some(_) => open_menu(MenuTarget::Preset(0), PAD + 40.0, Layout::new().lower_y() + PRESET_Y + 20.0),
         None => {}
     }
-    render_png(path, W, panel_h(), scale, |rt, d2d| unsafe {
+    let v = view();
+    render_png(path, W, v.layout.panel_h(), scale, |rt, d2d| unsafe {
         let fly = Flyout {
             hwnd: null_mut(),
             scale,
@@ -2289,7 +2329,7 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32, card: usize, zone: u
             was_active: false,
             anchor_bottom: false,
         };
-        fly.draw(rt, &view());
+        fly.draw(rt, &v);
         Ok(())
     })
 }
@@ -2519,6 +2559,45 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
     invalidate();
 }
 
+impl Hit {
+    /// The row of the device list a hit is on.
+    fn row(self) -> Option<usize> {
+        match self {
+            Hit::Card(i) | Hit::Keys(i) | Hit::Forget(i) | Hit::RenameDevice(i) | Hit::DeviceHotkey(i) | Hit::IgnoreApp(i) => Some(i),
+            _ => None,
+        }
+    }
+
+    /// The same hit on another row.
+    fn on_row(self, i: usize) -> Hit {
+        match self {
+            Hit::Card(_) => Hit::Card(i),
+            Hit::Keys(_) => Hit::Keys(i),
+            Hit::Forget(_) => Hit::Forget(i),
+            Hit::RenameDevice(_) => Hit::RenameDevice(i),
+            Hit::DeviceHotkey(_) => Hit::DeviceHotkey(i),
+            Hit::IgnoreApp(_) => Hit::IgnoreApp(i),
+            h => h,
+        }
+    }
+}
+
+/// The device on the row of a hit.
+fn hit_device(hit: Option<Hit>) -> Option<String> {
+    let i = hit?.row()?;
+    match rows().into_iter().nth(i)?.1 {
+        Row::Device(id) | Row::Archived(id) => Some(id),
+        _ => None,
+    }
+}
+
+/// A hit on a device's row, moved to the row the device is on now (a saved name reorders the
+/// list); None if the device left the page shown.
+fn rehit(hit: Hit, id: &str) -> Option<Hit> {
+    let i = rows().iter().position(|(_, r)| matches!(r, Row::Device(d) | Row::Archived(d) if d == id))?;
+    Some(hit.on_row(i))
+}
+
 fn mouse_pos(lparam: LPARAM, scale: f32) -> (f32, f32) {
     let x = (lparam & 0xFFFF) as i16 as f32;
     let y = ((lparam >> 16) & 0xFFFF) as i16 as f32;
@@ -2557,7 +2636,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 changed
             });
             if changed == Some(true) {
-                invalidate();
+                repaint();
             }
             0
         }
@@ -2566,7 +2645,22 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 f.tracking_leave = false;
                 f.hover = None;
             });
-            invalidate();
+            repaint();
+            0
+        }
+        // Capture lost during a drag (another window took it, WM_CANCELMODE): keep the value
+        // reached, as releasing the button would.
+        WM_CAPTURECHANGED => {
+            let (drag, drag_speed) = with_flyout(|f| (f.drag.take(), f.drag_speed.take())).unwrap_or((None, None));
+            if let Some(b) = drag {
+                crate::set_brightness(selected().as_deref(), b);
+            }
+            if let Some(s) = drag_speed {
+                crate::set_speed(selected().as_deref(), s);
+            }
+            if drag.is_some() || drag_speed.is_some() {
+                invalidate();
+            }
             0
         }
         WM_LBUTTONDOWN => {
@@ -2581,41 +2675,52 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             });
             if started == Some(true) {
                 SetCapture(hwnd);
-                invalidate();
+                repaint();
             }
             0
         }
         WM_LBUTTONUP => {
-            let (drag, drag_speed, hit) = with_flyout(|f| {
+            let Some((x, y, drag, drag_speed)) = with_flyout(|f| {
                 let (x, y) = mouse_pos(lparam, f.scale);
-                (f.drag.take(), f.drag_speed.take(), hit_test(x, y))
-            })
-            .unwrap_or((None, None, None));
+                (x, y, f.drag.take(), f.drag_speed.take())
+            }) else {
+                return 0;
+            };
+            // The drag is over (it was taken above, so losing the capture changes nothing).
+            let dragged = drag.is_some() || drag_speed.is_some();
+            if dragged {
+                ReleaseCapture();
+            }
+            let mut hit = hit_test(x, y);
+            // The device clicked, to find its row again if saving a name reorders the list.
+            let device = hit_device(hit);
+            let mut renamed = false;
             // A click anywhere except the field being edited finishes renaming.
             let renaming = RENAME.load(Ordering::Relaxed);
             if renaming != usize::MAX && !matches!(hit, Some(Hit::Preset(i)) if i == renaming) {
                 finish_rename(true);
-                invalidate();
+                renamed = true;
             }
             // Clicking the card whose name is being edited keeps editing.
             let device_renaming = device_renaming();
-            let on_renamed_card = match hit {
-                Some(Hit::Card(i)) => matches!(rows().get(i), Some((_, Row::Device(id) | Row::Archived(id))) if Some(id) == device_renaming.as_ref()),
-                _ => false,
-            };
             if device_renaming.is_some() {
-                if on_renamed_card {
+                if !matches!(hit, Some(Hit::Card(_))) || device != device_renaming {
+                    finish_rename(true);
+                    renamed = true;
+                } else if !dragged {
                     return 0;
                 }
-                finish_rename(true);
+            }
+            if renamed {
                 invalidate();
+                if let (Some(h), Some(id)) = (hit, &device) {
+                    hit = rehit(h, id);
+                }
             }
             if let Some(b) = drag {
-                ReleaseCapture();
                 crate::set_brightness(selected().as_deref(), b);
                 invalidate();
             } else if let Some(s) = drag_speed {
-                ReleaseCapture();
                 crate::set_speed(selected().as_deref(), s);
                 invalidate();
             } else if let Some(h) = hit {
@@ -2624,6 +2729,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     activate(hwnd, h);
                 }
             }
+            // The click may have changed what is under the cursor.
+            update_hover(hwnd);
             0
         }
         // While recording a preset hotkey every key press (incl. Alt/F10 combos) is captured.
@@ -2669,18 +2776,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_MOUSEWHEEL => {
             let mut pt = POINT { x: (lparam & 0xFFFF) as i16 as i32, y: ((lparam >> 16) & 0xFFFF) as i16 as i32 };
             ScreenToClient(hwnd, &mut pt);
-            let over_list = with_flyout(|f| (pt.y as f32 / f.scale) < lower_y()).unwrap_or(false);
+            let over_list = with_flyout(|f| (pt.y as f32 / f.scale) < Layout::new().lower_y()).unwrap_or(false);
             let delta = ((wparam >> 16) & 0xFFFF) as i16;
             if over_list && delta != 0 {
                 turn_page(if delta > 0 { -1 } else { 1 });
                 invalidate();
+                update_hover(hwnd);
             }
             0
         }
         WM_RBUTTONUP => {
             let hit = with_flyout(|f| {
                 let (x, y) = mouse_pos(lparam, f.scale);
-                (x, y, panel_hit_test(x, y))
+                (x, y, panel_hit_test(&Layout::new(), x, y))
             });
             // Right click elsewhere just closes an open menu; on a preset it opens that preset's menu.
             close_menu();
@@ -2690,6 +2798,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 open_menu(MenuTarget::Preset(i), x, y);
             }
             invalidate();
+            update_hover(hwnd);
             0
         }
         // A pinned panel is dragged by the empty part of its header.
@@ -2749,8 +2858,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_DESTROY => {
             let fly = FLYOUT.with(|c| c.borrow_mut().take());
             drop(fly);
+            // Nothing half-done survives the panel: an open menu would take the clicks of the next one.
             stop_capture();
             finish_rename(true);
+            close_menu();
+            FORGET_ARMED.lock().unwrap().take();
             LAST_CLOSE.store(GetTickCount64(), Ordering::Relaxed);
             0
         }
