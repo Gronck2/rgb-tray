@@ -8,9 +8,15 @@ use std::sync::Mutex;
 use std::time::Duration;
 use windows_sys::Win32::Networking::WinHttp::*;
 
+use crate::wide;
+
+/// The repository releases come from; pages and downloads must be on it.
+const REPO: &str = "Gronck2/rgb-tray";
 const API_URL: &str = "https://api.github.com/repos/Gronck2/rgb-tray/releases/latest";
 const FIRST_CHECK: Duration = Duration::from_secs(60);
 const CHECK_EVERY: Duration = Duration::from_secs(24 * 3600);
+/// Downloaded installers are saved in %TEMP% under this name (it makes the exe start as the installer).
+const SETUP_PREFIX: &str = "rgbtray-setup-";
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct Release {
@@ -18,8 +24,15 @@ pub struct Release {
     pub version: String,
     /// The release page, for when the download fails.
     pub page: String,
-    /// The installer: download URL and size in bytes.
-    setup: Option<(String, u64)>,
+    /// The installer, only when it can be checked.
+    setup: Option<Setup>,
+}
+
+#[derive(Clone, PartialEq, Debug)]
+struct Setup {
+    url: String,
+    size: u64,
+    sha256: [u8; 32],
 }
 
 impl Release {
@@ -65,7 +78,7 @@ pub fn demo(spec: &str) {
     let mut parts = spec.split(',');
     let version = parts.next().unwrap_or("9.9.9").to_string();
     let kind = parts.next().unwrap_or("");
-    let setup = (kind != "nosetup").then(|| (String::new(), 0));
+    let setup = (kind != "nosetup").then(|| Setup { url: String::new(), size: 0, sha256: [0; 32] });
     let r = Release { version, page: String::new(), setup };
     *STATE.lock().unwrap() = match kind {
         "downloading" => State::Downloading(r),
@@ -78,6 +91,7 @@ pub fn demo(spec: &str) {
 pub fn spawn_checker() {
     std::thread::spawn(|| {
         std::thread::sleep(FIRST_CHECK);
+        remove_old_setups();
         loop {
             check_now();
             std::thread::sleep(CHECK_EVERY);
@@ -92,8 +106,18 @@ pub fn check_now() {
     }
     match get(API_URL).and_then(|body| parse_release(&body)) {
         Ok(r) if is_newer(&r.version, env!("CARGO_PKG_VERSION")) => {
+            // The state may have changed during the request: a download that started meanwhile
+            // goes on, and a failed download of this same release stays failed.
+            let mut s = STATE.lock().unwrap();
+            match &*s {
+                State::Downloading(_) => return,
+                State::Available(old) | State::Failed(old) if *old == r => return,
+                _ => {}
+            }
             crate::log(&format!("update: {} available", r.version));
-            set_state(State::Available(r));
+            *s = State::Available(r);
+            drop(s);
+            crate::post(crate::WM_APPLIED);
         }
         Ok(_) => {}
         Err(e) => crate::log(&format!("update check: {e}")),
@@ -114,17 +138,40 @@ pub fn install() {
 }
 
 fn download_and_run(r: &Release) -> Result<(), String> {
-    let (url, size) = r.setup.as_ref().ok_or("the release has no installer")?;
-    let data = get(url)?;
-    if data.len() as u64 != *size {
-        return Err(format!("downloaded {} bytes of {size}", data.len()));
+    let setup = r.setup.as_ref().ok_or("the release has no installer")?;
+    let data = get(&setup.url)?;
+    if data.len() as u64 != setup.size {
+        return Err(format!("downloaded {} bytes of {}", data.len(), setup.size));
     }
-    // The name makes the exe start as the installer.
+    if sha256(&data).ok_or("SHA-256 failed")? != setup.sha256 {
+        return Err("the installer does not match its SHA-256 digest".into());
+    }
+    // The name makes the exe start as the installer; the version is checked in `parse_release`.
     let path = std::env::temp_dir().join(format!("RGBTray-Setup-{}.exe", r.version));
     std::fs::write(&path, &data).map_err(|e| format!("{}: {e}", path.display()))?;
     crate::log(&format!("update: running {}", path.display()));
     std::process::Command::new(&path).arg("--quiet").spawn().map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(())
+}
+
+/// Removes installers left in %TEMP% by earlier updates (the running exe can't be removed and is skipped).
+fn remove_old_setups() {
+    let me = std::env::current_exe().ok();
+    let Ok(dir) = std::fs::read_dir(std::env::temp_dir()) else { return };
+    for e in dir.flatten() {
+        let name = e.file_name().to_string_lossy().to_lowercase();
+        if name.starts_with(SETUP_PREFIX) && name.ends_with(".exe") && Some(e.path()) != me && e.file_type().is_ok_and(|t| t.is_file()) {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+/// SHA-256 of `data` (Windows CNG).
+fn sha256(data: &[u8]) -> Option<[u8; 32]> {
+    use windows_sys::Win32::Security::Cryptography::{BCryptHash, BCRYPT_SHA256_ALG_HANDLE};
+    let mut out = [0u8; 32];
+    let ok = unsafe { BCryptHash(BCRYPT_SHA256_ALG_HANDLE, null(), 0, data.as_ptr(), data.len() as u32, out.as_mut_ptr(), 32) } == 0;
+    ok.then_some(out)
 }
 
 /// Opens the release page in the browser (when the download failed).
@@ -160,16 +207,46 @@ struct ApiAsset {
     name: String,
     browser_download_url: String,
     size: u64,
+    /// "sha256:<hex>"; older releases have none.
+    #[serde(default)]
+    digest: Option<String>,
 }
 
+/// The release; its installer only when it is on our repository and has a SHA-256 digest to check
+/// (otherwise only its page is offered). The version goes into a file name: digits and dots only.
 fn parse_release(body: &[u8]) -> Result<Release, String> {
     let r: ApiRelease = serde_json::from_slice(body).map_err(|e| format!("release JSON: {e}"))?;
+    let version = r.tag_name.strip_prefix('v').unwrap_or(&r.tag_name).to_string();
+    if !is_plain_version(&version) {
+        return Err(format!("unexpected release tag {:?}", r.tag_name));
+    }
+    let site = format!("https://github.com/{REPO}/");
     let setup = r
         .assets
         .into_iter()
         .find(|a| a.name.to_lowercase().starts_with("rgbtray-setup") && a.name.to_lowercase().ends_with(".exe"))
-        .map(|a| (a.browser_download_url, a.size));
-    Ok(Release { version: r.tag_name.trim_start_matches('v').to_string(), page: r.html_url, setup })
+        .filter(|a| a.browser_download_url.starts_with(&format!("{site}releases/download/")))
+        .and_then(|a| Some(Setup { sha256: parse_digest(a.digest.as_deref()?)?, url: a.browser_download_url, size: a.size }));
+    let page = if r.html_url.starts_with(&site) { r.html_url } else { format!("{site}releases/latest") };
+    Ok(Release { version, page, setup })
+}
+
+/// "1.2.3": numbers separated by single dots.
+fn is_plain_version(v: &str) -> bool {
+    !v.is_empty() && v.split('.').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The hash of GitHub's asset `digest`, "sha256:<64 hex digits>".
+fn parse_digest(d: &str) -> Option<[u8; 32]> {
+    let hex = d.strip_prefix("sha256:")?;
+    if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
 }
 
 /// "1.2.3" as numbers; anything after the numbers ("-beta") is ignored.
@@ -196,10 +273,6 @@ impl Drop for Handle {
             unsafe { WinHttpCloseHandle(self.0) };
         }
     }
-}
-
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 /// Body of an HTTPS GET; redirects are followed (GitHub sends downloads elsewhere), the
@@ -272,17 +345,63 @@ mod tests {
             "draft": false,
             "assets": [
                 {"name": "notes.txt", "browser_download_url": "https://x/notes.txt", "size": 10},
-                {"name": "RGBTray-Setup-0.7.0.exe", "browser_download_url": "https://x/setup.exe", "size": 1234567}
+                {"name": "RGBTray-Setup-0.7.0.exe", "size": 1234567,
+                 "browser_download_url": "https://github.com/Gronck2/rgb-tray/releases/download/v0.7.0/RGBTray-Setup-0.7.0.exe",
+                 "digest": "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}
             ]
         }"#;
         let r = parse_release(json).unwrap();
         assert_eq!(r.version, "0.7.0");
         assert_eq!(r.page, "https://github.com/Gronck2/rgb-tray/releases/tag/v0.7.0");
-        assert_eq!(r.setup, Some(("https://x/setup.exe".to_string(), 1234567)));
-        // A release without an installer is still offered, with its page.
+        let setup = r.setup.unwrap();
+        assert_eq!(setup.url, "https://github.com/Gronck2/rgb-tray/releases/download/v0.7.0/RGBTray-Setup-0.7.0.exe");
+        assert_eq!(setup.size, 1234567);
+        assert_eq!(Some(setup.sha256), sha256(b"abc"));
+        // A release without an installer is still offered, with its page (a foreign one is replaced).
         let r = parse_release(br#"{"tag_name": "v0.7.1", "html_url": "https://p"}"#).unwrap();
         assert_eq!(r.setup, None);
+        assert_eq!(r.page, "https://github.com/Gronck2/rgb-tray/releases/latest");
         assert!(parse_release(b"not json").is_err());
+    }
+
+    #[test]
+    fn installer_only_with_digest_and_from_our_repository() {
+        let release = |url: &str, digest: &str| {
+            let json = format!(
+                r#"{{"tag_name": "v0.7.0", "html_url": "https://github.com/Gronck2/rgb-tray/releases/tag/v0.7.0",
+                    "assets": [{{"name": "RGBTray-Setup-0.7.0.exe", "browser_download_url": "{url}", "size": 1{digest}}}]}}"#
+            );
+            parse_release(json.as_bytes()).unwrap()
+        };
+        let ours = "https://github.com/Gronck2/rgb-tray/releases/download/v0.7.0/RGBTray-Setup-0.7.0.exe";
+        let digest = r#", "digest": "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad""#;
+        assert!(release(ours, digest).has_setup());
+        assert!(!release(ours, "").has_setup());
+        assert!(!release(ours, r#", "digest": "md5:900150983cd24fb0d6963f7d28e17f72""#).has_setup());
+        assert!(!release("https://evil.example/RGBTray-Setup-0.7.0.exe", digest).has_setup());
+        assert!(!release("https://github.com/someone/else/releases/download/v0.7.0/RGBTray-Setup-0.7.0.exe", digest).has_setup());
+    }
+
+    #[test]
+    fn digests() {
+        let abc = parse_digest("sha256:BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD").unwrap();
+        assert_eq!(Some(abc), sha256(b"abc"));
+        assert_ne!(Some(abc), sha256(b"abd"));
+        assert_eq!(sha256(b"").map(|h| h[..4].to_vec()), Some(vec![0xe3, 0xb0, 0xc4, 0x42]));
+        assert_eq!(parse_digest("sha256:ba78"), None);
+        assert_eq!(parse_digest("sha512:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"), None);
+        assert_eq!(parse_digest("sha256:+a7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"), None);
+    }
+
+    #[test]
+    fn release_versions_are_plain() {
+        assert!(is_plain_version("0.7.0"));
+        assert!(is_plain_version("1"));
+        for bad in ["", "0.7.0-beta", "0..7", "0.7.", "../../x", "0.7.0\\x", "v0.7"] {
+            assert!(!is_plain_version(bad), "{bad}");
+        }
+        assert!(parse_release(br#"{"tag_name": "v0.7.0/../../x", "html_url": "https://p"}"#).is_err());
+        assert_eq!(parse_release(br#"{"tag_name": "0.7.2", "html_url": "https://p"}"#).unwrap().version, "0.7.2");
     }
     /// Talks to GitHub: `cargo test --release -- --ignored network`.
     #[test]

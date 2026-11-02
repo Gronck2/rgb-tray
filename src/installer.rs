@@ -185,10 +185,7 @@ fn copy_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
     loop {
         match std::fs::copy(from, to) {
             Ok(_) => return Ok(()),
-            Err(e) if Instant::now() < deadline => {
-                let _ = e;
-                std::thread::sleep(Duration::from_millis(200));
-            }
+            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(200)),
             Err(e) => return Err(e),
         }
     }
@@ -226,9 +223,16 @@ fn install(opts: &Options) -> Result<(), String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("{} {e}", tr!("Не удалось создать папку:", "Could not create the folder:")))?;
     stop_running_instance();
     if me != exe {
-        copy_with_retry(&me, &exe).map_err(|e| {
-            format!("{} {e}", tr!("Не удалось скопировать файл (приложение ещё запущено?):", "Could not copy the file (is the app still running?):"))
-        })?;
+        if let Err(e) = copy_with_retry(&me, &exe) {
+            // The installed version was closed above: bring it back rather than leave no app running.
+            if exe.exists() {
+                let _ = start(&exe, &dir);
+            }
+            return Err(format!(
+                "{} {e}",
+                tr!("Не удалось скопировать файл (приложение ещё запущено?):", "Could not copy the file (is the app still running?):")
+            ));
+        }
     }
     let icon = dir.join("rgbtray.ico");
     let _ = write_icon(&icon);
@@ -256,14 +260,18 @@ fn install(opts: &Options) -> Result<(), String> {
     let size_kb = std::fs::metadata(&exe).map(|m| (m.len() / 1024) as u32).unwrap_or(0);
     set_reg_dword(k, "EstimatedSize", size_kb);
 
-    std::process::Command::new(&exe)
-        .current_dir(&dir)
+    start(&exe, &dir).map_err(|e| format!("{} {e}", tr!("Не удалось запустить:", "Could not start:")))
+}
+
+/// Starts the installed app, detached from this process.
+fn start(exe: &Path, dir: &Path) -> std::io::Result<()> {
+    std::process::Command::new(exe)
+        .current_dir(dir)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .map_err(|e| format!("{} {e}", tr!("Не удалось запустить:", "Could not start:")))?;
-    Ok(())
+        .map(drop)
 }
 
 /// `--uninstall`: removes the app (settings in %APPDATA%\rgbtray are kept).
@@ -285,11 +293,12 @@ pub fn uninstall() {
         RegDeleteTreeW(HKEY_CURRENT_USER, wide(UNINSTALL_KEY).as_ptr());
     }
     // The running exe can't delete itself: a hidden cmd removes the folder after we exit.
+    // `raw_arg`: cmd gets the line as is (Rust's quoting would turn the inner quotes into \").
     let dir = install_dir();
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     use std::os::windows::process::CommandExt;
     let _ = std::process::Command::new("cmd")
-        .args(["/c", &format!("ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{}\"", dir.display())])
+        .raw_arg(format!("/c ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{}\"", dir.display()))
         .creation_flags(CREATE_NO_WINDOW)
         .spawn();
 }
@@ -330,7 +339,12 @@ struct Setup {
     previous: Option<String>,
     stage: Stage,
     hover: Option<Hit>,
+    /// Installing on a worker thread: clicks and closing wait for `WM_INSTALLED`.
+    busy: bool,
 }
+
+/// The worker thread is done: `lparam` is a `Box<Result<(), String>>` of `install`.
+const WM_INSTALLED: u32 = WM_APP + 1;
 
 thread_local! {
     static SETUP: RefCell<Option<Setup>> = const { RefCell::new(None) };
@@ -418,27 +432,8 @@ unsafe fn open(opts: Options, previous: Option<String>) -> windows::core::Result
     let caption: u32 = (bg.r * 255.0) as u32 | ((bg.g * 255.0) as u32) << 8 | ((bg.b * 255.0) as u32) << 16;
     DwmSetWindowAttribute(hwnd, 35, &caption as *const u32 as _, 4);
 
-    let dw: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-    let ui = w!("Segoe UI Variable Text");
-    let body = text_format(&dw, ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING)?;
-    body.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
-    body.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
-    let setup = Setup {
-        hwnd,
-        scale,
-        d2d: D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?,
-        rt: None,
-        brush: None,
-        title: text_format(&dw, w!("Segoe UI Variable Display"), 20.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING)?,
-        body,
-        button: text_format(&dw, ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER)?,
-        icon_font: text_format(&dw, w!("Segoe Fluent Icons"), 12.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER)?,
-        theme,
-        opts,
-        previous,
-        stage: Stage::Ready,
-        hover: None,
-    };
+    let d2d = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
+    let setup = Setup::new(hwnd, scale, d2d, None, theme, opts, previous)?;
     SETUP.with(|c| *c.borrow_mut() = Some(setup));
     ShowWindow(hwnd, SW_SHOW);
     SetForegroundWindow(hwnd);
@@ -446,6 +441,40 @@ unsafe fn open(opts: Options, previous: Option<String>) -> windows::core::Result
 }
 
 impl Setup {
+    /// The window state with its fonts, before anything is drawn.
+    unsafe fn new(
+        hwnd: HWND,
+        scale: f32,
+        d2d: ID2D1Factory,
+        brush: Option<ID2D1SolidColorBrush>,
+        theme: Theme,
+        opts: Options,
+        previous: Option<String>,
+    ) -> windows::core::Result<Setup> {
+        let dw: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
+        let ui = w!("Segoe UI Variable Text");
+        let body = text_format(&dw, ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING)?;
+        body.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
+        body.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
+        Ok(Setup {
+            hwnd,
+            scale,
+            d2d,
+            rt: None,
+            brush,
+            title: text_format(&dw, w!("Segoe UI Variable Display"), 20.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING)?,
+            body,
+            button: text_format(&dw, ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER)?,
+            icon_font: text_format(&dw, w!("Segoe Fluent Icons"), 12.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER)?,
+            theme,
+            opts,
+            previous,
+            stage: Stage::Ready,
+            hover: None,
+            busy: false,
+        })
+    }
+
     fn paint(&mut self) {
         unsafe {
             if self.rt.is_none() {
@@ -588,31 +617,17 @@ impl Setup {
 /// Renders the setup window into a PNG file, for checking the look.
 pub fn snapshot(path: &str, dark: Option<bool>, scale: f32, update: bool) -> windows::core::Result<()> {
     crate::ui::render_png(path, W, H, scale, |rt, d2d| unsafe {
-        let dw: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-        let ui = w!("Segoe UI Variable Text");
-        let body = text_format(&dw, ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING)?;
-        body.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)?;
-        body.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
         let theme = crate::ui::theme_for(dark);
-        let s = Setup {
-            hwnd: null_mut(),
-            scale,
-            d2d,
-            rt: None,
-            brush: Some(rt.CreateSolidColorBrush(&theme.text, None)?),
-            title: text_format(&dw, w!("Segoe UI Variable Display"), 20.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING)?,
-            body,
-            button: text_format(&dw, ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER)?,
-            icon_font: text_format(&dw, w!("Segoe Fluent Icons"), 12.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER)?,
-            theme,
-            opts: Options { autostart: true, shortcut: true },
-            previous: update.then(|| "0.1.0".to_string()),
-            stage: Stage::Ready,
-            hover: Some(Hit::Install),
-        };
+        let brush = Some(rt.CreateSolidColorBrush(&theme.text, None)?);
+        let opts = Options { autostart: true, shortcut: true };
+        let s = Setup { hover: Some(Hit::Install), ..Setup::new(null_mut(), scale, d2d, brush, theme, opts, update.then(|| "0.1.0".to_string()))? };
         s.draw(rt);
         Ok(())
     })
+}
+
+fn busy() -> bool {
+    SETUP.with(|c| c.borrow().as_ref().is_some_and(|s| s.busy))
 }
 
 fn hit_at(lparam: LPARAM, scale: f32) -> Option<Hit> {
@@ -647,6 +662,28 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             }
             0
         }
+        WM_SETCURSOR if busy() => {
+            SetCursor(LoadCursorW(null_mut(), IDC_WAIT));
+            1
+        }
+        // Closing in the middle of an install would kill it half-done.
+        WM_CLOSE if busy() => 0,
+        WM_INSTALLED => {
+            let res = Box::from_raw(lparam as *mut Result<(), String>);
+            let stage = match *res {
+                Ok(()) => Stage::Done,
+                Err(e) => Stage::Failed(e),
+            };
+            SETUP.with(|c| {
+                c.borrow_mut().as_mut().map(|s| {
+                    s.stage = stage;
+                    s.busy = false;
+                })
+            });
+            InvalidateRect(hwnd, null(), 0);
+            0
+        }
+        WM_LBUTTONUP if busy() => 0,
         WM_LBUTTONUP => {
             let scale = SETUP.with(|c| c.borrow().as_ref().map(|s| s.scale)).unwrap_or(1.0);
             match hit_at(lparam, scale) {
@@ -663,12 +700,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 Some(Hit::Install) => {
                     let opts = SETUP.with(|c| c.borrow().as_ref().map(|s| Options { autostart: s.opts.autostart, shortcut: s.opts.shortcut }));
                     if let Some(opts) = opts {
+                        // Off the UI thread: closing the old app and copying take seconds.
+                        SETUP.with(|c| c.borrow_mut().as_mut().map(|s| s.busy = true));
                         SetCursor(LoadCursorW(null_mut(), IDC_WAIT));
-                        let stage = match install(&opts) {
-                            Ok(()) => Stage::Done,
-                            Err(e) => Stage::Failed(e),
-                        };
-                        SETUP.with(|c| c.borrow_mut().as_mut().map(|s| s.stage = stage));
+                        let target = hwnd as isize;
+                        std::thread::spawn(move || {
+                            let res = Box::new(install(&opts));
+                            PostMessageW(target as HWND, WM_INSTALLED, 0, Box::into_raw(res) as LPARAM);
+                        });
                     }
                 }
                 None => {}
