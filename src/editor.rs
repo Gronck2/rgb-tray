@@ -93,6 +93,11 @@ fn layout() -> &'static keymap::Layout {
     }
 }
 
+/// Key layout of a given keyboard (the worker's, which may no longer be the one edited).
+fn layout_of(id: &str) -> &'static keymap::Layout {
+    keymap::get(crate::devices::caps(id).layout)
+}
+
 fn target() -> String {
     TARGET.lock().unwrap().clone()
 }
@@ -106,47 +111,60 @@ fn send(msg: Msg) {
     let mut worker = WORKER.lock().unwrap();
     if worker.is_none() {
         let (tx, rx) = channel::<Msg>();
+        // The worker serves the keyboard edited when it started: switching keyboards stops it
+        // and the next change starts a new one.
+        let id = target();
         std::thread::spawn(move || {
             let mut kb: Option<Box<dyn Device>> = None;
             while let Ok(first) = rx.recv() {
                 // Coalesce everything queued while the previous batch was being sent.
                 let mut full = false;
                 let mut keys = Vec::new();
+                let mut stop = false;
                 for msg in std::iter::once(first).chain(rx.try_iter()) {
                     match msg {
                         Msg::Full => full = true,
                         Msg::Keys(k) => keys.extend(k),
-                        Msg::Stop => return,
-                    }
-                }
-                let _guard = crate::APPLY_LOCK.lock().unwrap();
-                if kb.is_none() {
-                    kb = crate::devices::open_for_keys(&target());
-                    full = true;
-                }
-                let Some(k) = &kb else { continue };
-                let (brightness, all) = {
-                    let id = target();
-                    let cfg = crate::config();
-                    (cfg.effective_brightness(&id), cfg.device(&id).all_keys(layout().codes()))
-                };
-                let res = if full {
-                    k.apply_keys(&all, brightness)
-                } else {
-                    // Last color of each key wins.
-                    let mut latest: Vec<(u8, Rgb)> = Vec::new();
-                    for (code, c) in keys.into_iter().rev() {
-                        if !latest.iter().any(|(k, _)| *k == code) {
-                            latest.push((code, c));
+                        // Changes queued before Stop are still sent.
+                        Msg::Stop => {
+                            stop = true;
+                            break;
                         }
                     }
-                    k.update_keys(&latest, brightness)
-                };
-                // The keyboard no longer shows what the panel last sent it.
-                crate::forget_applied(&target());
-                if let Err(e) = res {
-                    crate::log(&format!("key editor: {e}"));
-                    kb = None;
+                }
+                if full || !keys.is_empty() {
+                    let _guard = crate::APPLY_LOCK.lock().unwrap();
+                    if kb.is_none() {
+                        kb = crate::devices::open_for_keys(&id);
+                        full = true;
+                    }
+                    if let Some(k) = &kb {
+                        let (brightness, all) = {
+                            let cfg = crate::config();
+                            (cfg.effective_brightness(&id), cfg.device(&id).all_keys(layout_of(&id).codes()))
+                        };
+                        let res = if full {
+                            k.apply_keys(&all, brightness)
+                        } else {
+                            // Last color of each key wins.
+                            let mut latest: Vec<(u8, Rgb)> = Vec::new();
+                            for (code, c) in keys.into_iter().rev() {
+                                if !latest.iter().any(|(k, _)| *k == code) {
+                                    latest.push((code, c));
+                                }
+                            }
+                            k.update_keys(&latest, brightness)
+                        };
+                        // The keyboard no longer shows what the panel last sent it.
+                        crate::forget_applied(&id);
+                        if let Err(e) = res {
+                            crate::log(&format!("key editor: {e}"));
+                            kb = None;
+                        }
+                    }
+                }
+                if stop {
+                    return;
                 }
             }
         });
@@ -214,7 +232,6 @@ fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
 static HISTORY: Mutex<Vec<(u8, Vec<Rgb>)>> = Mutex::new(Vec::new());
 const HISTORY_DEPTH: usize = 50;
 
-/// Sets a key color and remembers the old one for rollback.
 /// Shows a firmware effect (wave, ripple…) instead of the key colors; they stay saved, and
 /// painting a key brings them back. An effect that takes a color (ripple) gets the brush's.
 fn firmware_effect(e: Effect, brush: Rgb) {
@@ -224,13 +241,18 @@ fn firmware_effect(e: Effect, brush: Rgb) {
     crate::set_effect(&[target()], e);
 }
 
-fn set_tracked(cfg: &mut crate::config::Config, code: u8, c: Rgb) {
-    // Painting over a firmware effect switches the keyboard back to its key colors.
+/// Painting over a firmware effect switches the keyboard back to its key colors.
+fn ensure_per_key(cfg: &mut crate::config::Config) {
     let d = keyboard(cfg);
     if !d.per_key {
         d.per_key = true;
         send(Msg::Full);
     }
+}
+
+/// Sets a key color and remembers the old one for rollback.
+fn set_tracked(cfg: &mut crate::config::Config, code: u8, c: Rgb) {
+    ensure_per_key(cfg);
     let old = keyboard(cfg).key_color(code);
     if old == c {
         return;
@@ -251,7 +273,11 @@ fn set_tracked(cfg: &mut crate::config::Config, code: u8, c: Rgb) {
 /// Restores the previous color of a key; returns it, or None when there is no history.
 fn rollback_key(code: u8) -> Option<Rgb> {
     let prev = HISTORY.lock().unwrap().iter_mut().find(|(k, _)| *k == code).and_then(|(_, s)| s.pop())?;
-    keyboard(&mut crate::config()).set_key(code, prev);
+    {
+        let mut cfg = crate::config();
+        ensure_per_key(&mut cfg);
+        keyboard(&mut cfg).set_key(code, prev);
+    }
     send(Msg::Keys(vec![(code, prev)]));
     Some(prev)
 }
@@ -298,20 +324,20 @@ fn apply_preset(i: usize, colors: [Rgb; 2]) {
     match i {
         // Static rainbow across the keyboard: zero cost, the firmware just holds it.
         0 => {
-            for kd in keys.iter().filter(|k| k.code != 0) {
+            for kd in &keys {
                 set_tracked(&mut cfg, kd.code, hsv(center(kd) * 300.0, 1.0, 1.0));
             }
         }
         // The two chosen colors across the keyboard, left to right.
         GRADIENT => {
-            for kd in keys.iter().filter(|k| k.code != 0) {
+            for kd in &keys {
                 set_tracked(&mut cfg, kd.code, mix(colors[0], colors[1], center(kd)));
             }
         }
         // Gaming keys in one color, everything else in the other.
         WASD => {
             let hot = ["W", "A", "S", "D", "\u{2191}", "\u{2190}", "\u{2193}", "\u{2192}"];
-            for kd in keys.iter().filter(|k| k.code != 0) {
+            for kd in &keys {
                 let on = kd.y > 0.0 && hot.contains(&kd.label);
                 set_tracked(&mut cfg, kd.code, if on { colors[0] } else { colors[1] });
             }
@@ -319,9 +345,9 @@ fn apply_preset(i: usize, colors: [Rgb; 2]) {
 
         // Letters (Latin, and Cyrillic legends in Russian) in one color, everything else in the other.
         _ => {
-            for kd in keys.iter().filter(|k| k.code != 0) {
-                let letter = kd.y > 0.0 && kd.label.len() == 1 && kd.label.chars().all(|c| c.is_ascii_alphabetic());
-                set_tracked(&mut cfg, kd.code, if letter || !crate::i18n::en() && !kd.ru.is_empty() && kd.label.len() == 1 { colors[0] } else { colors[1] });
+            let cyrillic = !crate::i18n::en();
+            for kd in &keys {
+                set_tracked(&mut cfg, kd.code, if kd.is_letter(cyrillic) { colors[0] } else { colors[1] });
             }
         }
     }
@@ -524,17 +550,35 @@ unsafe fn create_window() -> windows::core::Result<()> {
     GetMonitorInfoW(monitor, &mut mi);
     let (mut dpi, mut dpi_y) = (96u32, 96u32);
     GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi, &mut dpi_y);
-    let scale = dpi as f32 / 96.0;
+    let mut scale = dpi as f32 / 96.0;
     let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-    let mut rc = RECT { left: 0, top: 0, right: (W * scale).round() as i32, bottom: (H * scale).round() as i32 };
-    AdjustWindowRectExForDpi(&mut rc, style, 0, 0, dpi);
-    let (w, h) = (rc.right - rc.left, rc.bottom - rc.top);
+    let outer = |scale: f32| {
+        let mut rc = RECT { left: 0, top: 0, right: (W * scale).round() as i32, bottom: (H * scale).round() as i32 };
+        AdjustWindowRectExForDpi(&mut rc, style, 0, 0, dpi);
+        (rc.right - rc.left, rc.bottom - rc.top)
+    };
+    let (mut w, mut h) = outer(scale);
     let work = mi.rcWork;
+    // A screen too small for it (a small laptop at 150%): everything drawn a bit smaller.
+    let (work_w, work_h) = (work.right - work.left, work.bottom - work.top);
+    if w > work_w || h > work_h {
+        let (frame_w, frame_h) = (w as f32 - W * scale, h as f32 - H * scale);
+        let fit = ((work_w as f32 - frame_w) / (W * scale)).min((work_h as f32 - frame_h) / (H * scale));
+        scale = (scale * fit).max(0.5);
+        (w, h) = outer(scale);
+    }
     let x = work.left + ((work.right - work.left) - w).max(0) / 2;
     let y = work.top + ((work.bottom - work.top) - h).max(0) / 2;
 
+    // What can fail comes before the window: a window without its state would be stuck.
+    let d2d: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
+    let dw: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
+    let fmt = formats(&dw)?;
     let title: Vec<u16> = tr!("Цвета клавиш\0", "Key colors\0").encode_utf16().collect();
     let hwnd = CreateWindowExW(0, class.as_ptr(), title.as_ptr(), style, x, y, w, h, null_mut(), null_mut(), hinst, null());
+    if hwnd.is_null() {
+        return Err(windows::core::Error::from_win32());
+    }
     set_title(hwnd);
     let theme = theme();
     let dark: u32 = theme.dark as u32;
@@ -543,9 +587,6 @@ unsafe fn create_window() -> windows::core::Result<()> {
     let caption: u32 = (bg.r * 255.0) as u32 | ((bg.g * 255.0) as u32) << 8 | ((bg.b * 255.0) as u32) << 16;
     DwmSetWindowAttribute(hwnd, 35, &caption as *const u32 as _, 4); // caption color
 
-    let d2d: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
-    let dw: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-    let fmt = formats(&dw)?;
     let ed = Editor {
         hwnd,
         scale,
@@ -590,11 +631,11 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Re
             let iso = cfg.iso_layout;
             let d = keyboard(&mut cfg);
             if d.keys.is_empty() {
-                for kd in layout().keys(iso).iter().filter(|k| k.code != 0) {
+                for kd in layout().keys(iso) {
                     d.set_key(kd.code, hsv((kd.x + kd.w / 2.0) / layout().width * 300.0, 1.0, 1.0));
                 }
-                for label in ["W", "A", "S", "D"] {
-                    d.set_key(layout().code_by_label(label).unwrap_or(0), OFF);
+                for code in ["W", "A", "S", "D"].into_iter().filter_map(|label| layout().code_by_label(label)) {
+                    d.set_key(code, OFF);
                 }
             }
         }
@@ -608,7 +649,7 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Re
             brush: Some(rt.CreateSolidColorBrush(&theme.text, None)?),
             theme,
             hits: Vec::new(),
-            hover: Some(Hit::Key(layout().code_by_label("G").unwrap_or(0))),
+            hover: layout().code_by_label("G").map(Hit::Key),
             tracking_leave: false,
             painting: false,
             rolling: false,
@@ -662,6 +703,8 @@ impl Editor {
                 if e.code() == windows::Win32::Foundation::D2DERR_RECREATE_TARGET {
                     self.rt = None;
                     self.brush = None;
+                    // Nothing was shown: draw again on a new target.
+                    InvalidateRect(self.hwnd, null(), 0);
                 }
             }
         }
@@ -793,7 +836,7 @@ impl Editor {
         let (ox, oy) = (KB_X + (KB_W - lay.width * u) / 2.0, KB_Y + (KB_H - lay.height * u) / 2.0);
         for &kd in lay.keys(iso) {
             let r = R { x: ox + kd.x * u + 2.0, y: oy + kd.y * u + 2.0, w: kd.w * u - 4.0, h: kd.h * u - 4.0 };
-            let c = if kd.code == 0 { OFF } else { color_of(kd.code) };
+            let c = color_of(kd.code);
             let lit = c != OFF;
             let fill = if lit { rgb_col(c) } else { col(0x2A, 0x2A, 0x2A, 1.0) };
             let fg = if !lit {
@@ -805,9 +848,6 @@ impl Editor {
             };
             let radius = if kd.h < 1.0 { 3.0 } else { 5.0 };
             self.fill(rt, r, radius, fill);
-            if kd.code == 0 {
-                self.stroke(rt, r, radius, col(255, 255, 255, 0.06), 1.0);
-            }
             if kd.icon {
                 self.text(rt, kd.label, &self.fmt.key_icon, r, fg);
             } else if !kd.ru.is_empty() && !crate::i18n::en() {
@@ -817,12 +857,10 @@ impl Editor {
                 let fmt = if kd.label.chars().count() > 3 { &self.fmt.key_small } else { &self.fmt.key };
                 self.text(rt, kd.label, fmt, r, fg);
             }
-            if kd.code != 0 {
-                if self.hover == Some(Hit::Key(kd.code)) {
-                    self.stroke(rt, r.inset(-1.0), radius + 1.0, col(255, 255, 255, 1.0), 2.0);
-                }
-                self.hits.push((r, Hit::Key(kd.code)));
+            if self.hover == Some(Hit::Key(kd.code)) {
+                self.stroke(rt, r.inset(-1.0), radius + 1.0, col(255, 255, 255, 1.0), 2.0);
             }
+            self.hits.push((r, Hit::Key(kd.code)));
         }
 
         // Row 1: brush.
@@ -963,6 +1001,16 @@ impl Editor {
         self.hits.push((r, Hit::Done));
     }
 
+    /// The brush color as the palette marks it. Using the brush on the keys (painting, Fill
+    /// all, a word) ends the choosing of a preset color dot: the dot's color becomes the brush,
+    /// so the color marked in the palette is the one that paints, before and after.
+    fn take_brush(&mut self) -> Rgb {
+        if let Some((i, k)) = self.slot.take() {
+            self.brush_color = self.preset_colors[i][k];
+        }
+        self.brush_color
+    }
+
     fn hit_test(&self, x: f32, y: f32) -> Option<Hit> {
         self.hits.iter().find(|(r, _)| r.contains(x, y)).map(|(_, h)| *h)
     }
@@ -1018,14 +1066,14 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
         Hit::Slot(i, k) => {
             with_editor(|e| e.slot = if e.slot == Some((i, k)) { None } else { Some((i, k)) });
         }
-        Hit::Fill => fill_all(brush),
+        Hit::Fill => fill_all(with_editor(|e| e.take_brush()).unwrap_or(brush)),
         Hit::Clear => fill_all(OFF),
         Hit::Preset(i) => apply_preset(i, colors[i]),
         Hit::Firmware(k) => firmware_effect(Effect::EXTRA[k], slot.map_or(brush, |(i, k)| colors[i][k])),
         Hit::WordBox => {}
 
         Hit::WordApply => {
-            let word = with_editor(|e| e.word.clone()).unwrap_or_default();
+            let (word, brush) = with_editor(|e| (e.word.clone(), e.take_brush())).unwrap_or((String::new(), brush));
             write_word(&word, brush);
         }
         Hit::Layout(iso) => {
@@ -1044,12 +1092,10 @@ unsafe fn activate(hwnd: HWND, hit: Hit) {
         Hit::Scheme(i) => {
             let mut cfg = crate::config();
             if let Some(s) = cfg.schemes.get(i) {
-                let scheme = s.keys.clone();
+                let scheme = crate::config::DeviceConfig { keys: s.keys.clone(), ..Default::default() };
                 // Key by key, so every key can be rolled back to what it was before.
                 for &code in layout().codes() {
-                    let tmp = crate::config::DeviceConfig { keys: scheme.clone(), ..Default::default() };
-                    let c = tmp.key_color(code);
-                    set_tracked(&mut cfg, code, c);
+                    set_tracked(&mut cfg, code, scheme.key_color(code));
                 }
                 cfg.save();
                 drop(cfg);
@@ -1071,6 +1117,28 @@ fn mouse_pos(lparam: LPARAM, scale: f32) -> (f32, f32) {
 }
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
+const MK_LBUTTON: usize = 0x0001;
+const MK_RBUTTON: usize = 0x0002;
+
+/// Ends a drag (painting or rolling back) and saves what it changed. `release`: give the
+/// mouse capture back (not when it has already been taken away). Returns whether one was on.
+fn end_stroke(release: bool) -> bool {
+    let was = with_editor(|e| {
+        let was = e.painting || e.rolling;
+        e.painting = false;
+        e.rolling = false;
+        e.last_painted = None;
+        was
+    })
+    .unwrap_or(false);
+    if was {
+        if release {
+            unsafe { ReleaseCapture() };
+        }
+        crate::config().save();
+    }
+    was
+}
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
@@ -1093,17 +1161,25 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let h = e.hit_test(x, y);
                 let changed = h != e.hover;
                 e.hover = h;
+                // The button went up where this window didn't hear it: the drag is over.
+                let held = (e.painting && wparam & MK_LBUTTON != 0) || (e.rolling && wparam & MK_RBUTTON != 0);
+                if (e.painting || e.rolling) && !held {
+                    return (changed, None, true);
+                }
                 // Dragging paints (left button) or rolls back (right button) every key passed over.
-                let stroke = match (e.painting || e.rolling, h) {
+                let stroke = match (held, h) {
                     (true, Some(Hit::Key(code))) if e.last_painted != Some(code) => {
                         e.last_painted = Some(code);
                         Some((code, e.brush_color, e.rolling))
                     }
                     _ => None,
                 };
-                (changed, stroke)
+                (changed, stroke, false)
             });
-            if let Some((changed, stroke)) = paint {
+            if let Some((changed, stroke, ended)) = paint {
+                if ended {
+                    end_stroke(true);
+                }
                 match stroke {
                     Some((code, _, true)) => {
                         rollback_key(code);
@@ -1130,8 +1206,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let start = with_editor(|e| {
                 let (x, y) = mouse_pos(lparam, e.scale);
                 match e.hit_test(x, y) {
-                    // Ctrl + click: eyedropper.
+                    // Ctrl + click: eyedropper. It picks a brush, so a chosen preset dot lets go.
                     Some(Hit::Key(code)) if ctrl => {
+                        e.slot = None;
                         e.brush_color = crate::config().device(&target()).key_color(code);
                         None
                     }
@@ -1139,7 +1216,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         e.painting = true;
                         e.last_painted = Some(code);
                         e.word_focus = false;
-                        Some((code, e.brush_color))
+                        Some((code, e.take_brush()))
                     }
                     _ => None,
                 }
@@ -1173,17 +1250,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             0
         }
         WM_LBUTTONUP => {
-            let (was_painting, hit) = with_editor(|e| {
+            let (painting, hit) = with_editor(|e| {
                 let (x, y) = mouse_pos(lparam, e.scale);
-                let p = e.painting;
-                e.painting = false;
-                e.last_painted = None;
-                (p, e.hit_test(x, y))
+                (e.painting, e.hit_test(x, y))
             })
             .unwrap_or((false, None));
-            if was_painting {
-                ReleaseCapture();
-                crate::config().save();
+            if painting {
+                end_stroke(true);
             } else if let Some(h) = hit {
                 activate(hwnd, h);
             } else {
@@ -1193,17 +1266,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             0
         }
         WM_RBUTTONUP => {
-            let (was_rolling, hit) = with_editor(|e| {
+            let (rolling, hit) = with_editor(|e| {
                 let (x, y) = mouse_pos(lparam, e.scale);
-                let r = e.rolling;
-                e.rolling = false;
-                e.last_painted = None;
-                (r, e.hit_test(x, y))
+                (e.rolling, e.hit_test(x, y))
             })
             .unwrap_or((false, None));
-            if was_rolling {
-                ReleaseCapture();
-                crate::config().save();
+            if rolling {
+                end_stroke(true);
                 invalidate();
                 return 0;
             }
@@ -1227,7 +1296,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     Some('\u{8}') => {
                         e.word.pop();
                     }
-                    Some('\r') => return Some((e.word.clone(), e.brush_color)),
+                    Some('\r') => return Some((e.word.clone(), e.take_brush())),
                     Some('\u{1b}') => e.word_focus = false,
                     Some(c) if !c.is_control() && e.word.chars().count() < 24 => e.word.push(c),
                     _ => {}
@@ -1241,10 +1310,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             invalidate();
             0
         }
+        // Capture taken away mid-drag (Alt+Tab, a dialog…): the drag ends as on button up.
+        WM_CAPTURECHANGED => {
+            if end_stroke(false) {
+                invalidate();
+            }
+            0
+        }
         WM_DPICHANGED => {
             let suggested = &*(lparam as *const RECT);
             with_editor(|e| {
-                e.scale = GetDpiForWindow(hwnd) as f32 / 96.0;
                 e.rt = None;
                 e.brush = None;
             });
@@ -1257,6 +1332,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 suggested.bottom - suggested.top,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
+            // The scale follows the new size, not the DPI alone: the window may have been opened
+            // smaller than its DPI asks for, to fit the screen.
+            let mut rc: RECT = zeroed();
+            GetClientRect(hwnd, &mut rc);
+            with_editor(|e| e.scale = if rc.right > 0 { rc.right as f32 / W } else { GetDpiForWindow(hwnd) as f32 / 96.0 });
             0
         }
         WM_DESTROY => {

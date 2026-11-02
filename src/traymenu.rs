@@ -178,7 +178,13 @@ unsafe fn open() -> windows::core::Result<()> {
     }
     .clamp(work.top, work.bottom - h);
 
+    // What can fail comes before the window: a window without its state would be stuck.
+    let d2d = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
+    let fmt = formats()?;
     let hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, class.as_ptr(), class.as_ptr(), WS_POPUP, x, y, w, h, null_mut(), null_mut(), hinst, null());
+    if hwnd.is_null() {
+        return Err(windows::core::Error::from_win32());
+    }
     let theme = theme();
     let round: u32 = 3; // DWMWCP_ROUNDSMALL, like Windows menus
     DwmSetWindowAttribute(hwnd, 33, &round as *const u32 as _, 4);
@@ -195,10 +201,10 @@ unsafe fn open() -> windows::core::Result<()> {
     let menu = Menu {
         hwnd,
         scale,
-        d2d: D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?,
+        d2d,
         rt: None,
         brush: None,
-        fmt: formats()?,
+        fmt,
         theme,
         hover: None,
         tracking: false,
@@ -238,8 +244,12 @@ impl Menu {
             let rt = self.rt.clone().unwrap();
             rt.BeginDraw();
             self.draw(&rt);
-            if rt.EndDraw(None, None).is_err() {
+            if let Err(e) = rt.EndDraw(None, None) {
                 self.rt = None;
+                if e.code() == windows::Win32::Foundation::D2DERR_RECREATE_TARGET {
+                    // Nothing was shown: draw again on a new target.
+                    InvalidateRect(self.hwnd, null(), 0);
+                }
             }
         }
     }
