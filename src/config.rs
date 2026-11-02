@@ -373,9 +373,46 @@ fn now() -> u64 {
 /// Writes through a temporary file and a rename, so a crash or power loss in the middle
 /// leaves the old file, never a cut one.
 fn write_atomically(path: &std::path::Path, text: &str) {
+    use std::io::Write;
     let tmp = path.with_extension("toml.tmp");
-    if std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, path).is_err() {
-        let _ = std::fs::write(path, text);
+    // On the disk before the rename: otherwise power loss can leave an empty file in its place.
+    let written = std::fs::File::create(&tmp).and_then(|mut f| {
+        f.write_all(text.as_bytes())?;
+        f.sync_all()
+    });
+    if let Err(e) = written {
+        crate::log(&format!("config: can't write {} ({e})", tmp.display()));
+        return;
+    }
+    if std::fs::rename(&tmp, path).is_err() {
+        if let Err(e) = std::fs::write(path, text) {
+            crate::log(&format!("config: can't write {} ({e})", path.display()));
+        }
+    }
+}
+
+/// Settings that read and have something in them. Almost any TOML, an empty file too, reads
+/// as a `Config` of defaults: taking that as good would wipe the settings and the copies.
+fn good_settings(text: &str) -> Result<Config, String> {
+    let cfg = toml::from_str::<Config>(text).map_err(|e| e.message().to_string())?;
+    match Config::file_kind(text) {
+        FileKind::Settings => Ok(cfg),
+        _ => Err("no settings in it".into()),
+    }
+}
+
+/// Reads the settings file, waiting a little while another program (antivirus, OneDrive,
+/// a backup tool) holds it.
+fn read_settings(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    let mut tries = 0;
+    loop {
+        match std::fs::read(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound && tries < 10 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            result => return result,
+        }
     }
 }
 
@@ -687,27 +724,40 @@ impl Config {
     ///   copy that reads takes its place; only without any the app starts from defaults.
     fn load_from(dir: &std::path::Path) -> Config {
         let path = dir.join("config.toml");
-        let Ok(text) = std::fs::read_to_string(&path) else { return Config::default() };
-        match toml::from_str(&text) {
-            Ok(cfg) => {
+        let bytes = match read_settings(&path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Config::default(),
+            Err(e) => {
+                crate::log(&format!("config: can't open it ({e})"));
+                return Self::restore(dir, &path);
+            }
+        };
+        let read = String::from_utf8(bytes.clone()).map_err(|_| "not UTF-8".to_string()).and_then(|text| Ok((good_settings(&text)?, text)));
+        match read {
+            Ok((cfg, text)) => {
                 keep_copies(dir, &text);
                 cfg
             }
             Err(e) => {
                 let aside = dir.join(format!("config.unreadable-{}.toml", now()));
-                let _ = std::fs::write(&aside, &text);
-                crate::log(&format!("config: can't read it ({}); kept as {}", e.message(), aside.display()));
-                for copy in copies_newest_first(dir) {
-                    let Ok(text) = std::fs::read_to_string(&copy) else { continue };
-                    if let Ok(cfg) = toml::from_str::<Config>(&text) {
-                        crate::log(&format!("config: restored from {}", copy.display()));
-                        write_atomically(&path, &text);
-                        return cfg;
-                    }
-                }
-                Config::default()
+                let _ = std::fs::write(&aside, &bytes);
+                crate::log(&format!("config: can't read it ({e}); kept as {}", aside.display()));
+                Self::restore(dir, &path)
             }
         }
+    }
+
+    /// The newest copy that reads, put back in place of the settings file; defaults without any.
+    fn restore(dir: &std::path::Path, path: &std::path::Path) -> Config {
+        for copy in copies_newest_first(dir) {
+            let Ok(text) = std::fs::read_to_string(&copy) else { continue };
+            if let Ok(cfg) = good_settings(&text) {
+                crate::log(&format!("config: restored from {}", copy.display()));
+                write_atomically(path, &text);
+                return cfg;
+            }
+        }
+        Config::default()
     }
 
     pub fn save(&self) {
@@ -1016,6 +1066,26 @@ mod tests {
         assert!(Config::load_from(&empty).presets.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&empty);
+    }
+
+    #[test]
+    fn empty_or_garbled_settings_never_replace_the_copies() {
+        let dir = temp_dir("emptied");
+        let good = "brightness = 40\n[[presets]]\nname = \"Night\"\nbrightness = 10\n[presets.devices]\n";
+        std::fs::write(dir.join("config.toml"), good).unwrap();
+        Config::load_from(&dir);
+
+        // Cut to nothing (power loss): reads as TOML, but has no settings in it.
+        std::fs::write(dir.join("config.toml"), "").unwrap();
+        assert_eq!(Config::load_from(&dir).presets[0].name, "Night");
+        assert_eq!(std::fs::read_to_string(dir.join("config.backup.toml")).unwrap(), good);
+        assert_eq!(std::fs::read_to_string(dir.join("config.toml")).unwrap(), good);
+
+        // Not UTF-8: kept aside as it was, the settings come back.
+        std::fs::write(dir.join("config.toml"), b"brightness = 40\n# \xff\xfe\n").unwrap();
+        assert_eq!(Config::load_from(&dir).brightness, 40);
+        assert_eq!(std::fs::read_to_string(dir.join("config.toml")).unwrap(), good);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

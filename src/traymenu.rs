@@ -170,13 +170,13 @@ unsafe fn open() -> windows::core::Result<()> {
         2 => pt.x - w,
         _ => pt.x - w / 2,
     }
-    .clamp(work.left, work.right - w);
+    .clamp(work.left, (work.right - w).max(work.left));
     let y = match edge {
         1 => pt.y,
         3 => pt.y - h,
         _ => pt.y - h / 2,
     }
-    .clamp(work.top, work.bottom - h);
+    .clamp(work.top, (work.bottom - h).max(work.top));
 
     let hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, class.as_ptr(), class.as_ptr(), WS_POPUP, x, y, w, h, null_mut(), null_mut(), hinst, null());
     let theme = theme();

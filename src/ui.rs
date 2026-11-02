@@ -1244,8 +1244,9 @@ unsafe fn open() -> windows::core::Result<()> {
     } else {
         3 // ABE_BOTTOM
     };
-    let near_x = (pt.x - w / 2).clamp(work.left + margin, work.right - w - margin);
-    let near_y = (pt.y - h / 2).clamp(work.top + margin, work.bottom - h - margin);
+    // A panel bigger than the work area sticks to its top-left (`clamp` panics on min > max).
+    let near_x = (pt.x - w / 2).clamp(work.left + margin, (work.right - w - margin).max(work.left + margin));
+    let near_y = (pt.y - h / 2).clamp(work.top + margin, (work.bottom - h - margin).max(work.top + margin));
     let (mut x, mut y) = match edge {
         0 => (work.left + margin, near_y),      // ABE_LEFT
         1 => (near_x, work.top + margin),       // ABE_TOP

@@ -28,6 +28,8 @@ static THREAD: std::sync::Once = std::sync::Once::new();
 const FRAME: Duration = Duration::from_millis(16);
 const BREATHE_PERIOD: f32 = 4.0;
 const CYCLE_PERIOD: f32 = 10.0;
+/// Effect time goes back to 0 here without a jump: a multiple of both periods.
+const EFFECT_TIME_WRAP: f32 = 20.0;
 
 /// Starts (or replaces) the animation of the device at `path`, at the speed set for it
 /// (`super::speed`). It takes the phase of another running animation of the same speed, so
@@ -79,7 +81,9 @@ fn run() {
         let dt = (now - last).as_secs_f32();
         last = now;
         for a in ANIMATIONS.lock().unwrap().iter_mut() {
-            a.t += dt * a.speed;
+            // Wrapped at a whole number of both periods: an f32 that only grows loses its
+            // fraction after a few days, and the effects speed up, then stop.
+            a.t = (a.t + dt * a.speed) % EFFECT_TIME_WRAP;
             if a.frame.as_mut().is_some_and(|frame| !frame(a.t)) {
                 a.frame = None;
             }
@@ -108,5 +112,11 @@ mod tests {
         assert_eq!(cycle_hue(0.0), 0.0);
         assert_eq!(cycle_hue(CYCLE_PERIOD / 2.0), 180.0);
         assert_eq!(cycle_hue(CYCLE_PERIOD), 360.0);
+    }
+
+    #[test]
+    fn effect_time_wraps_without_a_jump() {
+        assert!((breathe(EFFECT_TIME_WRAP) - breathe(0.0)).abs() < 1e-5);
+        assert!(cycle_hue(EFFECT_TIME_WRAP).rem_euclid(360.0).abs() < 1e-3);
     }
 }
