@@ -25,12 +25,19 @@ pub fn pick(t: Text) -> &'static str {
 pub fn set(lang: Option<&str>) {
     // RGBTRAY_LANG=en|ru overrides the setting (for screenshots and testing).
     let forced = std::env::var("RGBTRAY_LANG").ok();
-    let en = match forced.as_deref().or(lang) {
-        Some("ru") => false,
-        Some("en") => true,
-        _ => !windows_is_russian(),
-    };
+    let en = english(forced.as_deref(), lang).unwrap_or_else(|| !windows_is_russian());
     EN.store(en, Ordering::Relaxed);
+}
+
+/// Whether to use English: the forced language, else the saved one; None when neither is "ru"
+/// or "en" (any case), so an unknown value doesn't hide a valid choice behind it.
+fn english(forced: Option<&str>, saved: Option<&str>) -> Option<bool> {
+    let parse = |l: &str| match l.trim().to_ascii_lowercase().as_str() {
+        "ru" => Some(false),
+        "en" => Some(true),
+        _ => None,
+    };
+    forced.and_then(parse).or_else(|| saved.and_then(parse))
 }
 
 /// The Windows display language, or one of the keyboard layouts, is Russian or a language
@@ -59,4 +66,22 @@ macro_rules! tr {
             $ru
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::english;
+
+    #[test]
+    fn forced_language_wins_only_when_valid() {
+        assert_eq!(english(Some("en"), Some("ru")), Some(true));
+        assert_eq!(english(Some("RU"), Some("en")), Some(false));
+        // An unknown forced value falls back to the saved language.
+        assert_eq!(english(Some("de"), Some("ru")), Some(false));
+        assert_eq!(english(Some(""), Some("en")), Some(true));
+        assert_eq!(english(None, Some("en")), Some(true));
+        // Neither is valid: follow Windows.
+        assert_eq!(english(Some("fr"), Some("xx")), None);
+        assert_eq!(english(None, None), None);
+    }
 }
