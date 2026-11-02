@@ -171,6 +171,10 @@ fn wide(s: &str) -> Vec<u16> {
 fn log(msg: &str) {
     #[cfg(debug_assertions)]
     eprintln!("{msg}");
+    // Tests write into temp folders, not the real app's log.
+    if cfg!(test) {
+        return;
+    }
     // Many threads log: one at a time, so two of them can't rotate the log at once.
     static LOG_LOCK: Mutex<()> = Mutex::new(());
     let _guard = LOG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
