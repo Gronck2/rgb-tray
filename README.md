@@ -87,6 +87,7 @@ Close vendor lighting software before using RGB Tray: two programs writing to th
 |---|---|
 | `rgbtray --diagnose [file.txt]` | Writes the device report: app and Windows versions, supported devices, and all HID devices grouped with their interfaces, likely lighting controllers first. Without a file name it is saved to `%APPDATA%\rgbtray\rgbtray-diagnose.txt` and opened in Notepad. Also available in the tray menu. |
 | `rgbtray --hid-send <out.txt> <vid:pid[:page]> <feature|output|get> "<hex>"…` | Sends raw HID reports and appends the answers to the file, for working out a device's protocol ([docs/profiles.md](docs/profiles.md#hid-any-device-with-a-simple-protocol)). |
+| `rgbtray --profile-check <out.txt> <profile.toml>` | Reads a profile file without touching any device and writes what the app makes of each model, or what is wrong with it. |
 | `rgbtray --profile-test <out.txt> <profile.toml>` | Plays colors and effects on the devices of a `[hid]` profile that isn't installed yet and logs each step. |
 | `rgbtray --show` | Starts with the panel open and pinned. |
 | `rgbtray --uninstall` | Removes the app (settings are kept). |

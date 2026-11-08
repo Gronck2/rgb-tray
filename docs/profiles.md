@@ -140,8 +140,10 @@ The device has no serial number to the app, so its settings are tied to its USB 
 ### Trying a profile before installing it
 
 ```
+rgbtray --profile-check out.txt my-strip.toml
 rgbtray --hid-send out.txt 1234:5678:FF00 feature "07 0A 01 FF 00 00" "07 0B"
 rgbtray --profile-test out.txt my-strip.toml
 ```
 
+`--profile-check` needs no device: it writes what the app makes of each model in the file (protocol, effects, zones, speed) or what is wrong with it, for any profile, not only `[hid]`.
 `--hid-send` sends single reports to the first collection that matches `vid:pid[:usage_page[:usage]]` and appends what it sent and what the device answered to `out.txt` (`feature`, `output`, or `get` to read a feature report by id; any other mode sends nothing). `--profile-test` plays red, green, blue, dim white, each zone in turn, breathing, spectrum and off with a [hid] profile, a step every few seconds, and logs each step. Watch the device while it runs.

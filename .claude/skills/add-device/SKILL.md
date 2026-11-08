@@ -59,7 +59,7 @@ Bytes start with the report id (`00` when the collection has none) and are padde
 
 ## 4. Write and test the profile
 
-Write the profile in a scratch location first, following `docs/profiles.md` exactly (fields, `key` rules, `tested`). Then:
+Write the profile in a scratch location first, following `docs/profiles.md` exactly (fields, `key` rules, `tested`). `rgbtray --profile-check out.txt <profile.toml>` reads it without touching any device: fix every `error:` line first. Then:
 
 ```
 rgbtray --profile-test out.txt <profile.toml>

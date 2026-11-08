@@ -1666,6 +1666,14 @@ fn main() {
     // `--profile-test <out.txt> <profile.toml>`: plays a fixed sequence on the devices of a [hid]
     // profile that isn't installed yet, a step every 3 s (6 s for breathing and spectrum), each
     // step logged as it starts.
+    // `--profile-check <out.txt> <profile.toml>`: what the app makes of a profile, no device needed.
+    if let Some(i) = args.iter().position(|a| a == "--profile-check") {
+        let out = args.get(i + 1).cloned().unwrap_or_else(|| "profile.txt".into());
+        let file = args.get(i + 2).map(String::as_str).unwrap_or("");
+        let _ = std::fs::write(&out, "");
+        append(&out, &std::fs::read_to_string(file).map_or_else(|e| format!("{file}: {e}\n"), |t| devices::profile::check(&t)));
+        return;
+    }
     if let Some(i) = args.iter().position(|a| a == "--profile-test") {
         let out = args.get(i + 1).cloned().unwrap_or_else(|| "profile.txt".into());
         profile_test(&out, args.get(i + 2).map(String::as_str).unwrap_or(""));

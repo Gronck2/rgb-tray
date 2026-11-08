@@ -328,6 +328,49 @@ fn add(file: &str, text: &str, kinds: &mut Vec<Kind>, errors: &mut Vec<(String, 
     }
 }
 
+/// `--profile-check`: what the app makes of a profile file, without any device: each model's
+/// key, protocol, effects, zones and speed, or what is wrong with it.
+pub fn check(text: &str) -> String {
+    let mut out = String::new();
+    let built_in: Vec<&str> = BUILT_IN.iter().flat_map(|(_, t)| parse_file(t)).filter_map(|k| k.ok().map(|k| k.key)).collect();
+    for res in parse_file(text) {
+        let k = match res {
+            Ok(k) => k,
+            Err(e) => {
+                out += &format!("error: {e}\n");
+                continue;
+            }
+        };
+        if taken(k.key) {
+            out += &format!("error: key \"{}\" is taken by a built-in driver\n", k.key);
+            continue;
+        }
+        let protocol = match k.protocol {
+            Protocol::Razer(_) => "razer",
+            Protocol::Via(_) => "via",
+            Protocol::Hid(_) => "hid",
+            _ => "native",
+        };
+        let effects: Vec<String> = k.effects.iter().map(|e| format!("{e:?}").to_lowercase()).collect();
+        let zones: Vec<String> = k.zones.iter().map(|(led, name)| format!("{led:#04x} {}", name.1)).collect();
+        out += &format!(
+            "ok: {} \"{}\" [{protocol}], class {:?}, effects {}, zones [{}], speed {:?}, {}{}\n",
+            k.key,
+            k.names.1,
+            k.class,
+            effects.join(" "),
+            zones.join(", "),
+            k.speed,
+            if k.tested { "tested" } else { "untested" },
+            if k.port_id { ", settings tied to the USB port" } else { "" },
+        );
+        if built_in.contains(&k.key) {
+            out += &format!("  note: replaces the built-in profile \"{}\" when put into the devices folder\n", k.key);
+        }
+    }
+    out
+}
+
 /// Profile models: built-in ones in order, a user file with the same key replacing its
 /// built-in one, other user files after them (by file name). Problems: (file, message).
 pub fn load() -> (Vec<Kind>, Vec<(String, String)>) {
@@ -445,6 +488,16 @@ mod tests {
         assert!(err(&zoneless).contains("[hid] cycle: {zone} needs [[zones]]"));
         // The same LED twice.
         assert!(err(&ok.replace("led = 2", "led = 1")).contains("led 0x01 is already a zone"));
+    }
+
+    #[test]
+    fn check_tells_what_the_app_makes_of_a_file() {
+        let ok = check(include_str!("../../docs/examples/macropad-hid.toml"));
+        assert!(ok.starts_with("ok: macropadhid \"MacroPad via [hid]\" [hid], class Keyboard"), "{ok}");
+        assert!(ok.contains("untested") && ok.contains("USB port"), "{ok}");
+        assert!(check(include_str!("../../profiles/geekboard-macropad.toml")).contains("replaces the built-in profile \"macropad\""));
+        assert!(check("key = \"x\"").starts_with("error: "));
+        assert!(check("key = \"logitech\"\nname = \"X\"\nclass = \"mouse\"\n[razer]\npids = [1]\ntransaction_id = 0x1F\nleds = [4]\n").contains("taken"));
     }
 
     #[test]

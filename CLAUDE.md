@@ -29,6 +29,7 @@ The release build is a GUI program (`windows_subsystem = "windows"`): the CLI to
 
 - `--diagnose [file]`: HID report (English only): every HID collection with usage page, report lengths and what the app makes of it.
 - `--hid-send <out> <vid:pid[:page[:usage]]> <feature|output|get> "<hex>"...`: raw reports for working out a protocol; answers appended to `<out>`.
+- `--profile-check <out> <profile.toml>`: what the app makes of each model of a profile file (or its errors), no device needed.
 - `--profile-test <out> <profile.toml>`: plays a fixed sequence on the devices of a `[hid]` profile, step log in `<out>`.
 - `--lamparray-test <out> <rrggbb> <sec>`, `--logitech-effect-test` (G915 firmware effect variants, 2 s dark between steps, steps logged),
   `--logitech-battery-led-test` (SWControl variants, 20 s each).
