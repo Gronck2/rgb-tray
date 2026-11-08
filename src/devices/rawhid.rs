@@ -1,6 +1,7 @@
 //! Devices described only by a profile's `[hid]` section: HID reports written as byte templates,
 //! with the color put into them. Enough for simple protocols, where one or a few reports set a
-//! color. Anything that needs answers, checksums or state is a driver of its own.
+//! color, maybe with a checksum, a "take control" report before and a "give back" one at exit.
+//! Anything that needs answers or state is a driver of its own.
 //!
 //! Breathing and spectrum use the firmware's effect if the profile gives its reports; otherwise
 //! the app draws them by sending the static reports about 60 times a second.
@@ -32,7 +33,14 @@ pub enum Byte {
     Hue,
     Sat,
     Val,
+    /// XOR or sum (low byte) of the bytes from this index up to the checksum: `{xor}`, `{sum}`
+    /// (from 1, after the report id), `{xor:2}`.
+    Xor(u8),
+    Sum(u8),
 }
+
+/// Longest report a template may make, repeats included.
+const MAX_TEMPLATE: usize = 4096;
 
 /// A report: its bytes from the report id on; the rest of the report is zeros.
 pub type Packet = &'static [Byte];
@@ -54,6 +62,11 @@ pub struct HidModel {
     pub usage_page: u16,
     pub usage: Option<u16>,
     pub report: Report,
+    /// Sent before every change of the lighting (not between animation frames), e.g. "software
+    /// control on"; again and again, so a device that reset on wake gets it too.
+    pub init: &'static [Packet],
+    /// Sent when the app exits, to hand the lighting back to the firmware.
+    pub exit: &'static [Packet],
     pub static_: &'static [Packet],
     /// Empty: static black.
     pub off: &'static [Packet],
@@ -64,37 +77,84 @@ pub struct HidModel {
     pub delay_ms: u16,
 }
 
-/// Reads a template: hex bytes ("07", "0x07") and placeholders, separated by spaces.
+/// Reads a template: hex bytes ("07", "0x07") and placeholders, separated by spaces; a group
+/// `[ ... ]*N` stands for its bytes N times (one LED's color for a whole strip).
 pub fn parse_packet(text: &str) -> Result<Vec<Byte>, String> {
-    let bytes: Vec<Byte> = text
-        .split_whitespace()
-        .map(|t| {
-            Ok(match t {
-                "{r}" => Byte::R,
-                "{g}" => Byte::G,
-                "{b}" => Byte::B,
-                "{red}" => Byte::Red,
-                "{green}" => Byte::Green,
-                "{blue}" => Byte::Blue,
-                "{brightness}" => Byte::Brightness,
-                "{percent}" => Byte::Percent,
-                "{speed}" => Byte::Speed,
-                "{zone}" => Byte::Zone,
-                "{hue}" => Byte::Hue,
-                "{sat}" => Byte::Sat,
-                "{val}" => Byte::Val,
-                _ if t.starts_with('{') => return Err(format!("unknown placeholder {t}")),
-                _ => Byte::Lit(u8::from_str_radix(t.trim_start_matches("0x").trim_start_matches("0X"), 16).map_err(|_| format!("\"{t}\" is not a hex byte"))?),
-            })
-        })
-        .collect::<Result<_, String>>()?;
+    let mut bytes: Vec<Byte> = Vec::new();
+    // Where the open group starts in `bytes`.
+    let mut group: Option<usize> = None;
+    for t in text.split_whitespace() {
+        if t == "[" {
+            if group.is_some() {
+                return Err("groups [ ] can't be nested".into());
+            }
+            group = Some(bytes.len());
+            continue;
+        }
+        if let Some(n) = t.strip_prefix("]*") {
+            let start = group.take().ok_or("\"]*\" without \"[\"")?;
+            let n: usize = n.parse().map_err(|_| format!("\"{t}\": the repeat count is a decimal number"))?;
+            let body = bytes.split_off(start);
+            if body.is_empty() || n == 0 || body.len() * n > MAX_TEMPLATE {
+                return Err(format!("\"{t}\": empty group or more than {MAX_TEMPLATE} bytes"));
+            }
+            for _ in 0..n {
+                bytes.extend_from_slice(&body);
+            }
+            continue;
+        }
+        bytes.push(byte(t)?);
+    }
+    if group.is_some() {
+        return Err("\"[\" without \"]*N\"".into());
+    }
     if bytes.is_empty() {
         return Err("empty report".into());
+    }
+    if bytes.len() > MAX_TEMPLATE {
+        return Err(format!("more than {MAX_TEMPLATE} bytes"));
     }
     if !matches!(bytes[0], Byte::Lit(_)) {
         return Err("a report starts with its report id, a number".into());
     }
+    if let Some(i) = bytes.iter().enumerate().position(|(i, b)| matches!(b, Byte::Xor(from) | Byte::Sum(from) if *from as usize >= i)) {
+        return Err(format!("the checksum at byte {i} covers no bytes before it"));
+    }
     Ok(bytes)
+}
+
+/// One template token.
+fn byte(t: &str) -> Result<Byte, String> {
+    let checksum = |name: &str| -> Option<Result<u8, String>> {
+        let rest = t.strip_prefix('{')?.strip_suffix('}')?.strip_prefix(name)?;
+        Some(match rest {
+            "" => Ok(1),
+            _ => rest.strip_prefix(':').and_then(|n| n.parse().ok()).ok_or(format!("\"{t}\": write {{{name}}} or {{{name}:N}}, N the first byte index")),
+        })
+    };
+    if let Some(from) = checksum("xor") {
+        return from.map(Byte::Xor);
+    }
+    if let Some(from) = checksum("sum") {
+        return from.map(Byte::Sum);
+    }
+    Ok(match t {
+        "{r}" => Byte::R,
+        "{g}" => Byte::G,
+        "{b}" => Byte::B,
+        "{red}" => Byte::Red,
+        "{green}" => Byte::Green,
+        "{blue}" => Byte::Blue,
+        "{brightness}" => Byte::Brightness,
+        "{percent}" => Byte::Percent,
+        "{speed}" => Byte::Speed,
+        "{zone}" => Byte::Zone,
+        "{hue}" => Byte::Hue,
+        "{sat}" => Byte::Sat,
+        "{val}" => Byte::Val,
+        _ if t.starts_with('{') => return Err(format!("unknown placeholder {t}")),
+        _ => Byte::Lit(u8::from_str_radix(t.trim_start_matches("0x").trim_start_matches("0X"), 16).map_err(|_| format!("\"{t}\" is not a hex byte"))?),
+    })
 }
 
 /// One color for the whole device: every zone's LED id with it, or LED id 0 without zones.
@@ -135,7 +195,17 @@ pub fn packets(templates: &[Packet], zones: &[(u8, Rgb)], brightness: u8, speed:
                     Byte::Hue => super::via::hue_sat(color).0,
                     Byte::Sat => super::via::hue_sat(color).1,
                     Byte::Val => super::via::value_of(color, brightness),
+                    // Filled in below, once every byte before them is known.
+                    Byte::Xor(_) | Byte::Sum(_) => 0,
                 };
+            }
+            for (i, b) in t.iter().enumerate() {
+                let covered = |from: u8| buf[from as usize..i].iter();
+                match *b {
+                    Byte::Xor(from) => buf[i] = covered(from).fold(0, |a, v| a ^ v),
+                    Byte::Sum(from) => buf[i] = covered(from).fold(0u8, |a, v| a.wrapping_add(*v)),
+                    _ => {}
+                }
             }
             out.push(buf);
         }
@@ -279,6 +349,15 @@ impl Device for RawHid {
     fn apply_zones(&self, effect: Effect, zones: &[(u8, Rgb)], brightness: u8) -> Result<(), String> {
         animation::stop(&self.path);
         let m = self.model;
+        if !m.exit.is_empty() {
+            let mut taken = TAKEN.lock().unwrap();
+            if !taken.iter().any(|(p, _)| *p == self.path) {
+                taken.push((self.path.clone(), m));
+            }
+        }
+        if !m.init.is_empty() {
+            self.send(m.init, zones, brightness)?;
+        }
         match effect {
             Effect::Off if m.off.is_empty() => self.send(m.static_, &zones.iter().map(|z| (z.0, Rgb(0, 0, 0))).collect::<Vec<_>>(), brightness),
             Effect::Off => self.send(m.off, zones, brightness),
@@ -291,6 +370,32 @@ impl Device for RawHid {
             _ => self.send(m.static_, zones, brightness),
         }
     }
+}
+
+/// Devices that were sent lighting and have `exit` reports, to send at exit.
+static TAKEN: std::sync::Mutex<Vec<(Vec<u16>, &'static HidModel)>> = std::sync::Mutex::new(Vec::new());
+
+/// Sends the `exit` reports of every device the app lit: the firmware gets its lighting back.
+/// Returns what happened to each device.
+pub fn release_all() -> Vec<String> {
+    let mut out = Vec::new();
+    for (path, model) in TAKEN.lock().unwrap().drain(..) {
+        animation::stop(&path);
+        let Some(hid) = open(&path, model.report) else {
+            out.push("exit: cannot open".into());
+            continue;
+        };
+        let Some(len) = hid::enumerate(model.vid).iter().find(|i| i.path == path).and_then(|i| matches(model, i)) else {
+            out.push("exit: device gone".into());
+            continue;
+        };
+        out.push(match packets(model.exit, &[(0, Rgb(0, 0, 0))], 100, 1.0, len) {
+            Ok(reports) if send(&hid, model, &reports) => format!("exit: {} report(s) sent", reports.len()),
+            Ok(_) => "exit: send failed".into(),
+            Err(e) => format!("exit: {e}"),
+        });
+    }
+    out
 }
 
 /// How the app finds devices of `[hid]` profiles (see `devices::DRIVERS`).
@@ -444,6 +549,30 @@ mod tests {
         // Pure green: hue a third of the way round, full saturation, value halved by brightness.
         assert_eq!(packets(&[t], &[(0, Rgb(0, 255, 0))], 50, 1.0, 4).unwrap(), vec![vec![7, 85, 255, 127]]);
         assert_eq!(packets(&[t], &[(0, Rgb(255, 255, 255))], 100, 1.0, 4).unwrap(), vec![vec![7, 0, 0, 255]]);
+    }
+
+    #[test]
+    fn groups_repeat() {
+        let t = parse_packet("01 [ {r} {g} {b} ]*3 FF").unwrap();
+        assert_eq!(t.len(), 1 + 9 + 1);
+        let r = packets(&[leak(t)], &[(0, Rgb(1, 2, 3))], 100, 1.0, 12).unwrap();
+        assert_eq!(r, vec![vec![1, 1, 2, 3, 1, 2, 3, 1, 2, 3, 0xFF, 0]]);
+        assert!(parse_packet("01 [ 02 [ 03 ]*2 ]*2").is_err());
+        assert!(parse_packet("01 [ 02").is_err());
+        assert!(parse_packet("01 02 ]*2").is_err());
+        assert!(parse_packet("01 [ 02 ]*x").is_err());
+        assert!(parse_packet("01 [ 02 ]*5000").is_err());
+    }
+
+    #[test]
+    fn checksums() {
+        // XOR from byte 1, sum from byte 2; bytes after the checksum aren't covered.
+        let x = leak(parse_packet("07 {r} {g} {xor} 55").unwrap());
+        assert_eq!(packets(&[x], &[(0, Rgb(0x0F, 0xF0, 0))], 100, 1.0, 5).unwrap(), vec![vec![7, 0x0F, 0xF0, 0xFF, 0x55]]);
+        let s = leak(parse_packet("07 AA {r} {g} {sum:2}").unwrap());
+        assert_eq!(packets(&[s], &[(0, Rgb(200, 100, 0))], 100, 1.0, 5).unwrap(), vec![vec![7, 0xAA, 200, 100, 44]]);
+        assert!(parse_packet("07 {xor:1}").unwrap_err().contains("covers no bytes"));
+        assert!(parse_packet("07 01 {xor:a}").is_err());
     }
 
     #[test]

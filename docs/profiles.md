@@ -111,6 +111,8 @@ static = ["07 0A {zone} {r} {g} {b}", "07 0B"]
 | `report` | yes | `feature` (sent with HidD_SetFeature) or `output` (written to the device). Each report is padded with zeros to the collection's report length. |
 | `static` | yes | Reports that show a steady color, in order. |
 | `off` | no | Reports that switch the lighting off. By default `static` with black. |
+| `init` | no | Reports sent before every change of the lighting (not between frames of an effect the app draws), e.g. "software control on". Sent every time, so a device that reset after sleep gets them too. |
+| `exit` | no | Reports sent when RGB Tray exits, e.g. "software control off", so the device goes back to its own lighting. They get no color. |
 | `breathe`, `cycle` | no | Reports that start the firmware's breathing or spectrum. Without them the app draws the effect by sending `static` about 60 times a second. |
 | `delay_ms` | no | Pause between reports, for devices that drop reports sent too fast. Effects the app draws then send no more often than that either. |
 
@@ -125,10 +127,15 @@ A report is hex bytes separated by spaces, starting with the report id (`00` if 
 | `{speed}` | Effect speed 0–255, about 127 normal, higher is faster. |
 | `{zone}` | The zone's `led` id. A report with `{zone}` is sent once per zone, with that zone's color. `[[zones]]` need it in a `static` report, and it needs `[[zones]]`. |
 | `{hue}` `{sat}` `{val}` | The color as HSV, each 0–255, for devices that take it so (QMK and many others): `{val}` is scaled by the brightness slider. |
+| `{xor}` `{sum}` | Checksum: XOR, or the low byte of the sum, of the bytes from byte 1 (right after the report id) up to the checksum. `{xor:2}`, `{sum:3}`: from that byte instead (counted from 0, the report id). Bytes after the checksum aren't covered. |
+
+A group `[ ... ]*N` stands for its bytes repeated N times, e.g. `[ {r} {g} {b} ]*60` for a strip of 60 LEDs that takes a color for each one.
+
+A real profile with `init`, `exit` and HSV, checked on a device: [`docs/examples/macropad-hid.toml`](examples/macropad-hid.toml).
 
 The panel shows a speed slider only if the app draws breathing or spectrum (no `breathe` or `cycle` reports for an effect the device has) or a report has `{speed}`. Zone `led` ids must differ.
 
-The device has no serial number to the app, so its settings are tied to its USB port. If a protocol needs answers from the device, a checksum or a handshake, a profile can't describe it: that is a driver (CONTRIBUTING.md, "A new protocol").
+The device has no serial number to the app, so its settings are tied to its USB port. If a protocol needs answers from the device, a handshake or a state, a profile can't describe it: that is a driver (CONTRIBUTING.md, "A new protocol").
 
 ### Trying a profile before installing it
 

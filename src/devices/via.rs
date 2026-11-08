@@ -234,6 +234,9 @@ impl Device for Via {
         match effect {
             Effect::Off => return self.set(Value::Effect, &[EFFECT_OFF]),
             Effect::Cycle if self.cycle.is_some() => {
+                // Some firmwares (the MacroPad's) switch the lighting on with the effect it had
+                // after "off" and ignore the new number: static first switches it on.
+                self.set(Value::Effect, &[EFFECT_STATIC])?;
                 self.set(Value::Effect, &[self.cycle.unwrap_or(EFFECT_STATIC)])?;
                 // QMK effect speed 0..=255, about 128 normal. Not every firmware has it, so a refusal is ignored.
                 let _ = self.set(Value::Speed, &[qmk_speed(super::speed())]);

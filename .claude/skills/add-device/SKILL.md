@@ -39,7 +39,7 @@ If the device is marked SUPPORTED but doesn't work right, this is a bug, not a n
 1. **Already works:** a LampArray device or a QMK keyboard with VIA. Have them open the panel; at most write a profile for a nicer name (`docs/profiles.md`).
 2. **A Razer model RGB Tray doesn't list:** a `[razer]` profile. Take the product ids, transaction id and LED ids from OpenRazer's source (`driver/razer*_driver.h` and `.c`), see `docs/profiles.md`.
 3. **A simple protocol:** a `[hid]` profile, report templates with the color in them (`docs/profiles.md`, section `[hid]`). No compiling.
-4. **Anything that needs answers, checksums, handshakes or state:** a Rust driver (`CONTRIBUTING.md`, "A new protocol: write a driver"). This needs the Rust toolchain.
+4. **Anything that needs answers, handshakes or state** (an XOR or sum checksum, "take control" reports and per-LED colors a `[hid]` profile can do): a Rust driver (`CONTRIBUTING.md`, "A new protocol: write a driver"). This needs the Rust toolchain.
 
 ## 3. Find out the protocol
 

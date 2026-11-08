@@ -1071,6 +1071,13 @@ fn profile_test(out: &str, file: &str) {
             }
             std::thread::sleep(std::time::Duration::from_secs(if effect.animated() { 6 } else { 3 }));
         }
+        if let devices::Protocol::Hid(m) = kind.protocol {
+            if !m.exit.is_empty() {
+                for line in devices::rawhid::release_all() {
+                    append(out, &format!("{:>5.1}s {line}\n", start.elapsed().as_secs_f32()));
+                }
+            }
+        }
     }
 }
 
@@ -1590,6 +1597,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_DESTROY => {
             remove_tray(hwnd);
+            for line in devices::rawhid::release_all() {
+                log(&line);
+            }
             PostQuitMessage(0);
             0
         }

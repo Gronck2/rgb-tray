@@ -71,7 +71,7 @@ If the report marks your device as one of these but something doesn't work, open
 
 ### 2a. A simple protocol: a `[hid]` profile
 
-If the device's lighting is set by one or a few HID reports with the color in them, and it needs no answers, checksums or handshake, a `[hid]` profile describes it without code: report templates with `{r} {g} {b}` and other placeholders ([docs/profiles.md](docs/profiles.md#hid-any-device-with-a-simple-protocol)). Work the reports out from OpenRGB's source for the device, a USB capture of the vendor app, or careful tries with `rgbtray --hid-send`, then check the whole profile with `rgbtray --profile-test`.
+If the device's lighting is set by one or a few HID reports with the color in them, and it needs no answers or handshake (an XOR or sum checksum is fine), a `[hid]` profile describes it without code: report templates with `{r} {g} {b}` and other placeholders ([docs/profiles.md](docs/profiles.md#hid-any-device-with-a-simple-protocol)). Work the reports out from OpenRGB's source for the device, a USB capture of the vendor app, or careful tries with `rgbtray --hid-send`, then check the whole profile with `rgbtray --profile-test`.
 
 Logitech HID++ and ASUS Aura models are still in code: their drivers find what a device can do by themselves, and a profile would only matter once there's a second model to tell apart (see `ROADMAP.md`).
 

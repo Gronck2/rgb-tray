@@ -96,6 +96,10 @@ struct HidSection {
     #[serde(default)]
     cycle: Vec<String>,
     #[serde(default)]
+    init: Vec<String>,
+    #[serde(default)]
+    exit: Vec<String>,
+    #[serde(default)]
     delay_ms: u16,
 }
 
@@ -230,6 +234,7 @@ fn from_profile(p: Profile) -> Result<Kind, String> {
             }
             let static_ = templates("static", h.static_)?;
             let (off, breathe, cycle) = (templates("off", h.off)?, templates("breathe", h.breathe)?, templates("cycle", h.cycle)?);
+            let (init, exit) = (templates("init", h.init)?, templates("exit", h.exit)?);
             let has = |list: &[Packet], b: rawhid::Byte| list.iter().any(|t| t.contains(&b));
             if !p.zones.is_empty() && !has(static_, rawhid::Byte::Zone) {
                 return Err("[hid]: zones need {zone} in a static report".into());
@@ -258,6 +263,8 @@ fn from_profile(p: Profile) -> Result<Kind, String> {
                     ReportName::Feature => Report::Feature,
                     ReportName::Output => Report::Output,
                 },
+                init,
+                exit,
                 static_,
                 off,
                 breathe,
@@ -418,7 +425,10 @@ mod tests {
         let k = parse(ok).unwrap();
         let Protocol::Hid(m) = k.protocol else { panic!("strip is not hid") };
         assert_eq!((m.vid, m.pids, m.usage_page, m.usage, m.report), (0x1234, &[0x5678][..], 0xFF00, None, Report::Output));
-        assert_eq!((m.static_.len(), m.off.len(), m.breathe.len(), m.cycle.len()), (2, 0, 0, 1));
+        assert_eq!((m.static_.len(), m.off.len(), m.breathe.len(), m.cycle.len(), m.init.len(), m.exit.len()), (2, 0, 0, 1, 0, 0));
+        let k = parse(&format!("{ok}init = [\"00 0A 01\"]\nexit = [\"00 0A 00 {{xor}}\", \"00 0B\"]\n")).unwrap();
+        let Protocol::Hid(m) = k.protocol else { panic!("strip is not hid") };
+        assert_eq!((m.init.len(), m.exit.len()), (1, 2));
         // No serial: the id comes from the port; the app can draw any speed.
         assert!(k.port_id && k.speed == Speed::Smooth && k.effects == Effect::ALL);
         let err = |text: &str| parse(text).unwrap_err();
@@ -435,6 +445,13 @@ mod tests {
         assert!(err(&zoneless).contains("[hid] cycle: {zone} needs [[zones]]"));
         // The same LED twice.
         assert!(err(&ok.replace("led = 2", "led = 1")).contains("led 0x01 is already a zone"));
+    }
+
+    #[test]
+    fn example_profiles_read() {
+        let k = parse(include_str!("../../docs/examples/macropad-hid.toml")).unwrap();
+        let Protocol::Hid(m) = k.protocol else { panic!("the example is not hid") };
+        assert_eq!((m.init.len(), m.exit.len()), (1, 3));
     }
 
     #[test]

@@ -1,0 +1,24 @@
+# Geekboard MacroPad v2 (QMK, VIA protocol 9) written as a [hid] profile: an example of
+# init, exit and HSV placeholders, checked on the device (08.11.2026). RGB Tray drives this
+# keyboard through its VIA driver already; this file only shows the [hid] format.
+key = "macropadhid"
+name = "MacroPad via [hid]"
+class = "keyboard"
+icon = "macropad"
+
+[hid]
+vid = 0x0483
+pids = [0xA372]
+usage_page = 0xFF60
+usage = 0x61
+report = "output"
+# 07 = VIA "set value". Legacy value ids: 80 brightness, 81 effect, 82 speed, 83 color (hue, sat).
+# Before every change: effect 1, static.
+init = ["00 07 81 01"]
+static = ["00 07 83 {hue} {sat}", "00 07 80 {val}"]
+off = ["00 07 81 00"]
+# Mode 6 is the firmware rainbow.
+cycle = ["00 07 81 06", "00 07 80 {brightness}", "00 07 82 {speed}"]
+# At exit: back to the rainbow. After "off" this firmware switches on with the effect it had
+# and ignores the new number, so the effect is sent twice.
+exit = ["00 07 81 06", "00 07 81 06", "00 07 80 FF"]
