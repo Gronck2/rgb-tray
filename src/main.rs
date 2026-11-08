@@ -497,6 +497,19 @@ fn spawn_battery_poller() {
         };
         // A device that had no link answers again: re-apply so it gets its lighting and status.
         let reconnected = found.iter().any(|(k, _)| NO_LINK.lock().unwrap().contains(k));
+        // A keyboard that fell asleep on its own isn't announced either: without a link it is
+        // looked for every few seconds (`spawn_link_watch`) and gets its lighting when it wakes,
+        // instead of keeping the firmware's own effect.
+        let ids: Vec<String> = found.iter().map(|(k, _)| k.clone()).collect();
+        let asleep: Vec<String> = devices::logitech::Logitech::no_link(&ids).into_iter().filter(|id| !NO_LINK.lock().unwrap().contains(id)).collect();
+        if !asleep.is_empty() {
+            log(&format!("no link: {asleep:?}"));
+            PRESENT.lock().unwrap().retain(|id| !asleep.contains(id));
+            for id in &asleep {
+                forget_applied(id);
+            }
+            NO_LINK.lock().unwrap().extend(asleep);
+        }
         if !found.is_empty() {
             let mut status = STATUS.lock().unwrap();
             for (id, b) in found {
