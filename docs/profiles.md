@@ -124,6 +124,7 @@ A report is hex bytes separated by spaces, starting with the report id (`00` if 
 | `{percent}` | Brightness 0–100. |
 | `{speed}` | Effect speed 0–255, about 127 normal, higher is faster. |
 | `{zone}` | The zone's `led` id. A report with `{zone}` is sent once per zone, with that zone's color. `[[zones]]` need it in a `static` report, and it needs `[[zones]]`. |
+| `{hue}` `{sat}` `{val}` | The color as HSV, each 0–255, for devices that take it so (QMK and many others): `{val}` is scaled by the brightness slider. |
 
 The panel shows a speed slider only if the app draws breathing or spectrum (no `breathe` or `cycle` reports for an effect the device has) or a report has `{speed}`. Zone `led` ids must differ.
 

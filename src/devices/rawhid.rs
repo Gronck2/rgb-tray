@@ -28,6 +28,10 @@ pub enum Byte {
     Speed,
     /// The zone's LED id (`[[zones]]`): `{zone}`. A report with it is sent once per zone.
     Zone,
+    /// The color as HSV 0..=255, as QMK takes it: `{hue}`, `{sat}`, and `{val}` scaled by brightness.
+    Hue,
+    Sat,
+    Val,
 }
 
 /// A report: its bytes from the report id on; the rest of the report is zeros.
@@ -76,6 +80,9 @@ pub fn parse_packet(text: &str) -> Result<Vec<Byte>, String> {
                 "{percent}" => Byte::Percent,
                 "{speed}" => Byte::Speed,
                 "{zone}" => Byte::Zone,
+                "{hue}" => Byte::Hue,
+                "{sat}" => Byte::Sat,
+                "{val}" => Byte::Val,
                 _ if t.starts_with('{') => return Err(format!("unknown placeholder {t}")),
                 _ => Byte::Lit(u8::from_str_radix(t.trim_start_matches("0x").trim_start_matches("0X"), 16).map_err(|_| format!("\"{t}\" is not a hex byte"))?),
             })
@@ -125,6 +132,9 @@ pub fn packets(templates: &[Packet], zones: &[(u8, Rgb)], brightness: u8, speed:
                     Byte::Percent => brightness.min(100),
                     Byte::Speed => super::via::qmk_speed(speed),
                     Byte::Zone => zone,
+                    Byte::Hue => super::via::hue_sat(color).0,
+                    Byte::Sat => super::via::hue_sat(color).1,
+                    Byte::Val => super::via::value_of(color, brightness),
                 };
             }
             out.push(buf);
@@ -426,6 +436,14 @@ mod tests {
         assert_eq!(r, vec![vec![7, 100, 50, 0, 200, 127, 50, 0, 0, 0]]);
         // Too long for the device.
         assert!(packets(&[t], &[(0, Rgb(1, 2, 3))], 100, 1.0, 4).is_err());
+    }
+
+    #[test]
+    fn hsv_goes_into_the_report() {
+        let t = leak(parse_packet("07 {hue} {sat} {val}").unwrap());
+        // Pure green: hue a third of the way round, full saturation, value halved by brightness.
+        assert_eq!(packets(&[t], &[(0, Rgb(0, 255, 0))], 50, 1.0, 4).unwrap(), vec![vec![7, 85, 255, 127]]);
+        assert_eq!(packets(&[t], &[(0, Rgb(255, 255, 255))], 100, 1.0, 4).unwrap(), vec![vec![7, 0, 0, 255]]);
     }
 
     #[test]

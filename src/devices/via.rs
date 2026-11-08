@@ -202,7 +202,7 @@ impl Via {
 }
 
 /// RGB to QMK hue/saturation (0..=255 each); QMK takes brightness separately.
-fn hue_sat(Rgb(r, g, b): Rgb) -> (u8, u8) {
+pub(crate) fn hue_sat(Rgb(r, g, b): Rgb) -> (u8, u8) {
     let (r, g, b) = (r as f32, g as f32, b as f32);
     let max = r.max(g).max(b);
     let d = max - r.min(g).min(b);
@@ -220,7 +220,7 @@ fn hue_sat(Rgb(r, g, b): Rgb) -> (u8, u8) {
 }
 
 /// QMK value (brightness 0..=255): the color's own lightness times the brightness slider.
-fn value_of(Rgb(r, g, b): Rgb, brightness: u8) -> u8 {
+pub(crate) fn value_of(Rgb(r, g, b): Rgb, brightness: u8) -> u8 {
     (r.max(g).max(b) as u32 * brightness.min(100) as u32 / 100) as u8
 }
 
