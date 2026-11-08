@@ -736,6 +736,24 @@ fn quit() {
     unsafe { DestroyWindow(HWND_MAIN.load(Ordering::Relaxed) as HWND) };
 }
 
+/// Destroys the app's other windows (the panel is only hidden, never closed), so they release
+/// their Direct2D objects now. Left in their thread-locals until the process ends, the last
+/// brush took the D2D and DXGI factories with it during teardown, and DXGI raised 0x87A there:
+/// a crash on every exit (seen 10-11.10.2026).
+fn destroy_other_windows(main: HWND) {
+    unsafe extern "system" fn collect(hwnd: HWND, list: LPARAM) -> BOOL {
+        (*(list as *mut Vec<HWND>)).push(hwnd);
+        1
+    }
+    let mut list: Vec<HWND> = Vec::new();
+    unsafe {
+        EnumThreadWindows(windows_sys::Win32::System::Threading::GetCurrentThreadId(), Some(collect), &mut list as *mut Vec<HWND> as LPARAM);
+        for w in list.into_iter().filter(|&w| w != main) {
+            DestroyWindow(w);
+        }
+    }
+}
+
 // ---------------------------------------------------------------- diagnostics
 
 fn reg_string(key: &str, value: &str) -> String {
@@ -1600,6 +1618,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             for line in devices::rawhid::release_all() {
                 log(&line);
             }
+            destroy_other_windows(hwnd);
             PostQuitMessage(0);
             0
         }
