@@ -79,8 +79,8 @@ Follow `CONTRIBUTING.md` ("A new protocol: write a driver") and the repository's
 
 Ask whether the person wants to share the device with everyone. If yes:
 
-- **Profile:** copy it to `profiles/<vendor>-<model>.toml`, add it to `BUILT_IN` in `src/devices/profile.rs` (the test `every_profile_file_is_built_in` checks this), set `tested = true` only if they checked it on the device, and add the device to the tables of `README.md` and `README.ru.md`.
-- **Driver:** the steps in `CONTRIBUTING.md`, both READMEs too.
+- **Profile:** copy it to `profiles/<vendor>-<model>.toml`, add it to `BUILT_IN` in `src/devices/profile.rs` (the test `every_profile_file_is_built_in` checks this), set `tested = true` only if they checked it on the device, and add the device to the tables of every README (`README.md` and the `README.*.md` translations).
+- **Driver:** the steps in `CONTRIBUTING.md`, every README too.
 - Run the three checks above, commit on a new branch, and open a pull request with `gh pr create` if `gh` is set up (fork first if they can't push to the repository). Fill in the pull request template: device, route, what was checked on hardware.
 - If they don't want to deal with git, help them open a device request issue instead (`.github/ISSUE_TEMPLATE/device-request.yml`) and attach the profile and the device report.
 

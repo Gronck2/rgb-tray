@@ -93,7 +93,7 @@ The `/add-device` skill walks through it. In short, from cheapest:
 4. Anything else needs code: a driver that implements `Device`, a `Kind` in `NATIVE` in `devices/mod.rs`, a `DRIVER` at the end of its module
    (`discover`, and `batteries`/`answering` if wireless, `note` for `--diagnose`, `open_for_keys` for per-key) added to `DRIVERS`.
 
-Then update both READMEs (`README.md`, `README.ru.md`). A native driver wins over the generic LampArray/VIA ones, and `discover()` dedups by id.
+Then update every README: `README.md` and its translations `README.*.md` (ru, zh-CN, es, de, fr, pt-BR, ja). A native driver wins over the generic LampArray/VIA ones, and `discover()` dedups by id.
 Never change the id scheme of an existing model: settings are keyed by it.
 
 ## Hardware gotchas (verified, do not "fix")

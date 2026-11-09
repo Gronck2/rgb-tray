@@ -1,6 +1,6 @@
 # RGB Tray
 
-**English** · [Русский](README.ru.md)
+**English** · [Русский](README.ru.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [Deutsch](README.de.md) · [Français](README.fr.md) · [Português (Brasil)](README.pt-BR.md) · [日本語](README.ja.md)
 
 A tiny Windows tray app that controls RGB lighting of keyboards, mice and lights directly over HID (and Tuya bulbs over the local network) — no vendor software (G HUB, Synapse, Armoury Crate, SignalRGB) running in the background.
 

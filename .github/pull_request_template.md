@@ -19,5 +19,5 @@ Where the protocol came from (documentation, OpenRGB / OpenRazer source, USB cap
 ## Checks
 
 - [ ] `cargo fmt --check`, `cargo clippy --release --all-targets -- -D warnings`, `cargo test --release` pass
-- [ ] `README.md` and `README.ru.md` list the device
+- [ ] `README.md` lists the device (the translations `README.*.md` too if you can; the maintainer updates the rest)
 - [ ] Device report (`rgbtray --diagnose`) attached or pasted below, if this adds a device

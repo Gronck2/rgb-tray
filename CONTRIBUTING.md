@@ -132,7 +132,7 @@ Logitech HID++ and ASUS Aura models are still in code: their drivers find what a
 
    A keyboard with per-key colors also fills in `open_for_keys` (see `logitech.rs`).
 
-4. Add the device to the tables in `README.md` and `README.ru.md`.
+4. Add the device to the table in `README.md`, and in the translations `README.*.md` if you can (the maintainer updates the rest).
 
 Some things to keep in mind:
 
@@ -155,7 +155,7 @@ If nobody has documented the protocol, it can be learned by recording what the v
 - One topic per pull request. Describe what you changed and **which hardware you checked it on**. Say so if you couldn't check it.
 - UI changes: attach `--snapshot` images (dark and light, and Russian if the strings changed).
 - CI must pass.
-- A new device or a behaviour change: update `README.md` and `README.ru.md`.
+- A new device or a behaviour change: update `README.md` (the translations `README.*.md` too if you can).
 
 ## License
 

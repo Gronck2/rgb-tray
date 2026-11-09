@@ -1,6 +1,6 @@
 # RGB Tray
 
-[English](README.md) · **Русский**
+[English](README.md) · **Русский** · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [Deutsch](README.de.md) · [Français](README.fr.md) · [Português (Brasil)](README.pt-BR.md) · [日本語](README.ja.md)
 
 Маленькое приложение в трее Windows, которое управляет подсветкой клавиатур, мышей и ламп напрямую по HID (а лампами Tuya — по локальной сети) — без фирменных программ (G HUB, Synapse, Armoury Crate, SignalRGB) в фоне.
 
