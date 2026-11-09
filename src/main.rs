@@ -463,6 +463,8 @@ fn rename_device(id: &str, name: &str) {
 // ---------------------------------------------------------------- battery
 
 const BATTERY_POLL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+/// Idle longer than this (seconds), the battery poll is skipped and a Logitech keyboard may fall asleep unseen.
+const IDLE_SKIP: u32 = 120;
 const SNOOZE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 /// Above this level (or on charge) the warnings are re-armed.
 const BATTERY_REARM: u8 = 15;
@@ -488,7 +490,7 @@ fn idle_seconds() -> u32 {
 fn spawn_battery_poller() {
     std::thread::spawn(|| loop {
         std::thread::sleep(BATTERY_POLL);
-        if idle_seconds() > 120 {
+        if idle_seconds() > IDLE_SKIP {
             continue;
         }
         let found = {
@@ -525,12 +527,29 @@ fn spawn_battery_poller() {
 /// looked for: a Logitech keyboard every 3 s (the firmware shows its own effect until then;
 /// a probe of a sleeping one costs ~0.5 s), every device every half minute. Once one answers,
 /// everything is re-applied.
+///
+/// A keyboard can also sleep and wake while the user is away, between battery polls (which skip
+/// idle periods), and come back with the firmware's effect: when input resumes after a long idle,
+/// the Logitech keyboards are sent their lighting again (a still sleeping one gets no link).
 fn spawn_link_watch() {
     std::thread::spawn(|| {
         let mut tick = 0u32;
+        let mut was_idle = false;
         loop {
             std::thread::sleep(std::time::Duration::from_secs(3));
             tick = (tick + 1) % 10;
+            let idle = idle_seconds();
+            if was_idle && idle < IDLE_SKIP {
+                let keyboards: Vec<String> = PRESENT.lock().unwrap().iter().filter(|id| id.starts_with("logitech-")).cloned().collect();
+                if !keyboards.is_empty() {
+                    log(&format!("input after idle: {keyboards:?}"));
+                    for id in &keyboards {
+                        forget_applied(id);
+                    }
+                    apply_all();
+                }
+            }
+            was_idle = idle > IDLE_SKIP;
             let missing = NO_LINK.lock().unwrap().clone();
             let all = tick == 0;
             if missing.is_empty() || !(all || missing.iter().any(|id| id.starts_with("logitech-"))) {
