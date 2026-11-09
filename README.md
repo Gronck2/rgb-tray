@@ -93,7 +93,7 @@ Close vendor lighting software before using RGB Tray: two programs writing to th
 
 ## Build from source
 
-Requires Windows 10/11 and stable [Rust](https://rustup.rs) (developed with the `x86_64-pc-windows-gnu` toolchain).
+Requires Windows 10/11 and stable [Rust](https://rustup.rs), the `x86_64-pc-windows-gnu` or `-msvc` toolchain. After installing rustup, open a new terminal so that `cargo` is on PATH.
 
 ```powershell
 cargo build --release            # target\release\rgbtray.exe

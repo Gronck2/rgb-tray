@@ -27,6 +27,9 @@ pub enum Byte {
     Percent,
     /// Effect speed 0..=255, about 127 normal, higher is faster: `{speed}`.
     Speed,
+    /// Effect speed in the device's own range, slowest first: `{speed:1-5}`, or `{speed:5-1}`
+    /// when its smaller numbers are faster.
+    SpeedIn(u8, u8),
     /// The zone's LED id (`[[zones]]`): `{zone}`. A report with it is sent once per zone.
     Zone,
     /// The color as HSV 0..=255, as QMK takes it: `{hue}`, `{sat}`, and `{val}` scaled by brightness.
@@ -138,6 +141,13 @@ fn byte(t: &str) -> Result<Byte, String> {
     if let Some(from) = checksum("sum") {
         return from.map(Byte::Sum);
     }
+    if let Some(range) = t.strip_prefix("{speed:").and_then(|r| r.strip_suffix('}')) {
+        let ends = range.split_once('-').and_then(|(a, b)| Some((a.parse::<u8>().ok()?, b.parse::<u8>().ok()?)));
+        return match ends {
+            Some((slow, fast)) if slow != fast => Ok(Byte::SpeedIn(slow, fast)),
+            _ => Err(format!("\"{t}\": write {{speed:A-B}}, A the slowest and B the fastest value (decimal), e.g. {{speed:1-5}}")),
+        };
+    }
     Ok(match t {
         "{r}" => Byte::R,
         "{g}" => Byte::G,
@@ -155,6 +165,17 @@ fn byte(t: &str) -> Result<Byte, String> {
         _ if t.starts_with('{') => return Err(format!("unknown placeholder {t}")),
         _ => Byte::Lit(u8::from_str_radix(t.trim_start_matches("0x").trim_start_matches("0X"), 16).map_err(|_| format!("\"{t}\" is not a hex byte"))?),
     })
+}
+
+/// The speed factor as a value from `slow` to `fast` (either way round), the middle one normal.
+fn speed_in(factor: f32, slow: u8, fast: u8) -> u8 {
+    let t = super::via::qmk_speed(factor) as f32 / 255.0;
+    (slow as f32 + t * (fast as f32 - slow as f32)).round() as u8
+}
+
+/// Whether a template takes the effect speed.
+pub fn uses_speed(t: Packet) -> bool {
+    t.iter().any(|b| matches!(b, Byte::Speed | Byte::SpeedIn(..)))
 }
 
 /// One color for the whole device: every zone's LED id with it, or LED id 0 without zones.
@@ -191,6 +212,7 @@ pub fn packets(templates: &[Packet], zones: &[(u8, Rgb)], brightness: u8, speed:
                     Byte::Brightness => (255 * brightness.min(100) as u32 / 100) as u8,
                     Byte::Percent => brightness.min(100),
                     Byte::Speed => super::via::qmk_speed(speed),
+                    Byte::SpeedIn(slow, fast) => speed_in(speed, slow, fast),
                     Byte::Zone => zone,
                     Byte::Hue => super::via::hue_sat(color).0,
                     Byte::Sat => super::via::hue_sat(color).1,
@@ -589,6 +611,15 @@ mod tests {
         assert_eq!(crate::devices::via::qmk_speed(1.0), 127);
         assert_eq!(crate::devices::via::qmk_speed(0.25), 0);
         assert_eq!(crate::devices::via::qmk_speed(4.0), 255);
+        // The device's own range: normal in the middle, either way round.
+        let t = leak(parse_packet("07 {speed:1-5}").unwrap());
+        assert_eq!(packets(&[t], &[(0, Rgb(0, 0, 0))], 100, 1.0, 2).unwrap(), vec![vec![7, 3]]);
+        assert_eq!(packets(&[t], &[(0, Rgb(0, 0, 0))], 100, 4.0, 2).unwrap(), vec![vec![7, 5]]);
+        let r = leak(parse_packet("07 {speed:5-1}").unwrap());
+        assert_eq!(packets(&[r], &[(0, Rgb(0, 0, 0))], 100, 0.25, 2).unwrap(), vec![vec![7, 5]]);
+        assert!(uses_speed(t) && uses_speed(r));
+        assert!(parse_packet("07 {speed:3-3}").is_err());
+        assert!(parse_packet("07 {speed:1-x}").unwrap_err().contains("{speed:A-B}"));
     }
 
     #[test]

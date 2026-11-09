@@ -247,13 +247,14 @@ fn from_profile(p: Profile) -> Result<Kind, String> {
             }
             // A speed slider only when the speed is used: the app draws an effect, or a report takes {speed}.
             let drawn = |e: Effect, list: &[Packet]| list.is_empty() && effects.contains(&e);
-            let speed =
-                if drawn(Effect::Breathe, breathe) || drawn(Effect::Cycle, cycle) || [static_, off, breathe, cycle].iter().any(|l| has(l, rawhid::Byte::Speed))
-                {
-                    Speed::Smooth
-                } else {
-                    Speed::None
-                };
+            let speed = if drawn(Effect::Breathe, breathe)
+                || drawn(Effect::Cycle, cycle)
+                || [static_, off, breathe, cycle].iter().any(|l| l.iter().any(|t| rawhid::uses_speed(t)))
+            {
+                Speed::Smooth
+            } else {
+                Speed::None
+            };
             let model = HidModel {
                 vid: h.vid,
                 pids: leak_slice(h.pids),
@@ -354,19 +355,55 @@ pub fn check(text: &str) -> String {
         let effects: Vec<String> = k.effects.iter().map(|e| format!("{e:?}").to_lowercase()).collect();
         let zones: Vec<String> = k.zones.iter().map(|(led, name)| format!("{led:#04x} {}", name.1)).collect();
         out += &format!(
-            "ok: {} \"{}\" [{protocol}], class {:?}, effects {}, zones [{}], speed {:?}, {}{}\n",
+            "ok: {} \"{}\" [{protocol}], class {:?}, effects {}, zones [{}], speed slider {}, {}{}\n",
             k.key,
             k.names.1,
             k.class,
             effects.join(" "),
             zones.join(", "),
-            k.speed,
+            if matches!(k.speed, Speed::None) { "no" } else { "yes" },
             if k.tested { "tested" } else { "untested" },
             if k.port_id { ", settings tied to the USB port" } else { "" },
         );
+        if let Protocol::Hid(m) = k.protocol {
+            out += &check_hid(m, k.effects);
+        }
         if built_in.contains(&k.key) {
             out += &format!("  note: replaces the built-in profile \"{}\" when put into the devices folder\n", k.key);
         }
+    }
+    out
+}
+
+/// The reports of a `[hid]` model for `--profile-check`: what each effect sends, and the report
+/// ids, which are easy to get wrong.
+fn check_hid(m: &HidModel, effects: &[Effect]) -> String {
+    let mut out = String::new();
+    let lists = [("init", m.init), ("static", m.static_), ("off", m.off), ("breathe", m.breathe), ("cycle", m.cycle), ("exit", m.exit)];
+    for (name, list) in lists {
+        let effect = match name {
+            "breathe" => Some(Effect::Breathe),
+            "cycle" => Some(Effect::Cycle),
+            _ => None,
+        };
+        let line = if list.is_empty() && effect.is_some_and(|e| effects.contains(&e)) {
+            "drawn by the app (static reports ~60 times a second)".to_string()
+        } else if name == "off" && list.is_empty() {
+            "static black".to_string()
+        } else if list.is_empty() {
+            continue;
+        } else {
+            let lens: Vec<String> = list.iter().map(|t| t.len().to_string()).collect();
+            format!("{} report(s) of {} bytes, report id included", list.len(), lens.join(", "))
+        };
+        out += &format!("  {name}: {line}\n");
+    }
+    let mut ids: Vec<u8> = lists.iter().flat_map(|(_, l)| l.iter()).filter_map(|t| if let rawhid::Byte::Lit(id) = t[0] { Some(id) } else { None }).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.iter().any(|&id| id != 0) {
+        let ids: Vec<String> = ids.iter().map(|id| format!("{id:02X}")).collect();
+        out += &format!("  note: the first byte of a report is its report id ({}); a device without report ids takes 00 first\n", ids.join(", "));
     }
     out
 }
@@ -494,7 +531,12 @@ mod tests {
     fn check_tells_what_the_app_makes_of_a_file() {
         let ok = check(include_str!("../../docs/examples/macropad-hid.toml"));
         assert!(ok.starts_with("ok: macropadhid \"MacroPad via [hid]\" [hid], class Keyboard"), "{ok}");
-        assert!(ok.contains("untested") && ok.contains("USB port"), "{ok}");
+        assert!(ok.contains("untested") && ok.contains("USB port") && ok.contains("speed slider yes"), "{ok}");
+        // Each list of reports with its lengths; breathing has none, so the app draws it.
+        assert!(ok.contains("  static: 2 report(s) of 5, 4 bytes") && ok.contains("  breathe: drawn by the app"), "{ok}");
+        assert!(!ok.contains("report id (") && !ok.contains("init: drawn"), "{ok}");
+        let id7 = include_str!("../../docs/examples/macropad-hid.toml").replace("\"00 07", "\"07 07");
+        assert!(check(&id7).contains("its report id (07)"));
         assert!(check(include_str!("../../profiles/geekboard-macropad.toml")).contains("replaces the built-in profile \"macropad\""));
         assert!(check("key = \"x\"").starts_with("error: "));
         assert!(check("key = \"logitech\"\nname = \"X\"\nclass = \"mouse\"\n[razer]\npids = [1]\ntransaction_id = 0x1F\nleds = [4]\n").contains("taken"));

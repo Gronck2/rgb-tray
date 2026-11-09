@@ -1688,8 +1688,11 @@ fn main() {
     // `--profile-check <out.txt> <profile.toml>`: what the app makes of a profile, no device needed.
     if let Some(i) = args.iter().position(|a| a == "--profile-check") {
         let out = args.get(i + 1).cloned().unwrap_or_else(|| "profile.txt".into());
-        let file = args.get(i + 2).map(String::as_str).unwrap_or("");
         let _ = std::fs::write(&out, "");
+        let Some(file) = args.get(i + 2) else {
+            append(&out, "usage: rgbtray --profile-check <out.txt> <profile.toml>\n");
+            return;
+        };
         append(&out, &std::fs::read_to_string(file).map_or_else(|e| format!("{file}: {e}\n"), |t| devices::profile::check(&t)));
         return;
     }

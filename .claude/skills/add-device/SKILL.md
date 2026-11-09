@@ -38,8 +38,8 @@ If the device is marked SUPPORTED but doesn't work right, this is a bug, not a n
 
 1. **Already works:** a LampArray device or a QMK keyboard with VIA. Have them open the panel; at most write a profile for a nicer name (`docs/profiles.md`).
 2. **A Razer model RGB Tray doesn't list:** a `[razer]` profile. Take the product ids, transaction id and LED ids from OpenRazer's source (`driver/razer*_driver.h` and `.c`), see `docs/profiles.md`.
-3. **A simple protocol:** a `[hid]` profile, report templates with the color in them (`docs/profiles.md`, section `[hid]`). No compiling.
-4. **Anything that needs answers, handshakes or state** (an XOR or sum checksum, "take control" reports and per-LED colors a `[hid]` profile can do): a Rust driver (`CONTRIBUTING.md`, "A new protocol: write a driver"). This needs the Rust toolchain.
+3. **A simple protocol:** a `[hid]` profile, report templates with the color in them (`docs/profiles.md`, section `[hid]`). No compiling. It can also do an XOR or sum checksum, "take control" reports before and "give back" ones at exit, per-LED colors, and a speed in the device's own range (`{speed:1-5}`).
+4. **Anything that needs answers, handshakes or state**: a Rust driver (`CONTRIBUTING.md`, "A new protocol: write a driver"). This needs the Rust toolchain.
 
 ## 3. Find out the protocol
 
@@ -59,7 +59,7 @@ Bytes start with the report id (`00` when the collection has none) and are padde
 
 ## 4. Write and test the profile
 
-Write the profile in a scratch location first, following `docs/profiles.md` exactly (fields, `key` rules, `tested`). `rgbtray --profile-check out.txt <profile.toml>` reads it without touching any device: fix every `error:` line first. Then:
+Write the profile at the root of the repository clone first (e.g. `my-device.toml`; it goes into `profiles/` only when it is contributed), following `docs/profiles.md` exactly (fields, `key` rules, `tested`). `rgbtray --profile-check out.txt <profile.toml>` reads it without touching any device: fix every `error:` line first. Then:
 
 ```
 rgbtray --profile-test out.txt <profile.toml>

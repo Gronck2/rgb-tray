@@ -108,7 +108,7 @@ static = ["07 0A {zone} {r} {g} {b}", "07 0B"]
 | `vid`, `pids` | yes | USB vendor id and product ids (in the device report). |
 | `usage_page` | yes | Usage page of the HID collection the reports go to, usually a vendor one (`0xFF00` and up). The device report lists the collections of each device. |
 | `usage` | no | Its usage, if the device has several collections on that page. Without it, the first matching collection of each device is used. |
-| `report` | yes | `feature` (sent with HidD_SetFeature) or `output` (written to the device). Each report is padded with zeros to the collection's report length. |
+| `report` | yes | `feature` (sent with HidD_SetFeature) or `output` (written to the device). Each report is padded with zeros to the collection's report length. The lengths in the device report count the report id byte too: a device with 64-byte reports and no report ids shows 65. |
 | `static` | yes | Reports that show a steady color, in order. |
 | `off` | no | Reports that switch the lighting off. By default `static` with black. |
 | `init` | no | Reports sent before every change of the lighting (not between frames of an effect the app draws), e.g. "software control on". Sent every time, so a device that reset after sleep gets them too. |
@@ -116,7 +116,9 @@ static = ["07 0A {zone} {r} {g} {b}", "07 0B"]
 | `breathe`, `cycle` | no | Reports that start the firmware's breathing or spectrum. Without them the app draws the effect by sending `static` about 60 times a second. |
 | `delay_ms` | no | Pause between reports, for devices that drop reports sent too fast. Effects the app draws then send no more often than that either. |
 
-A report is hex bytes separated by spaces, starting with the report id (`00` if the device has no report ids). Placeholders:
+The fields of the model (`key`, `name`, `effects`, `[[zones]]`…) go above `[hid]`: in TOML everything after a `[section]` line belongs to that section, so `effects` written after `[hid]` is read as an unknown field of `[hid]`.
+
+A report is hex bytes separated by spaces, starting with the report id (`00` if the device has no report ids). A protocol whose commands start with, say, `07` still needs `00` before it when the collection has no report ids: otherwise `07` is taken as the report id. Placeholders:
 
 | Placeholder | Value |
 |---|---|
@@ -125,6 +127,7 @@ A report is hex bytes separated by spaces, starting with the report id (`00` if 
 | `{brightness}` | Brightness 0–255. |
 | `{percent}` | Brightness 0–100. |
 | `{speed}` | Effect speed 0–255, about 127 normal, higher is faster. |
+| `{speed:A-B}` | Effect speed in the device's own range, from A (slowest) to B (fastest), decimal, the middle normal: `{speed:1-5}`; `{speed:5-1}` when smaller numbers are faster. |
 | `{zone}` | The zone's `led` id. A report with `{zone}` is sent once per zone, with that zone's color. `[[zones]]` need it in a `static` report, and it needs `[[zones]]`. |
 | `{hue}` `{sat}` `{val}` | The color as HSV, each 0–255, for devices that take it so (QMK and many others): `{val}` is scaled by the brightness slider. |
 | `{xor}` `{sum}` | Checksum: XOR, or the low byte of the sum, of the bytes from byte 1 (right after the report id) up to the checksum. `{xor:2}`, `{sum:3}`: from that byte instead (counted from 0, the report id). Bytes after the checksum aren't covered. |
@@ -133,7 +136,7 @@ A group `[ ... ]*N` stands for its bytes repeated N times, e.g. `[ {r} {g} {b} ]
 
 A real profile with `init`, `exit` and HSV, checked on a device: [`docs/examples/macropad-hid.toml`](examples/macropad-hid.toml).
 
-The panel shows a speed slider only if the app draws breathing or spectrum (no `breathe` or `cycle` reports for an effect the device has) or a report has `{speed}`. Zone `led` ids must differ.
+The panel shows a speed slider only if the app draws breathing or spectrum (no `breathe` or `cycle` reports for an effect the device has) or a report has `{speed}` or `{speed:A-B}`. Zone `led` ids must differ.
 
 The device has no serial number to the app, so its settings are tied to its USB port. If a protocol needs answers from the device, a handshake or a state, a profile can't describe it: that is a driver (CONTRIBUTING.md, "A new protocol").
 
@@ -145,5 +148,5 @@ rgbtray --hid-send out.txt 1234:5678:FF00 feature "07 0A 01 FF 00 00" "07 0B"
 rgbtray --profile-test out.txt my-strip.toml
 ```
 
-`--profile-check` needs no device: it writes what the app makes of each model in the file (protocol, effects, zones, speed) or what is wrong with it, for any profile, not only `[hid]`.
+`--profile-check` needs no device: it writes what the app makes of each model in the file (protocol, effects, zones, whether there is a speed slider) or what is wrong with it, for any profile, not only `[hid]`. For a `[hid]` model it also lists what each effect sends (its reports and their lengths, or "drawn by the app") and the report ids the reports start with.
 `--hid-send` sends single reports to the first collection that matches `vid:pid[:usage_page[:usage]]` and appends what it sent and what the device answered to `out.txt` (`feature`, `output`, or `get` to read a feature report by id; any other mode sends nothing). `--profile-test` plays red, green, blue, dim white, each zone in turn, breathing, spectrum and off with a [hid] profile, a step every few seconds, and logs each step. Watch the device while it runs.

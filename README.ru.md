@@ -93,7 +93,7 @@ local_key = "0123456789abcdef"
 
 ## Сборка из исходников
 
-Нужны Windows 10/11 и стабильный [Rust](https://rustup.rs) (разработка ведётся на `x86_64-pc-windows-gnu`).
+Нужны Windows 10/11 и стабильный [Rust](https://rustup.rs), набор `x86_64-pc-windows-gnu` или `-msvc`. После установки rustup откройте новый терминал, чтобы `cargo` нашёлся в PATH.
 
 ```powershell
 cargo build --release            # target\release\rgbtray.exe
