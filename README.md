@@ -2,13 +2,12 @@
 
 **English** · [Русский](README.ru.md)
 
-A tiny Windows tray app that controls RGB lighting of keyboards and mice directly over HID — no vendor software (G HUB, Synapse, Armoury Crate, SignalRGB) running in the background.
+A tiny Windows tray app that controls RGB lighting of keyboards, mice and lights directly over HID (and Tuya bulbs over the local network) — no vendor software (G HUB, Synapse, Armoury Crate, SignalRGB) running in the background.
 
 <p>
   <img src="docs/screenshots/panel-dark.png" width="300" alt="Tray panel">
   <img src="docs/screenshots/editor-dark.png" width="520" alt="Per-key editor">
 </p>
-
 
 ## Supported devices
 
@@ -43,7 +42,7 @@ The app finds the bulb on the local network by itself and remembers its address 
 
 Right-click the tray icon → **Request device support…**. RGB Tray lists your HID devices, marks the ones that may have controllable lighting, copies the report to the clipboard and opens the [request form](../../issues/new?template=device-request.yml). Enter the model and paste the report. Serial numbers in the report are shortened.
 
-A Razer device can often be added right away, without a new version: describe it in a small profile file ([docs/profiles.md](docs/profiles.md)).
+A Razer or QMK/VIA device, or one with a simple protocol, can often be added right away, without a new version: describe it in a small profile file ([docs/profiles.md](docs/profiles.md)).
 
 ### Adding your device with Claude
 
@@ -86,7 +85,7 @@ Close vendor lighting software before using RGB Tray: two programs writing to th
 | Command | What it does |
 |---|---|
 | `rgbtray --diagnose [file.txt]` | Writes the device report: app and Windows versions, supported devices, and all HID devices grouped with their interfaces, likely lighting controllers first. Without a file name it is saved to `%APPDATA%\rgbtray\rgbtray-diagnose.txt` and opened in Notepad. Also available in the tray menu. |
-| `rgbtray --hid-send <out.txt> <vid:pid[:page]> <feature|output|get> "<hex>"…` | Sends raw HID reports and appends the answers to the file, for working out a device's protocol ([docs/profiles.md](docs/profiles.md#hid-any-device-with-a-simple-protocol)). |
+| `rgbtray --hid-send <out.txt> <vid:pid[:page[:usage]]> <feature|output|get> "<hex>"…` | Sends raw HID reports and appends the answers to the file, for working out a device's protocol ([docs/profiles.md](docs/profiles.md#hid-any-device-with-a-simple-protocol)). |
 | `rgbtray --profile-check <out.txt> <profile.toml>` | Reads a profile file without touching any device and writes what the app makes of each model, or what is wrong with it. |
 | `rgbtray --profile-test <out.txt> <profile.toml>` | Plays colors and effects on the devices of a `[hid]` profile that isn't installed yet and logs each step. |
 | `rgbtray --show` | Starts with the panel open and pinned. |
@@ -123,4 +122,4 @@ Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at 
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
 
-Not affiliated with Logitech, Razer, ASUS or Geekboard. Trademarks belong to their owners.
+Not affiliated with Logitech, Razer, ASUS, Geekboard or Tuya. Trademarks belong to their owners.
