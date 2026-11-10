@@ -4,6 +4,8 @@
 
 A tiny Windows tray app that controls RGB lighting of keyboards, mice and lights directly over HID (and Tuya bulbs over the local network) — no vendor software (G HUB, Synapse, Armoury Crate, SignalRGB) running in the background.
 
+**Your device isn't listed? Add it yourself.** Open this repository in [Claude Code](https://claude.com/claude-code) and type `/add-device`: Claude finds the protocol, writes a profile or a driver and tests it with you, no Rust or HID knowledge needed ([how it works](#adding-your-device-with-claude)).
+
 <p>
   <img src="docs/screenshots/panel-dark.png" width="300" alt="Tray panel">
   <img src="docs/screenshots/editor-dark.png" width="520" alt="Per-key editor">

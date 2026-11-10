@@ -4,6 +4,8 @@
 
 Маленькое приложение в трее Windows, которое управляет подсветкой клавиатур, мышей и ламп напрямую по HID (а лампами Tuya — по локальной сети) — без фирменных программ (G HUB, Synapse, Armoury Crate, SignalRGB) в фоне.
 
+**Вашего устройства нет в списке? Добавьте его сами.** Откройте этот репозиторий в [Claude Code](https://claude.com/claude-code) и наберите `/add-device`: Claude найдёт протокол, напишет профиль или драйвер и проверит его вместе с вами, знать Rust и HID не нужно ([как это работает](#как-добавить-своё-устройство-с-claude)).
+
 <p>
   <img src="docs/screenshots/panel-dark.png" width="300" alt="Панель в трее">
   <img src="docs/screenshots/editor-dark.png" width="520" alt="Цвета клавиш">

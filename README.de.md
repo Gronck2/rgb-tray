@@ -4,6 +4,8 @@
 
 Eine kleine Windows-Tray-App, die die RGB-Beleuchtung von Tastaturen, Mäusen und Lampen direkt über HID steuert (und Tuya-Lampen über das lokale Netzwerk) – ohne dass Herstellersoftware (G HUB, Synapse, Armoury Crate, SignalRGB) im Hintergrund läuft.
 
+**Dein Gerät fehlt in der Liste? Füge es selbst hinzu.** Öffne dieses Repository in [Claude Code](https://claude.com/claude-code) und gib `/add-device` ein: Claude findet das Protokoll, schreibt ein Profil oder einen Treiber und testet es mit dir, ohne dass du Rust oder HID kennen musst ([so funktioniert es](#das-eigene-gerät-mit-claude-hinzufügen)).
+
 <p>
   <img src="docs/screenshots/panel-dark.png" width="300" alt="Tray-Panel">
   <img src="docs/screenshots/editor-dark.png" width="520" alt="Editor für einzelne Tasten">

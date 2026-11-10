@@ -4,6 +4,8 @@
 
 キーボード、マウス、ライトの RGB ライティングを HID で直接制御する（Tuya 電球はローカルネットワーク経由）、Windows 用の小さなトレイアプリです。メーカー製ソフトウェア（G HUB、Synapse、Armoury Crate、SignalRGB）をバックグラウンドで動かしておく必要はありません。
 
+**お使いのデバイスが一覧にない場合は、自分で追加できます。** このリポジトリを [Claude Code](https://claude.com/claude-code) で開き、`/add-device` と入力してください。Claude がプロトコルを調べ、プロファイルまたはドライバーを書き、あなたと一緒にテストします。Rust や HID の知識は不要です（[仕組み](#claude-でデバイスを追加する)）。
+
 <p>
   <img src="docs/screenshots/panel-dark.png" width="300" alt="トレイパネル">
   <img src="docs/screenshots/editor-dark.png" width="520" alt="キーごとのエディター">

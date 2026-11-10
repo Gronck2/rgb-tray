@@ -4,6 +4,8 @@
 
 Una pequeña aplicación de la bandeja de Windows que controla la iluminación RGB de teclados, ratones y luces directamente por HID (y las bombillas Tuya por la red local), sin software del fabricante (G HUB, Synapse, Armoury Crate, SignalRGB) ejecutándose en segundo plano.
 
+**¿Tu dispositivo no está en la lista? Añádelo tú mismo.** Abre este repositorio en [Claude Code](https://claude.com/claude-code) y escribe `/add-device`: Claude encuentra el protocolo, escribe un perfil o un controlador y lo prueba contigo, sin necesidad de saber Rust ni HID ([cómo funciona](#añadir-tu-dispositivo-con-claude)).
+
 <p>
   <img src="docs/screenshots/panel-dark.png" width="300" alt="Panel de la bandeja">
   <img src="docs/screenshots/editor-dark.png" width="520" alt="Editor por tecla">
