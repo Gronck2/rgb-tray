@@ -2,6 +2,8 @@
 
 [English](README.md) · [Русский](README.ru.md) · **简体中文** · [Español](README.es.md) · [Deutsch](README.de.md) · [Français](README.fr.md) · [Português (Brasil)](README.pt-BR.md) · [日本語](README.ja.md)
 
+**网站：** [rgb-tray.gronck.com](https://rgb-tray.gronck.com/zh-cn/)
+
 一个小巧的 Windows 托盘应用，直接通过 HID 控制键盘、鼠标和灯具的 RGB 灯效（Tuya 灯泡则通过局域网控制），无需在后台运行厂商软件（G HUB、Synapse、Armoury Crate、SignalRGB）。
 
 **列表里没有你的设备？自己添加即可。** 在 [Claude Code](https://claude.com/claude-code) 中打开本仓库并输入 `/add-device`：Claude 会找出协议、编写配置文件或驱动，并与你一起测试，无需了解 Rust 或 HID（[工作原理](#借助-claude-添加你的设备)）。

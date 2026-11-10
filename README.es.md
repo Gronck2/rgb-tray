@@ -2,6 +2,8 @@
 
 [English](README.md) · [Русский](README.ru.md) · [简体中文](README.zh-CN.md) · **Español** · [Deutsch](README.de.md) · [Français](README.fr.md) · [Português (Brasil)](README.pt-BR.md) · [日本語](README.ja.md)
 
+**Sitio web:** [rgb-tray.gronck.com](https://rgb-tray.gronck.com/es/)
+
 Una pequeña aplicación de la bandeja de Windows que controla la iluminación RGB de teclados, ratones y luces directamente por HID (y las bombillas Tuya por la red local), sin software del fabricante (G HUB, Synapse, Armoury Crate, SignalRGB) ejecutándose en segundo plano.
 
 **¿Tu dispositivo no está en la lista? Añádelo tú mismo.** Abre este repositorio en [Claude Code](https://claude.com/claude-code) y escribe `/add-device`: Claude encuentra el protocolo, escribe un perfil o un controlador y lo prueba contigo, sin necesidad de saber Rust ni HID ([cómo funciona](#añadir-tu-dispositivo-con-claude)).

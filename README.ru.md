@@ -2,6 +2,8 @@
 
 [English](README.md) · **Русский** · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [Deutsch](README.de.md) · [Français](README.fr.md) · [Português (Brasil)](README.pt-BR.md) · [日本語](README.ja.md)
 
+**Сайт:** [rgb-tray.gronck.com](https://rgb-tray.gronck.com/ru/)
+
 Маленькое приложение в трее Windows, которое управляет подсветкой клавиатур, мышей и ламп напрямую по HID (а лампами Tuya — по локальной сети) — без фирменных программ (G HUB, Synapse, Armoury Crate, SignalRGB) в фоне.
 
 **Вашего устройства нет в списке? Добавьте его сами.** Откройте этот репозиторий в [Claude Code](https://claude.com/claude-code) и наберите `/add-device`: Claude найдёт протокол, напишет профиль или драйвер и проверит его вместе с вами, знать Rust и HID не нужно ([как это работает](#как-добавить-своё-устройство-с-claude)).

@@ -2,6 +2,8 @@
 
 [English](README.md) · [Русский](README.ru.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [Deutsch](README.de.md) · **Français** · [Português (Brasil)](README.pt-BR.md) · [日本語](README.ja.md)
 
+**Site web :** [rgb-tray.gronck.com](https://rgb-tray.gronck.com/fr/)
+
 Une petite application Windows pour la zone de notification qui pilote l'éclairage RGB des claviers, souris et lampes directement via HID (et les ampoules Tuya via le réseau local), sans logiciel constructeur (G HUB, Synapse, Armoury Crate, SignalRGB) tournant en arrière-plan.
 
 **Votre périphérique n'est pas dans la liste ? Ajoutez-le vous-même.** Ouvrez ce dépôt dans [Claude Code](https://claude.com/claude-code) et tapez `/add-device` : Claude trouve le protocole, écrit un profil ou un pilote et le teste avec vous, sans connaître Rust ni HID ([comment ça marche](#ajouter-votre-périphérique-avec-claude)).
