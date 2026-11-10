@@ -2,6 +2,8 @@
 
 [English](README.md) · [Русский](README.ru.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [Deutsch](README.de.md) · [Français](README.fr.md) · [Português (Brasil)](README.pt-BR.md) · **日本語**
 
+**ウェブサイト：** [rgb-tray.gronck.com](https://rgb-tray.gronck.com/ja/)
+
 キーボード、マウス、ライトの RGB ライティングを HID で直接制御する（Tuya 電球はローカルネットワーク経由）、Windows 用の小さなトレイアプリです。メーカー製ソフトウェア（G HUB、Synapse、Armoury Crate、SignalRGB）をバックグラウンドで動かしておく必要はありません。
 
 **お使いのデバイスが一覧にない場合は、自分で追加できます。** このリポジトリを [Claude Code](https://claude.com/claude-code) で開き、`/add-device` と入力してください。Claude がプロトコルを調べ、プロファイルまたはドライバーを書き、あなたと一緒にテストします。Rust や HID の知識は不要です（[仕組み](#claude-でデバイスを追加する)）。
