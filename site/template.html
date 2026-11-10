@@ -59,14 +59,14 @@
 <a class="btn btn-secondary" href="#add-device">{{btn_add}}</a>
 </div>
 <p class="release-note" data-release="{{release_note:attr}}" data-size="{{release_size:attr}}" hidden></p>
-<p class="replaces"><span>{{replaces_label}}</span> <s>G HUB</s> <s>Synapse</s> <s>Armoury Crate</s> <s>SignalRGB</s></p>
+<p class="replaces"><span>{{replaces_label}}</span> <s>G HUB</s> <s>Synapse</s> <s>Armoury Crate</s> <s>SignalRGB</s></p>
 </div>
 <div class="hero-shot">
 <div class="glow" aria-hidden="true"></div>
-<a class="shot zoom" href="{{root}}img/panel-dark.png">
+<a class="shot zoom" href="{{hero_dark}}">
 <picture>
-<source srcset="{{root}}img/panel-light.png" media="(prefers-color-scheme: light)">
-<img src="{{root}}img/panel-dark.png" width="540" height="1098" alt="{{hero_alt:attr}}">
+<source srcset="{{hero_light}}" media="(prefers-color-scheme: light)">
+<img src="{{hero_dark}}" width="{{hero_w}}" height="{{hero_h}}" alt="{{hero_alt:attr}}">
 </picture>
 </a>
 </div>

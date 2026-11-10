@@ -25,7 +25,6 @@ REPO = "https://github.com/Gronck2/rgb-tray"
 # English is the default and is served at /, the others at /<code in lower case>/ (GitHub Pages paths are
 # case-sensitive, and 404.html sends /RU/ or /zh-CN/ there).
 LANGS = ["en", "ru", "zh-CN", "es", "de", "fr", "pt-BR", "ja"]
-LANGS = ["en", "ru"]  # TEMP
 NAMES = {
     "en": "English",
     "ru": "Русский",
@@ -40,8 +39,26 @@ NAMES = {
 SHORT = {"en": "EN", "ru": "RU", "zh-CN": "中文", "es": "ES", "de": "DE", "fr": "FR", "pt-BR": "PT", "ja": "日本語"}
 # Every language has a README; CONTRIBUTING and the profile docs exist in English and Russian only.
 DOCS_IN = {"en", "ru"}
-# Screenshots of the gallery, in order, with their pixel sizes (docs/screenshots, rendered with --snapshot).
-SHOTS = {"panel-dark": (540, 1098), "panel-light": (540, 1098), "editor-dark": (1167, 966)}
+# Screenshots of the gallery, in order (docs/screenshots, rendered with --snapshot).
+SHOTS = ["panel-dark", "panel-light", "editor-dark"]
+# The app's interface is in English and Russian: docs/screenshots/<view>.png show the Russian one (the README uses
+# them), <view>-en.png the English one (rendered by .github/workflows/screenshots.yml), for every other language.
+UI_LANGS = {"ru": ""}
+
+
+def shot(lang, view):
+    return f"{view}{UI_LANGS.get(lang, '-en')}.png"
+
+
+def png_size(name):
+    """Width and height of docs/screenshots/<name>, from the PNG header."""
+    path = ROOT / "docs" / "screenshots" / name
+    if not path.exists():
+        fail(f"docs/screenshots/{name} is missing")
+    head = path.read_bytes()[:24]
+    if head[:8] != b"\x89PNG\r\n\x1a\n":
+        fail(f"docs/screenshots/{name} is not a PNG")
+    return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
 STATIC = ["style.css", "site.js", "404.html", "favicon.svg", "fonts"]
 
 CURRENT = ' aria-current="page"'
@@ -91,7 +108,10 @@ def blocks(lang, loc):
     out["root"] = root
     out["home_path"] = page_path(lang) or "./"
     out["page_url"] = BASE + page_path(lang)
-    out["og_image"] = f"{BASE}img/panel-dark.png"
+    out["og_image"] = f"{BASE}img/{shot(lang, 'panel-dark')}"
+    out["hero_dark"] = f"{root}img/{shot(lang, 'panel-dark')}"
+    out["hero_light"] = f"{root}img/{shot(lang, 'panel-light')}"
+    out["hero_w"], out["hero_h"] = (str(n) for n in png_size(shot(lang, "panel-dark")))
     out["readme_url"] = f"{REPO}/blob/main/README{suffix(lang)}.md"
     out["contributing_url"] = f"{REPO}/blob/main/CONTRIBUTING{doc}.md"
     out["profiles_doc_url"] = f"{REPO}/blob/main/docs/profiles{doc}.md"
@@ -118,8 +138,8 @@ def blocks(lang, loc):
     if [s["view"] for s in loc["shots"]] != list(SHOTS):
         fail(f"{lang}.toml: [[shots]] views must be {list(SHOTS)} in this order")
     out["shot_list"] = "\n".join(
-        f'<figure class="{s["view"].split("-")[0]}"><a class="shot zoom" href="{root}img/{s["view"]}.png">'
-        f'<img src="{root}img/{s["view"]}.png" width="{SHOTS[s["view"]][0]}" height="{SHOTS[s["view"]][1]}" '
+        f'<figure class="{s["view"].split("-")[0]}"><a class="shot zoom" href="{root}img/{shot(lang, s["view"])}">'
+        f'<img src="{root}img/{shot(lang, s["view"])}" width="{png_size(shot(lang, s["view"]))[0]}" height="{png_size(shot(lang, s["view"]))[1]}" '
         f'alt="{a(s["alt"])}" loading="lazy"></a><figcaption>{s["caption"]}</figcaption></figure>'
         for s in loc["shots"]
     )
@@ -185,11 +205,8 @@ def main():
             fail(f"404.html has no link to /{page_path(lang)}")
     img = out / "img"
     img.mkdir()
-    for view in SHOTS:
-        src = ROOT / "docs" / "screenshots" / f"{view}.png"
-        if not src.exists():
-            fail(f"docs/screenshots/{view}.png is missing")
-        shutil.copy2(src, img / src.name)
+    for name in sorted({shot(lang, view) for lang in LANGS for view in SHOTS}):
+        shutil.copy2(ROOT / "docs" / "screenshots" / name, img / name)
     print(f"build.py: {len(LANGS)} pages in {out}")
 
 

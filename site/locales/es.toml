@@ -1,0 +1,273 @@
+# Texts of the landing page (site/template.html), Spanish. Values are HTML; build.py checks that every language
+# has the same keys and the same `hue`, `view` and `cmd` values. Translated from en.toml; terms follow README.es.md.
+
+html_title = "RGB Tray — una pequeña aplicación de bandeja para la iluminación RGB de tu teclado, ratón y luces"
+meta_description = "Una diminuta aplicación de bandeja de Windows que controla la iluminación RGB de dispositivos Logitech, Razer, ASUS, QMK/VIA y LampArray directamente por HID, y de bombillas Tuya por la red local, sin G HUB, Synapse, Armoury Crate ni SignalRGB."
+og_description = "Una diminuta aplicación de bandeja de Windows en lugar de G HUB, Synapse, Armoury Crate y SignalRGB. Gratuita y de código abierto."
+skip_link = "Saltar al contenido"
+
+nav_label = "Principal"
+nav_devices = "Dispositivos"
+nav_add = "Añade tu dispositivo"
+nav_download = "Descargar"
+opens_github = "(abre github.com)"
+lang_label = "idioma"
+
+tag_free = "Gratuita"
+tag_open_source = "Código abierto"
+hero_sub = "Toda tu iluminación RGB desde una diminuta aplicación de bandeja."
+hero_lede = "RGB Tray controla teclados, ratones y luces directamente por HID, y las bombillas Tuya por tu red local. Color, efecto y brillo para todo a la vez o para cada dispositivo por separado, sin software del fabricante ejecutándose en segundo plano."
+btn_download = "Descargar para Windows"
+btn_add = "Añade tu dispositivo"
+release_note = "Versión {version}"
+release_size = "{mb} MB"
+replaces_label = "En lugar de"
+hero_alt = "El panel de RGB Tray: un color y un efecto para todos los dispositivos, el brillo global y una tarjeta para cada dispositivo"
+
+why_title = "Por qué una sola aplicación pequeña"
+why_lede = "Cada marca tiene su propia aplicación de iluminación, y todas quieren ejecutarse en segundo plano. RGB Tray se encarga de la iluminación de todas ellas en una sola."
+
+devices_title = "Dispositivos compatibles"
+devices_lede = "Seis familias por ahora. Otros modelos que usen los mismos protocolos pueden funcionar también, y a menudo se puede añadir uno nuevo con un pequeño archivo de texto."
+devices_note = "Las conexiones, todos los modelos Razer y cómo obtener una clave Tuya están en la"
+anchor_devices = "#dispositivos-compatibles"
+devices_link = "tabla completa de dispositivos en GitHub"
+
+features_title = "Qué hace"
+features_lede = "Pequeña, pero no básica: lo que de otro modo tendrías que abrir una aplicación del fabricante para hacer."
+
+shots_title = "Un vistazo por dentro"
+shots_lede = "El panel en el tema oscuro y en el claro, y el editor por tecla del Logitech G915 TKL. Haz clic para ampliar."
+
+limits_title = "Qué no hace"
+limits_lede = "Conviene saberlo antes de desinstalar nada."
+
+add_title = "¿Tu dispositivo no está en la lista? Añádelo tú mismo"
+add_lede = "Muchos dispositivos no necesitan nada de código, solo un pequeño archivo de perfil. Con Claude Code ni siquiera necesitas saber Rust ni HID: Claude hace el trabajo técnico y tú miras las luces."
+
+claude_title = "Con Claude Code: /add-device"
+claude_text = "El repositorio incluye una skill <code>/add-device</code> para <a href=\"https://claude.com/claude-code\">Claude Code</a>. Lleva a Claude desde el informe del dispositivo hasta un perfil o un controlador probado, y hasta un pull request si quieres uno."
+claude_safety = "<strong>Claude no puede ver las luces</strong>, así que nada cuenta como funcionando hasta que tú lo digas. Nunca envía comandos de actualización de firmware, de bootloader, de restablecimiento de fábrica ni de guardado en la memoria flash, y pregunta antes de enviar cualquier informe que se haya inventado. Si un dispositivo deja de responder, desconéctalo y vuelve a conectarlo."
+
+routes_title = "Cuatro rutas, la más sencilla primero"
+routes_text = "Tanto si trabajas con Claude como a mano, el dispositivo toma la primera ruta que le sirva."
+
+commands_title = "Las herramientas de la aplicación"
+commands_text = "Los perfiles se escriben y se comprueban con la propia aplicación, sin compilar nada. Es un programa de Windows sin consola, así que cada herramienta escribe su resultado en el archivo que indiques."
+th_command = "Comando"
+th_what = "Qué hace"
+commands_note = "Tus propios perfiles van en <code>%APPDATA%\\rgbtray\\devices\\</code> y funcionan tras reiniciar la aplicación; uno con la misma <code>key</code> sustituye a un perfil integrado. Los campos y todas las secciones de protocolo están en"
+commands_link = "docs/profiles.md"
+
+share_title = "Compártelo con todos"
+share_text = "Cuando tu dispositivo funciona, un pull request lo integra para todos los usuarios de RGB Tray. Claude puede hacerlo todo por ti con <code>gh pr create</code>:"
+share_fork = "Hacer fork en GitHub"
+share_request = "Solicitar un dispositivo"
+share_contributing = "Cómo contribuir"
+
+download_title = "Descarga e instalación"
+download_lede = "Un solo archivo: el instalador es la propia aplicación. Sin instalar ningún runtime y sin derechos de administrador."
+btn_releases = "Todas las versiones"
+smartscreen_head = "SmartScreen puede mostrar una advertencia la primera vez."
+smartscreen_text = "El instalador aún no está firmado digitalmente: elige Más información → Ejecutar de todas formas. Cada versión indica el SHA-256 de su instalador."
+vendor_head = "Cierra el software de iluminación del fabricante."
+vendor_text = "Dos programas que escriben en el mismo dispositivo se estorban entre sí. En Windows 11, el servicio “Logitech LampArray” (Iluminación dinámica) hace que el G915 ignore los efectos; RGB Tray avisa de ello y ofrece desactivarlo."
+settings_head = "Tus ajustes están a salvo."
+settings_text = "Se guardan en <code>%APPDATA%\\rgbtray</code> y se conservan tras actualizaciones y reinstalaciones. Las copias de los últimos 14 días y de antes de cada actualización se guardan en <code>backups</code>, y un archivo de ajustes dañado se sustituye por la última copia que funcione."
+build_title = "Compilar desde el código fuente"
+build_text = "Windows 10 u 11 y <a href=\"https://rustup.rs\">Rust</a> estable con la toolchain <code>x86_64-pc-windows-gnu</code> o <code>-msvc</code>. El instalador es el mismo ejecutable: si se llama <code>RGBTray-Setup-*.exe</code>, se instala a sí mismo."
+
+thanks_title = "Ayuda a que ilumine más dispositivos"
+thanks_text = "RGB Tray es gratuita y de código abierto. La ayuda más útil no necesita código: un informe de dispositivo, o probar una versión en hardware que el proyecto no tiene. Y una estrella en GitHub ayuda a que otras personas la encuentren."
+thanks_star = "Dar una estrella en GitHub"
+thanks_bug = "Informar de un problema"
+thanks_note = "Los problemas y las solicitudes van a GitHub; para escribir allí hace falta una cuenta gratuita de GitHub."
+
+footer_text = "RGB Tray · MIT o Apache-2.0 · Sin afiliación con Logitech, Razer, ASUS, Geekboard ni Tuya; las marcas comerciales pertenecen a sus propietarios."
+footer_label = "Enlaces"
+footer_readme = "README"
+footer_releases = "Versiones"
+footer_issues = "Issues"
+footer_security = "Seguridad"
+
+lb_label = "Captura de pantalla"
+lb_prev = "Captura anterior"
+lb_next = "Captura siguiente"
+lb_close = "Cerrar"
+
+# Lists. In TOML every key after a [[table]] header belongs to that entry, so the lists come last.
+
+# why
+[[why]]
+title = "Nada más en segundo plano"
+text = "Ella misma habla el protocolo de cada dispositivo, así que G HUB, Synapse, Armoury Crate o SignalRGB no tienen que estar ejecutándose. La instalación no requiere derechos de administrador."
+[[why]]
+title = "Un único panel para todo"
+text = "Un clic izquierdo en el icono de la bandeja abre el panel: color, efecto y brillo para todos los dispositivos a la vez o por dispositivo, y preajustes que puedes asignar a atajos de teclado globales."
+[[why]]
+title = "Sigue el ritmo de tu PC"
+text = "La iluminación vuelve tras la suspensión (incluido Modern Standby) y al conectar un dispositivo, se atenúa con la pantalla y se apaga mientras la pantalla está apagada."
+
+# families
+[[families]]
+hue = "205"
+title = "Logitech"
+models = "G915 TKL (receptor LIGHTSPEED)"
+text = "Estático, respiración, espectro y apagado; colores por tecla con un editor de teclas; los efectos de onda y ondulación del firmware; batería."
+[[families]]
+hue = "135"
+title = "Razer"
+models = "Naga V2 Pro, Mouse Dock Pro y unos 90 más"
+text = "Basilisk, DeathAdder, Viper, Cobra, BlackWidow, Huntsman, Ornata, Firefly, Goliathus, Base Station y otros, a partir de los datos de OpenRazer: efectos, zonas de los ratones, batería. La mayoría están sin probar; su tarjeta lo indica, y cualquier informe es bienvenido."
+[[families]]
+hue = "350"
+title = "ASUS"
+models = "Teclados de portátil (Aura)"
+text = "Estático, respiración, espectro y apagado; las zonas del teclado y las luces del chasis mediante LampArray. El teclado se restablece a blanco al despertar, así que la iluminación se vuelve a aplicar."
+[[families]]
+hue = "48"
+title = "QMK / VIA"
+models = "Geekboard MacroPad v2, Keychron, teclados personalizados"
+text = "Cualquier teclado QMK con VIA y RGB: estático, respiración, espectro, apagado y brillo. Los colores se fijan solo en la RAM, así que los ajustes guardados del propio teclado no se tocan."
+[[families]]
+hue = "268"
+title = "Iluminación dinámica de Windows"
+models = "Dispositivos HID LampArray"
+text = "Dispositivos con el estándar LampArray: estático, respiración, espectro y apagado, con las zonas que el propio dispositivo describe. La respiración y el espectro los dibuja la aplicación."
+[[families]]
+hue = "28"
+title = "Bombillas Tuya"
+models = "Bombillas Wi-Fi en Smart Life, p. ej. LINUS A60"
+text = "Por la red local: color, blanco con su tono, respiración, espectro y apagado. Una bombilla no se apaga junto con la pantalla. Requiere la clave local de la bombilla, que se obtiene una vez de la nube de Tuya."
+
+# features
+[[features]]
+title = "Brillo y velocidad"
+text = "Un brillo global y, encima, uno por dispositivo; la velocidad de la respiración y del espectro, global y por dispositivo."
+[[features]]
+title = "Editor por tecla"
+text = "Para el teclado Logitech: pincel, cuentagotas, arcoíris, degradado de dos colores, preajustes WASD y de solo letras, resaltado de una palabra, esquemas guardados, distribuciones ANSI e ISO."
+[[features]]
+title = "Preajustes con atajos de teclado"
+text = "Guarda un aspecto y cámbiate a él con un atajo de teclado global, incluidas F13–F24 con Ctrl, Alt, Shift o Win."
+[[features]]
+title = "Un atajo por dispositivo"
+text = "Apaga un dispositivo y lo vuelve a encender tal como estaba, por ejemplo una lámpara de la habitación. Los preajustes no se ven afectados."
+[[features]]
+title = "Sigue a la pantalla"
+text = "Se atenúa cuando Windows atenúa la pantalla y se apaga mientras la pantalla está apagada: inactividad, bloqueo o suspensión. Se puede desactivar."
+[[features]]
+title = "Inalámbricos y batería"
+text = "Niveles de batería, avisos al 10 % y al 5 %, y un estado “No link” mientras un dispositivo inalámbrico está en reposo; sus colores vuelven cuando despierta."
+[[features]]
+title = "Muchos dispositivos, cada uno aparte"
+text = "Los dispositivos idénticos tienen sus propios ajustes, distinguidos por el número de serie. Los desconectados esperan en un archivo con sus ajustes."
+[[features]]
+title = "Comparte tu configuración"
+text = "Exporta e importa todos los ajustes, o guarda un preajuste en un archivo: se aplica a los dispositivos de los mismos modelos de quien lo recibe."
+[[features]]
+title = "Actualizaciones con un clic"
+text = "Una vez al día la aplicación consulta en GitHub la última versión y muestra una tarjeta que la instala. La comprobación se puede desactivar."
+[[features]]
+title = "Integrada en Windows"
+text = "El icono de la bandeja muestra el color actual, el panel se puede fijar por encima de las demás ventanas, el tema sigue a Windows y la interfaz está en inglés o ruso."
+
+# shots
+[[shots]]
+view = "panel-dark"
+alt = "El panel en el tema oscuro con las tarjetas de los dispositivos"
+caption = "El panel, tema oscuro"
+[[shots]]
+view = "panel-light"
+alt = "El panel en el tema claro con las tarjetas de los dispositivos"
+caption = "El panel, tema claro"
+[[shots]]
+view = "editor-dark"
+alt = "El editor por tecla con una distribución de teclado, herramientas de pincel y preajustes"
+caption = "El editor por tecla: pincel, cuentagotas, degradados, preajustes y efectos de firmware"
+
+# limits
+[[limits]]
+head = "Solo Windows."
+text = "Es una aplicación para Windows 10 y 11; no hay versión para macOS ni Linux."
+[[limits]]
+head = "Solo iluminación."
+text = "Sin macros, reasignación de teclas, DPI del ratón ni actualizaciones de firmware."
+[[limits]]
+head = "No junto a las aplicaciones de iluminación del fabricante."
+text = "Dos programas que escriben en el mismo dispositivo se estorban entre sí: cierra primero el software de iluminación de G HUB, Synapse, Armoury Crate, SignalRGB u OpenRGB."
+[[limits]]
+head = "Sin cuenta y sin nube."
+text = "Solo se conecta a internet para la comprobación diaria de actualizaciones, que se puede desactivar, y a las bombillas Tuya de tu propia red."
+[[limits]]
+head = "No todos los modelos están probados."
+text = "La mayoría de los modelos Razer salen de los datos de OpenRazer y están sin probar; los teclados inalámbricos HyperSpeed, por ahora, solo funcionan por cable."
+[[limits]]
+head = "Aún sin firma digital."
+text = "Windows SmartScreen puede mostrar una advertencia sobre el instalador la primera vez; consulta Descarga e instalación más abajo."
+
+# claude_steps
+[[claude_steps]]
+title = "Abre el repositorio en Claude Code"
+text = "En el PC con Windows al que está conectado el dispositivo, clona <code>github.com/Gronck2/rgb-tray</code> e inicia Claude Code en esa carpeta. Para un perfil bastan las herramientas de línea de comandos de la aplicación instalada; un controlador necesita Rust, y Claude te ayuda a instalarlo."
+[[claude_steps]]
+title = "Escribe /add-device"
+text = "Di de qué dispositivo se trata y qué se ilumina en él. Cierra antes la aplicación del fabricante, para que dos programas no se disputen el dispositivo."
+[[claude_steps]]
+title = "Claude lee el informe del dispositivo"
+text = "Ejecuta <code>rgbtray --diagnose</code>, encuentra tu dispositivo por sus ids de fabricante y de producto y ve cuáles de sus interfaces hablan un protocolo que RGB Tray ya conoce."
+[[claude_steps]]
+title = "Encuentra el protocolo"
+text = "En OpenRGB u OpenRazer, en una captura USB de la aplicación del fabricante que tú grabas (<a href=\"{{capture_doc_url}}\">cómo</a>), o con pruebas cuidadosas con <code>--hid-send</code>, de una en una y solo con tu visto bueno."
+[[claude_steps]]
+title = "Tú eres sus ojos"
+text = "Escribe el perfil, lo comprueba con <code>--profile-check</code> y reproduce colores, zonas y efectos con <code>--profile-test</code>. Después de cada paso te pregunta qué hizo el dispositivo."
+[[claude_steps]]
+title = "Funciona en tu PC"
+text = "Claude copia el perfil en <code>%APPDATA%\\rgbtray\\devices\\</code>; reinicia RGB Tray y el dispositivo tiene su tarjeta en el panel. Después te pregunta si quieres compartirlo."
+
+# routes
+[[routes]]
+title = "Ya funciona"
+text = "Los dispositivos HID LampArray y los teclados QMK con VIA los controlan controladores genéricos. Abre el panel y busca la tarjeta."
+[[routes]]
+title = "Un perfil para un protocolo conocido"
+text = "Un modelo Razer nuevo es un pequeño archivo TOML con sus ids de producto, id de transacción e ids de LED, tomados de OpenRazer. Un perfil QMK/VIA puede nombrar los efectos del firmware."
+[[routes]]
+title = "Un perfil <code>[hid]</code>"
+text = "Un protocolo sencillo, con informes que llevan el color dentro y sin necesidad de respuestas, se escribe como plantillas de informe con <code>{r} {g} {b}</code>. También admite sumas de verificación XOR o de suma, informes de «tomar el control» y «devolverlo», y colores por LED. Sin compilar."
+[[routes]]
+title = "Un controlador en Rust"
+text = "Un protocolo que necesita respuestas, un handshake o estado es un controlador: un módulo que implementa el trait <code>Device</code>. <a href=\"{{contributing_url}}\">CONTRIBUTING.md</a> lo explica paso a paso."
+
+# commands
+[[commands]]
+cmd = "rgbtray --diagnose report.txt"
+text = "Todos los dispositivos e interfaces HID, con los que RGB Tray conoce marcados, y los archivos de perfil con errores."
+[[commands]]
+cmd = "rgbtray --hid-send out.txt <vid:pid[:page[:usage]]> <feature|output|get> \"<hex>\""
+text = "Envía informes sin procesar y añade las respuestas al archivo, para descifrar un protocolo."
+[[commands]]
+cmd = "rgbtray --profile-check out.txt my-device.toml"
+text = "Lee un perfil sin tocar ningún dispositivo y escribe qué entiende la aplicación de cada modelo, o qué tiene de incorrecto."
+[[commands]]
+cmd = "rgbtray --profile-test out.txt my-device.toml"
+text = "Reproduce rojo, verde, azul, blanco tenue, cada zona, respiración, espectro y apagado en el dispositivo de un perfil <code>[hid]</code>, registrando cada paso."
+
+# share_steps
+[[share_steps]]
+text = "El perfil va a <code>profiles/&lt;vendor&gt;-&lt;model&gt;.toml</code> y a <code>BUILT_IN</code> en <code>src/devices/profile.rs</code>, con <code>tested = true</code> solo si se comprobó en el dispositivo."
+[[share_steps]]
+text = "El dispositivo se añade a las tablas de todos los README."
+[[share_steps]]
+text = "Pasan las comprobaciones que ejecuta CI: <code>cargo fmt --check</code>, <code>cargo clippy</code> y <code>cargo test</code>."
+[[share_steps]]
+text = "Un pull request desde una rama de tu fork indica qué dispositivo, qué ruta y qué se comprobó en el hardware. ¿Prefieres no lidiar con git? Abre una solicitud de dispositivo y adjunta el perfil y el informe del dispositivo."
+
+# install_steps
+[[install_steps]]
+text = "Descarga <code>RGBTray-Setup-&lt;version&gt;.exe</code> de la última versión."
+[[install_steps]]
+text = "Ejecútalo. Se instala solo para tu usuario de Windows en <code>%LOCALAPPDATA%\\Programs\\RGB Tray</code> y se inicia."
+[[install_steps]]
+text = "Haz clic en el icono de la bandeja para abrir el panel. RGB Tray se desinstala desde Configuración de Windows → Aplicaciones."

@@ -4,8 +4,8 @@
 # `{{root}}`, `{{readme_url}}`, `{{profiles_doc_url}}`, `{{capture_doc_url}}` and `{{contributing_url}}` work inside values.
 
 html_title = "RGB Tray — one small tray app for the RGB lighting of your keyboard, mouse and lights"
-meta_description = "A tiny Windows tray app that drives the RGB lighting of Logitech, Razer, ASUS, QMK/VIA and LampArray devices directly over HID, and Tuya bulbs over the local network, without G HUB, Synapse, Armoury Crate or SignalRGB."
-og_description = "One tiny Windows tray app instead of G HUB, Synapse, Armoury Crate and SignalRGB. Free and open source."
+meta_description = "A tiny Windows tray app that drives the RGB lighting of Logitech, Razer, ASUS, QMK/VIA and LampArray devices directly over HID, and Tuya bulbs over the local network, without G HUB, Synapse, Armoury Crate or SignalRGB."
+og_description = "One tiny Windows tray app instead of G HUB, Synapse, Armoury Crate and SignalRGB. Free and open source."
 skip_link = "Skip to content"
 
 nav_label = "Main"
@@ -102,7 +102,7 @@ lb_close = "Close"
 # why
 [[why]]
 title = "Nothing else in the background"
-text = "It speaks each device's protocol itself, so G HUB, Synapse, Armoury Crate or SignalRGB don't need to run. Installing takes no administrator rights."
+text = "It speaks each device's protocol itself, so G HUB, Synapse, Armoury Crate or SignalRGB don't need to run. Installing takes no administrator rights."
 [[why]]
 title = "One panel for everything"
 text = "A left click on the tray icon opens the panel: color, effect and brightness for all devices at once or per device, and presets you can put on global hotkeys."
@@ -197,7 +197,7 @@ head = "Lighting only."
 text = "No macros, key remapping, mouse DPI or firmware updates."
 [[limits]]
 head = "Not next to vendor lighting apps."
-text = "Two programs writing to one device fight each other: close the lighting software of G HUB, Synapse, Armoury Crate, SignalRGB or OpenRGB first."
+text = "Two programs writing to one device fight each other: close the lighting software of G HUB, Synapse, Armoury Crate, SignalRGB or OpenRGB first."
 [[limits]]
 head = "No account and no cloud."
 text = "It goes online only for the daily update check, which can be switched off, and to Tuya bulbs on your own network."
