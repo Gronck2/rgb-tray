@@ -31,6 +31,14 @@ jobs:
         env:
           RGBTRAY_DEMO_IDS: logitech-DEMO0001,dock-DEMO0002,asus-DEMO0003,macropad-DEMO0004
         run: |
+          # The runner's Windows has Dynamic Lighting on, which the panel would warn about.
+          New-Item -Path HKCU:\Software\Microsoft\Lighting -Force | Out-Null
+          Set-ItemProperty -Path HKCU:\Software\Microsoft\Lighting -Name AmbientLightingEnabled -Value 0 -Type DWord
+          # The first colour of the palette on every device, as on a real panel (the default is white).
+          $cfg = "$env:APPDATA\rgbtray"
+          New-Item -ItemType Directory -Force $cfg | Out-Null
+          $devices = $env:RGBTRAY_DEMO_IDS -split "," | ForEach-Object { "[devices.`"$_`"]`neffect = `"static`"`ncolor = `"#0AE3EF`"`n" }
+          Set-Content -Path "$cfg\config.toml" -Value ($devices -join "`n") -Encoding utf8NoBOM
           New-Item -ItemType Directory -Force shots | Out-Null
           foreach ($lang in "en", "ru") {
             $env:RGBTRAY_LANG = $lang
@@ -42,6 +50,7 @@ jobs:
             }
           }
           Get-ChildItem shots
+          Get-Content "$cfg\rgbtray.log" -ErrorAction SilentlyContinue
 
       - uses: actions/upload-artifact@v4
         with:
