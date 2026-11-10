@@ -1,0 +1,49 @@
+# Renders the screenshots of the site and the README with `rgbtray --snapshot` on a Windows runner, in English and
+# Russian, with made-up devices (RGBTRAY_DEMO_IDS), and uploads them as an artifact. Copy the ones you want into
+# docs/screenshots by hand: the site uses <view>-en.png for every language but Russian.
+name: Screenshots
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/screenshots.yml
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Render
+        shell: pwsh
+        env:
+          RGBTRAY_DEMO_IDS: logitech-DEMO0001,dock-DEMO0002,asus-DEMO0003,macropad-DEMO0004
+        run: |
+          New-Item -ItemType Directory -Force shots | Out-Null
+          foreach ($lang in "en", "ru") {
+            $env:RGBTRAY_LANG = $lang
+            foreach ($view in @(@("panel", "dark"), @("panel", "light"), @("editor", "dark"), @("editor", "light"))) {
+              $out = "shots\$($view[0])-$($view[1])-$lang.png"
+              # The release build is a GUI program: wait for it, it exits once the PNG is written.
+              Start-Process -Wait -NoNewWindow -FilePath target\release\rgbtray.exe -ArgumentList "--snapshot", $out, $view[1]
+              if (-not (Test-Path $out)) { Write-Error "$out was not rendered"; Get-Content "$env:APPDATA\rgbtray\rgbtray.log" -ErrorAction SilentlyContinue; exit 1 }
+            }
+          }
+          Get-ChildItem shots
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: shots/

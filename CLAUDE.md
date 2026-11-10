@@ -48,7 +48,7 @@ The file name picks the view: `*editor*` = key editor, `*setup*` = installer, `*
 Env vars: `RGBTRAY_LANG=en|ru`, `RGBTRAY_DEMO_MANY=n`, `RGBTRAY_DEMO_PAGE=k`, `RGBTRAY_DEMO_WARN`,
 `RGBTRAY_DEMO_DYNLIGHT`, `RGBTRAY_DEMO_NOLINK`, `RGBTRAY_DEMO_ARCHIVE`, `RGBTRAY_DEMO_DIM`, `RGBTRAY_DEMO_SPEED`,
 `RGBTRAY_DEMO_MENU` (`=device`: hotkey menu of the last device), `RGBTRAY_DEMO_WIN`, `RGBTRAY_DEMO_APPS=synapse,ghub` (conflict warnings),
-`RGBTRAY_DEMO_UPDATE=0.7.0[,downloading|failed|nosetup]` (update card).
+`RGBTRAY_DEMO_UPDATE=0.7.0[,downloading|failed|nosetup]` (update card), `RGBTRAY_DEMO_IDS=logitech-X,naga-Y` (made-up devices of these models).
 Snapshots still talk to real devices (discovery).
 
 ## Runtime files

@@ -1,0 +1,50 @@
+# Publishes the landing page (site/) to GitHub Pages at https://rgb-tray.gronck.com.
+# site/build.py renders a page per language and adds the screenshots from docs/screenshots.
+# Pull requests that touch the site only build it, so a broken locale fails the check before merging.
+# The custom domain is set in the repository's Pages settings (Cloudflare DNS: CNAME rgb-tray -> gronck2.github.io).
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - site/**
+      - docs/screenshots/**
+      - .github/workflows/pages.yml
+  pull_request:
+    paths:
+      - site/**
+      - docs/screenshots/**
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the site
+        run: python3 site/build.py _site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: build
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1719,6 +1719,11 @@ fn main() {
         if let Some(n) = std::env::var("RGBTRAY_DEMO_MANY").ok().and_then(|v| v.parse::<usize>().ok()) {
             present.extend((1..=n).map(|k| format!("lamparray-DEMO{k:04}")));
         }
+        // RGBTRAY_DEMO_IDS=logitech-DEMO1,naga-DEMO2: made-up devices of these models, for snapshots on a PC
+        // without them (the site's screenshots are rendered on a CI runner).
+        if let Ok(ids) = std::env::var("RGBTRAY_DEMO_IDS") {
+            present.extend(ids.split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from));
+        }
         if let Some(p) = std::env::var("RGBTRAY_DEMO_PAGE").ok().and_then(|v| v.parse().ok()) {
             ui::set_page(p);
         }

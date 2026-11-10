@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="{{lang}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{html_title}}</title>
+<meta name="description" content="{{meta_description:attr}}">
+<link rel="canonical" href="{{page_url}}">
+{{alternates}}
+<meta property="og:type" content="website">
+<meta property="og:title" content="RGB Tray">
+<meta property="og:description" content="{{og_description:attr}}">
+<meta property="og:url" content="{{page_url}}">
+<meta property="og:image" content="{{og_image}}">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#0a0b10" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f5f6fa" media="(prefers-color-scheme: light)">
+<link rel="icon" href="{{root}}favicon.svg" type="image/svg+xml">
+<link rel="preload" href="{{root}}fonts/Manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="{{root}}style.css">
+<script src="{{root}}site.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">{{skip_link}}</a>
+
+<header class="topbar">
+<div class="wrap topbar-in">
+<a class="brand" href="{{root}}{{home_path}}"><img src="{{root}}favicon.svg" alt="" width="28" height="28">RGB Tray</a>
+<nav class="topnav" aria-label="{{nav_label:attr}}">
+<a class="hide-narrow" href="#devices">{{nav_devices}}</a>
+<a class="hide-narrow" href="#add-device">{{nav_add}}</a>
+<a class="hide-narrow" href="#download">{{nav_download}}</a>
+<a href="https://github.com/Gronck2/rgb-tray">GitHub<span class="visually-hidden"> {{opens_github}}</span></a>
+<details class="langs">
+<summary><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M1.5 8h13M8 1.5c-2.2 2.4-2.2 10.6 0 13M8 1.5c2.2 2.4 2.2 10.6 0 13" fill="none" stroke="currentColor" stroke-width="1.4"/></svg><span>{{lang_short}}</span><span class="visually-hidden"> — {{lang_label}}</span></summary>
+<ul>{{lang_links}}</ul>
+</details>
+</nav>
+</div>
+</header>
+
+<main id="main">
+
+<section class="hero" aria-labelledby="title">
+<div class="wrap hero-in">
+<div class="hero-text">
+<div class="tags">
+<span class="tag">{{tag_free}}</span>
+<span class="tag">{{tag_open_source}}</span>
+<span class="tag">Windows 10 / 11</span>
+</div>
+<h1 id="title">RGB Tray</h1>
+<p class="hero-sub">{{hero_sub}}</p>
+<p class="lede">{{hero_lede}}</p>
+<div class="actions">
+<a class="btn btn-primary" data-asset="setup" href="https://github.com/Gronck2/rgb-tray/releases/latest">
+<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0L4.5 6.5M8 10l3.5-3.5M2 13.5h12" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+{{btn_download}}</a>
+<a class="btn btn-secondary" href="#add-device">{{btn_add}}</a>
+</div>
+<p class="release-note" data-release="{{release_note:attr}}" data-size="{{release_size:attr}}" hidden></p>
+<p class="replaces"><span>{{replaces_label}}</span> <s>G HUB</s> <s>Synapse</s> <s>Armoury Crate</s> <s>SignalRGB</s></p>
+</div>
+<div class="hero-shot">
+<div class="glow" aria-hidden="true"></div>
+<a class="shot zoom" href="{{root}}img/panel-dark.png">
+<picture>
+<source srcset="{{root}}img/panel-light.png" media="(prefers-color-scheme: light)">
+<img src="{{root}}img/panel-dark.png" width="540" height="1098" alt="{{hero_alt:attr}}">
+</picture>
+</a>
+</div>
+</div>
+<div class="strip" aria-hidden="true"></div>
+</section>
+
+<section class="band" aria-labelledby="why-title">
+<div class="wrap">
+<div class="section-head">
+<p class="eyebrow">01</p>
+<h2 id="why-title">{{why_title}}</h2>
+<p class="lede">{{why_lede}}</p>
+</div>
+<ul class="why">
+{{why_list}}
+</ul>
+</div>
+</section>
+
+<section id="devices" class="band" aria-labelledby="devices-title">
+<div class="wrap">
+<div class="section-head">
+<p class="eyebrow">02</p>
+<h2 id="devices-title">{{devices_title}}</h2>
+<p class="lede">{{devices_lede}}</p>
+</div>
+<div class="families">
+{{family_list}}
+</div>
+<p class="muted">{{devices_note}} <a href="{{readme_url}}{{anchor_devices}}">{{devices_link}}</a>.</p>
+</div>
+</section>
+
+<section class="band" aria-labelledby="features-title">
+<div class="wrap">
+<div class="section-head">
+<p class="eyebrow">03</p>
+<h2 id="features-title">{{features_title}}</h2>
+<p class="lede">{{features_lede}}</p>
+</div>
+<ul class="features">
+{{feature_list}}
+</ul>
+</div>
+</section>
+
+<section class="band" aria-labelledby="shots-title">
+<div class="wrap">
+<div class="section-head">
+<p class="eyebrow">04</p>
+<h2 id="shots-title">{{shots_title}}</h2>
+<p class="muted">{{shots_lede}}</p>
+</div>
+<div class="gallery">
+{{shot_list}}
+</div>
+</div>
+</section>
+
+<section class="band" aria-labelledby="limits-title">
+<div class="wrap">
+<div class="section-head">
+<p class="eyebrow">05</p>
+<h2 id="limits-title">{{limits_title}}</h2>
+<p class="lede">{{limits_lede}}</p>
+</div>
+<ul class="limits">
+{{limit_list}}
+</ul>
+</div>
+</section>
+
+<section id="add-device" class="band band-alt" aria-labelledby="add-title">
+<div class="wrap">
+<div class="section-head">
+<p class="eyebrow">06</p>
+<h2 id="add-title">{{add_title}}</h2>
+<p class="lede">{{add_lede}}</p>
+</div>
+
+<div class="add-grid">
+<div class="card claude">
+<h3>{{claude_title}}</h3>
+<p>{{claude_text}}</p>
+<ol class="steps">
+{{claude_steps}}
+</ol>
+<div class="notice"><span class="icon" aria-hidden="true">!</span><p>{{claude_safety}}</p></div>
+</div>
+
+<div class="card">
+<h3>{{routes_title}}</h3>
+<p>{{routes_text}}</p>
+<ol class="routes">
+{{route_list}}
+</ol>
+</div>
+</div>
+
+<div class="card">
+<h3>{{commands_title}}</h3>
+<p>{{commands_text}}</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th scope="col">{{th_command}}</th><th scope="col">{{th_what}}</th></tr></thead>
+<tbody>
+{{command_list}}
+</tbody>
+</table>
+</div>
+<p class="muted">{{commands_note}} <a href="{{profiles_doc_url}}">{{commands_link}}</a>.</p>
+</div>
+
+<div class="card share">
+<div>
+<h3>{{share_title}}</h3>
+<p>{{share_text}}</p>
+<ol class="plain">
+{{share_steps}}
+</ol>
+</div>
+<div class="actions">
+<a class="btn btn-primary" href="https://github.com/Gronck2/rgb-tray/fork">{{share_fork}}</a>
+<a class="btn btn-secondary" href="https://github.com/Gronck2/rgb-tray/issues/new?template=device-request.yml">{{share_request}}</a>
+<a class="btn btn-secondary" href="{{contributing_url}}">{{share_contributing}}</a>
+</div>
+</div>
+</div>
+</section>
+
+<section id="download" class="band" aria-labelledby="download-title">
+<div class="wrap">
+<div class="section-head">
+<p class="eyebrow">07</p>
+<h2 id="download-title">{{download_title}}</h2>
+<p class="lede">{{download_lede}}</p>
+</div>
+<div class="download-grid">
+<div class="card file">
+<p class="file-name"><code>RGBTray-Setup-x.y.z.exe</code></p>
+<ol class="plain">
+{{install_steps}}
+</ol>
+<div class="actions">
+<a class="btn btn-primary" data-asset="setup" href="https://github.com/Gronck2/rgb-tray/releases/latest">
+<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1v9m0 0L4.5 6.5M8 10l3.5-3.5M2 13.5h12" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+{{btn_download}}</a>
+<a class="btn btn-secondary" href="https://github.com/Gronck2/rgb-tray/releases">{{btn_releases}}</a>
+</div>
+<p class="release-note" data-release="{{release_note:attr}}" data-size="{{release_size:attr}}" hidden></p>
+</div>
+<div class="notes">
+<div class="notice warn"><span class="icon" aria-hidden="true">!</span><p><strong>{{smartscreen_head}}</strong> {{smartscreen_text}}</p></div>
+<div class="notice"><span class="icon" aria-hidden="true">i</span><p><strong>{{vendor_head}}</strong> {{vendor_text}}</p></div>
+<div class="notice"><span class="icon" aria-hidden="true">i</span><p><strong>{{settings_head}}</strong> {{settings_text}}</p></div>
+</div>
+</div>
+<div class="card">
+<h3>{{build_title}}</h3>
+<p>{{build_text}}</p>
+<pre><code>git clone https://github.com/Gronck2/rgb-tray
+cd rgb-tray
+cargo build --release            # target\release\rgbtray.exe
+.\scripts\release.ps1            # dist\RGBTray-Setup-&lt;version&gt;.exe</code></pre>
+</div>
+</div>
+</section>
+
+<section class="band thanks" aria-labelledby="thanks-title">
+<div class="wrap">
+<h2 id="thanks-title">{{thanks_title}}</h2>
+<p class="lede">{{thanks_text}}</p>
+<div class="actions">
+<a class="btn btn-primary" href="https://github.com/Gronck2/rgb-tray"><span aria-hidden="true">★</span> {{thanks_star}}</a>
+<a class="btn btn-secondary" href="https://github.com/Gronck2/rgb-tray/issues/new?template=bug-report.yml">{{thanks_bug}}</a>
+<a class="btn btn-secondary" href="https://github.com/Gronck2/rgb-tray/issues/new?template=device-request.yml">{{share_request}}</a>
+</div>
+<p class="muted">{{thanks_note}}</p>
+</div>
+</section>
+
+</main>
+
+<footer>
+<div class="wrap footer-in">
+<p>{{footer_text}}</p>
+<nav aria-label="{{footer_label:attr}}">
+<a href="{{readme_url}}">{{footer_readme}}</a>
+<a href="https://github.com/Gronck2/rgb-tray/releases">{{footer_releases}}</a>
+<a href="https://github.com/Gronck2/rgb-tray/issues">{{footer_issues}}</a>
+<a href="https://github.com/Gronck2/rgb-tray/blob/main/SECURITY.md">{{footer_security}}</a>
+</nav>
+</div>
+</footer>
+
+<dialog class="lightbox" aria-label="{{lb_label:attr}}">
+<figure><img alt=""><figcaption></figcaption></figure>
+<span class="lb-count" aria-live="polite"></span>
+<button type="button" class="lb-btn lb-prev" aria-label="{{lb_prev:attr}}"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M12.5 4l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2"/></svg></button>
+<button type="button" class="lb-btn lb-next" aria-label="{{lb_next:attr}}"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><path d="M7.5 4l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2"/></svg></button>
+<button type="button" class="lb-btn lb-close" autofocus aria-label="{{lb_close:attr}}"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2l12 12M14 2L2 14" fill="none" stroke="currentColor" stroke-width="2"/></svg></button>
+</dialog>
+
+</body>
+</html>

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="color-scheme" content="dark light">
+<title>Page not found · RGB Tray</title>
+<script>
+// GitHub Pages serves this page for any missing path, on the custom domain (site at /) and at
+// gronck2.github.io/rgb-tray/ alike. Paths are case-sensitive there: /RU/ or /zh-CN is a 404, so send it to
+// the page it meant, and a path under a language to that language's page.
+(function () {
+  var path = location.pathname;
+  var base = /^\/rgb-tray(\/|$)/i.test(path) ? "/rgb-tray/" : "/";
+  var lower = path.toLowerCase();
+  if (lower !== path) {
+    location.replace(lower + location.search + location.hash);
+    return;
+  }
+  var rest = lower.slice(base.length);
+  var m = /^(ru|zh-cn|es|de|fr|pt-br|ja)(\/|$)/.exec(rest);
+  if (m && rest !== m[1] + "/") location.replace(base + m[1] + "/");
+  window.SITE_BASE = base;
+})();
+</script>
+<style>
+:root { --bg: #0a0b10; --surface: #141722; --line: #343a4e; --text: #eceef5; --muted: #8a90a3; }
+@media (prefers-color-scheme: light) { :root { --bg: #f5f6fa; --surface: #fff; --line: #c9cedc; --text: #12141c; --muted: #5d6477; } }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--bg); color: var(--text);
+  font: 16px/1.6 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif; }
+main { padding: 24px; display: grid; gap: 16px; justify-items: center; text-align: center; }
+h1 { margin: 0; font-size: 72px; line-height: 1; letter-spacing: -0.04em; }
+.strip { width: 160px; height: 4px; border-radius: 2px; background: linear-gradient(90deg, #ff3b6b, #ff9f1c, #ffe14d, #2ee59d, #22c3ff, #7b61ff); }
+p { margin: 0; color: var(--muted); }
+nav { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; max-width: 560px; }
+a { color: var(--text); text-decoration: none; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 8px 16px; font-weight: 600; }
+a:hover, a:focus-visible { border-color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<h1>404</h1>
+<div class="strip" aria-hidden="true"></div>
+<p>This page does not exist.</p>
+<nav aria-label="Languages">
+<a href="/" data-path="">RGB Tray — English</a>
+<a href="/ru/" data-path="ru/" hreflang="ru" lang="ru">Русский</a>
+<a href="/zh-cn/" data-path="zh-cn/" hreflang="zh-CN" lang="zh-CN">简体中文</a>
+<a href="/es/" data-path="es/" hreflang="es" lang="es">Español</a>
+<a href="/de/" data-path="de/" hreflang="de" lang="de">Deutsch</a>
+<a href="/fr/" data-path="fr/" hreflang="fr" lang="fr">Français</a>
+<a href="/pt-br/" data-path="pt-br/" hreflang="pt-BR" lang="pt-BR">Português (Brasil)</a>
+<a href="/ja/" data-path="ja/" hreflang="ja" lang="ja">日本語</a>
+</nav>
+</main>
+<script>
+document.querySelectorAll("a[data-path]").forEach(function (a) {
+  a.href = (window.SITE_BASE || "/") + a.getAttribute("data-path");
+});
+</script>
+</body>
+</html>
