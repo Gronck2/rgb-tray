@@ -1,13 +1,10 @@
 # Renders the screenshots of the site and the README with `rgbtray --snapshot` on a Windows runner, in English and
 # Russian, with made-up devices (RGBTRAY_DEMO_IDS), and uploads them as an artifact. Copy the ones you want into
-# docs/screenshots by hand: the site uses <view>-en.png for every language but Russian.
+# docs/screenshots by hand: the site uses <view>-en.png for every language but Russian. Started by hand (Actions → Run).
 name: Screenshots
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - .github/workflows/screenshots.yml
 
 permissions:
   contents: read
