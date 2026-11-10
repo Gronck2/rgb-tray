@@ -48,8 +48,20 @@ The file name picks the view: `*editor*` = key editor, `*setup*` = installer, `*
 Env vars: `RGBTRAY_LANG=en|ru`, `RGBTRAY_DEMO_MANY=n`, `RGBTRAY_DEMO_PAGE=k`, `RGBTRAY_DEMO_WARN`,
 `RGBTRAY_DEMO_DYNLIGHT`, `RGBTRAY_DEMO_NOLINK`, `RGBTRAY_DEMO_ARCHIVE`, `RGBTRAY_DEMO_DIM`, `RGBTRAY_DEMO_SPEED`,
 `RGBTRAY_DEMO_MENU` (`=device`: hotkey menu of the last device), `RGBTRAY_DEMO_WIN`, `RGBTRAY_DEMO_APPS=synapse,ghub` (conflict warnings),
-`RGBTRAY_DEMO_UPDATE=0.7.0[,downloading|failed|nosetup]` (update card).
+`RGBTRAY_DEMO_UPDATE=0.7.0[,downloading|failed|nosetup]` (update card), `RGBTRAY_DEMO_IDS=logitech-X,naga-Y` (made-up devices of these models).
 Snapshots still talk to real devices (discovery).
+
+## Landing page
+
+`https://rgb-tray.gronck.com`: `python3 site/build.py <out>` renders `site/template.html` per language from
+`site/locales/<lang>.toml` (HTML values; English at `/`, the others at `/<lang in lower case>/`; a missing, extra or unused key
+stops the build; in TOML the `[[lists]]` come last). The locales take their facts from the README, CONTRIBUTING, `docs/` and the
+`/add-device` skill: no invented features or numbers. Links are relative, so it also works at `gronck2.github.io/rgb-tray/`.
+Screenshots: `docs/screenshots/<view>.png` (Russian UI) for `ru`, `<view>-en.png` for every other language, rendered by
+`.github/workflows/screenshots.yml` (Windows runner, `RGBTRAY_DEMO_IDS`; copy the artifact's files by hand).
+Self-hosted Manrope (Latin + Cyrillic; CJK falls back to system fonts); `site.js` fills the download link from the latest
+release and opens screenshots large. `site/404.html` sends case variants and paths under a language to that language.
+Build into the scratchpad and screenshot it with headless Chrome to check. Published by `pages.yml` (pull requests only build).
 
 ## Runtime files
 

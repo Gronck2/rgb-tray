@@ -1,0 +1,273 @@
+# Texts of the landing page (site/template.html), Simplified Chinese. Values are HTML; build.py checks that every language
+# has the same keys and the same `hue`, `view` and `cmd` values as en.toml.
+
+html_title = "RGB Tray — 一个小巧的托盘应用，管理键盘、鼠标和灯具的 RGB 灯效"
+meta_description = "一个小巧的 Windows 托盘应用，直接通过 HID 控制 Logitech、Razer、ASUS、QMK/VIA 和 LampArray 设备的 RGB 灯效，并通过本地网络控制 Tuya 灯泡，无需 G HUB、Synapse、Armoury Crate 或 SignalRGB。"
+og_description = "一个小巧的 Windows 托盘应用，取代 G HUB、Synapse、Armoury Crate 和 SignalRGB。免费且开源。"
+skip_link = "跳到正文"
+
+nav_label = "主导航"
+nav_devices = "设备"
+nav_add = "添加你的设备"
+nav_download = "下载"
+opens_github = "（打开 github.com）"
+lang_label = "语言"
+
+tag_free = "免费"
+tag_open_source = "开源"
+hero_sub = "一个小巧的托盘应用，管理你所有的 RGB 灯效。"
+hero_lede = "RGB Tray 直接通过 HID 控制键盘、鼠标和灯具，并通过本地网络控制 Tuya 灯泡。可一次性设置全部设备，也可逐个设置颜色、灯效和亮度，后台无需运行任何厂商软件。"
+btn_download = "下载 Windows 版"
+btn_add = "添加你的设备"
+release_note = "版本 {version}"
+release_size = "{mb} MB"
+replaces_label = "取代"
+hero_alt = "RGB Tray 面板：适用于所有设备的颜色和灯效、全局亮度，以及每个设备的卡片"
+
+why_title = "为什么只需一个小应用"
+why_lede = "每个品牌都有自己的灯效软件，而且每个都要在后台运行。RGB Tray 把它们的灯效功能合而为一。"
+
+devices_title = "支持的设备"
+devices_lede = "目前支持六大类。使用相同协议的其他型号也可能可用，通常只需一个小文本文件就能添加新设备。"
+devices_note = "连接方式、所有 Razer 型号以及如何获取 Tuya 密钥，请见"
+anchor_devices = "#支持的设备"
+devices_link = "GitHub 上的完整设备表"
+
+features_title = "功能"
+features_lede = "小巧，但不简陋：这些都是你原本要打开厂商软件才能做的事。"
+
+shots_title = "内部一览"
+shots_lede = "深色和浅色主题下的面板，以及 Logitech G915 TKL 的单键编辑器。点击可放大。"
+
+limits_title = "它不做什么"
+limits_lede = "卸载任何软件之前，请先了解这些。"
+
+add_title = "列表里没有你的设备？自己添加"
+add_lede = "许多设备完全不需要写代码，只需一个小小的配置文件。借助 Claude Code，你甚至不必懂 Rust 或 HID：技术工作由 Claude 完成，你只需看灯光。"
+
+claude_title = "借助 Claude Code：/add-device"
+claude_text = "仓库附带适用于 <a href=\"https://claude.com/claude-code\">Claude Code</a> 的 <code>/add-device</code> 技能。它带着 Claude 从设备报告一路走到经过测试的配置文件或驱动，如果你愿意，还会提交 pull request。"
+claude_safety = "<strong>Claude 看不到灯光</strong>，所以在你确认之前，任何东西都不算正常工作。它绝不会发送固件更新、引导加载程序、恢复出厂设置或写入闪存的命令，发送任何自己编造的报告之前都会先征求你的同意。如果设备停止响应，请拔下后重新插上。"
+
+routes_title = "四种方式，由易到难"
+routes_text = "无论你与 Claude 一起还是手动操作，设备都会采用第一种适用的方式。"
+
+commands_title = "应用内的工具"
+commands_text = "配置文件的编写和检查都由应用本身完成，无需编译。它是没有控制台的 Windows 程序，因此每个工具都会把结果写入你指定的文件。"
+th_command = "命令"
+th_what = "作用"
+commands_note = "你自己的配置文件放在 <code>%APPDATA%\\rgbtray\\devices\\</code> 中，重启应用后生效；<code>key</code> 相同的配置文件会替换内置配置文件。各字段和每个协议部分的说明见"
+commands_link = "docs/profiles.md"
+
+share_title = "分享给所有人"
+share_text = "设备正常工作后，一个 pull request 就能让它内置到每位 RGB Tray 用户的应用中。Claude 可以用 <code>gh pr create</code> 替你完成全部操作："
+share_fork = "在 GitHub 上 Fork"
+share_request = "申请支持设备"
+share_contributing = "如何参与贡献"
+
+download_title = "下载与安装"
+download_lede = "只有一个文件：安装程序就是应用本身。无需安装运行时，也无需管理员权限。"
+btn_releases = "所有版本"
+smartscreen_head = "首次运行时 SmartScreen 可能会显示警告。"
+smartscreen_text = "安装程序目前尚未进行代码签名：请选择 更多信息 → 仍要运行。每个版本都会列出其安装程序的 SHA-256。"
+vendor_head = "请关闭厂商的灯效软件。"
+vendor_text = "两个程序同时写入同一设备会相互冲突。在 Windows 11 上，“Logitech LampArray”服务（动态光效）会导致 G915 忽略灯效；RGB Tray 会对此发出警告并提供禁用选项。"
+settings_head = "你的设置很安全。"
+settings_text = "设置保存在 <code>%APPDATA%\\rgbtray</code> 中，更新和重新安装后都会保留。最近 14 天以及每次更新前的副本保存在 <code>backups</code> 中，如果设置文件损坏，会自动换成最近一份可用的副本。"
+build_title = "从源码构建"
+build_text = "需要 Windows 10 或 11，以及 stable 版 <a href=\"https://rustup.rs\">Rust</a>，工具链为 <code>x86_64-pc-windows-gnu</code> 或 <code>-msvc</code>。安装程序就是同一个可执行文件：文件名为 <code>RGBTray-Setup-*.exe</code> 时，它会自行安装。"
+
+thanks_title = "帮助它点亮更多设备"
+thanks_text = "RGB Tray 免费且开源。最有用的帮助无需写代码：提交设备报告，或在项目没有的硬件上测试某个版本。在 GitHub 上点个星标，也能让更多人发现它。"
+thanks_star = "在 GitHub 上加星标"
+thanks_bug = "报告问题"
+thanks_note = "问题和申请都提交到 GitHub；在那里发帖需要一个免费的 GitHub 账号。"
+
+footer_text = "RGB Tray · MIT 或 Apache-2.0 · 与 Logitech、Razer、ASUS、Geekboard 或 Tuya 均无关联；商标归其各自所有者所有。"
+footer_label = "链接"
+footer_readme = "README"
+footer_releases = "版本发布"
+footer_issues = "问题"
+footer_security = "安全"
+
+lb_label = "截图"
+lb_prev = "上一张截图"
+lb_next = "下一张截图"
+lb_close = "关闭"
+
+# Lists. In TOML every key after a [[table]] header belongs to that entry, so the lists come last.
+
+# why
+[[why]]
+title = "后台不再运行其他软件"
+text = "它自己掌握每个设备的协议，因此 G HUB、Synapse、Armoury Crate 或 SignalRGB 都不需要运行。安装无需管理员权限。"
+[[why]]
+title = "一个面板管理一切"
+text = "左键单击托盘图标即可打开面板：颜色、灯效和亮度，可一次性设置全部设备，也可逐个设置，还有可绑定全局快捷键的预设。"
+[[why]]
+title = "跟得上你的电脑"
+text = "睡眠（包括 Modern Standby）唤醒后以及插入设备时灯效会自动恢复，灯光随屏幕变暗，屏幕关闭时熄灭。"
+
+# families
+[[families]]
+hue = "205"
+title = "Logitech"
+models = "G915 TKL（LIGHTSPEED 接收器）"
+text = "常亮、呼吸、光谱循环和关闭；带按键编辑器的单键颜色；固件自带的波浪和涟漪灯效；电量。"
+[[families]]
+hue = "135"
+title = "Razer"
+models = "Naga V2 Pro、Mouse Dock Pro，另有约 90 款"
+text = "Basilisk、DeathAdder、Viper、Cobra、BlackWidow、Huntsman、Ornata、Firefly、Goliathus、Base Station 等，数据来自 OpenRazer：灯效、鼠标分区、电量。其中大多数未经测试；设备卡片上会注明，欢迎反馈。"
+[[families]]
+hue = "350"
+title = "ASUS"
+models = "笔记本键盘（Aura）"
+text = "常亮、呼吸、光谱循环和关闭；通过 LampArray 控制键盘分区和机身灯。键盘唤醒后会自行重置为白色，因此会重新应用灯效。"
+[[families]]
+hue = "48"
+title = "QMK / VIA"
+models = "Geekboard MacroPad v2、Keychron、客制化键盘"
+text = "任何支持 VIA 和 RGB 的 QMK 键盘：常亮、呼吸、光谱循环、关闭和亮度。颜色只写入 RAM，因此键盘自身保存的设置不会被改动。"
+[[families]]
+hue = "268"
+title = "Windows 动态光效"
+models = "HID LampArray 设备"
+text = "支持 LampArray 标准的设备：常亮、呼吸、光谱循环和关闭，以及设备自行描述的分区。呼吸和光谱循环由应用绘制。"
+[[families]]
+hue = "28"
+title = "Tuya 灯泡"
+models = "Smart Life 中的 Wi-Fi 灯泡，例如 LINUS A60"
+text = "通过本地网络控制：彩色、带色温的白光、呼吸、光谱循环和关闭。灯泡不会随屏幕熄灭。需要灯泡的本地密钥，从 Tuya 云端获取一次即可。"
+
+# features
+[[features]]
+title = "亮度与速度"
+text = "全局亮度，并可在其基础上为每个设备单独调节；呼吸和光谱循环的速度，可全局设置，也可按设备设置。"
+[[features]]
+title = "单键编辑器"
+text = "适用于 Logitech 键盘：画笔、取色器、彩虹、双色渐变、WASD 和仅字母键预设、高亮单词、保存配色方案、ANSI 和 ISO 布局。"
+[[features]]
+title = "预设与快捷键"
+text = "保存一种灯效，并用全局快捷键切换，支持 F13–F24 以及与 Ctrl、Alt、Shift 或 Win 的组合。"
+[[features]]
+title = "每个设备一个快捷键"
+text = "关闭某个设备的灯光并按原样重新打开，例如用于房间灯。不影响预设。"
+[[features]]
+title = "跟随显示器"
+text = "Windows 调暗屏幕时灯光随之变暗，屏幕关闭时（空闲、锁定或睡眠）灯光熄灭。可以关闭此功能。"
+[[features]]
+title = "无线与电量"
+text = "电量显示、10% 和 5% 时提醒，无线设备休眠时显示“No link”（无连接）状态；设备唤醒后颜色会恢复。"
+[[features]]
+title = "多个设备，互不干扰"
+text = "相同的设备各自拥有独立设置，通过序列号区分。断开连接的设备连同其设置保存在归档中等候。"
+[[features]]
+title = "分享你的设置"
+text = "导出和导入全部设置，或将单个预设保存为文件：它会应用到接收方相同型号的设备上。"
+[[features]]
+title = "一键更新"
+text = "应用每天向 GitHub 查询一次最新版本，并显示一张可一键安装的卡片。可以关闭此检查。"
+[[features]]
+title = "融入 Windows"
+text = "托盘图标显示当前颜色，面板可固定在最上层，主题跟随 Windows，界面提供英文和俄文。"
+
+# shots
+[[shots]]
+view = "panel-dark"
+alt = "深色主题下带有设备卡片的面板"
+caption = "面板，深色主题"
+[[shots]]
+view = "panel-light"
+alt = "浅色主题下带有设备卡片的面板"
+caption = "面板，浅色主题"
+[[shots]]
+view = "editor-dark"
+alt = "带有键盘布局、画笔工具和预设的单键编辑器"
+caption = "单键编辑器：画笔、取色器、渐变、预设和固件灯效"
+
+# limits
+[[limits]]
+head = "仅限 Windows。"
+text = "这是 Windows 10 和 11 的应用；没有 macOS 或 Linux 版本。"
+[[limits]]
+head = "仅管灯效。"
+text = "不支持宏、按键映射、鼠标 DPI 或固件更新。"
+[[limits]]
+head = "不能与厂商灯效软件并存。"
+text = "两个程序同时写入同一设备会相互冲突：请先关闭 G HUB、Synapse、Armoury Crate、SignalRGB 或 OpenRGB 的灯效软件。"
+[[limits]]
+head = "无需账号，不用云端。"
+text = "它只在每日检查更新时联网（可以关闭），以及连接你自己网络中的 Tuya 灯泡时联网。"
+[[limits]]
+head = "并非每个型号都经过测试。"
+text = "大多数 Razer 型号来自 OpenRazer 的数据，未经测试；HyperSpeed 无线键盘目前仅支持有线连接。"
+[[limits]]
+head = "尚未进行代码签名。"
+text = "Windows SmartScreen 首次运行时可能会对安装程序发出警告；见下方的下载部分。"
+
+# claude_steps
+[[claude_steps]]
+title = "在 Claude Code 中打开仓库"
+text = "在插着该设备的 Windows 电脑上，克隆 <code>github.com/Gronck2/rgb-tray</code>，并在该文件夹中启动 Claude Code。配置文件只需已安装应用的命令行工具；驱动则需要 Rust，Claude 会帮你安装。"
+[[claude_steps]]
+title = "输入 /add-device"
+text = "说明是哪个设备，以及它上面哪里会亮。请先退出厂商的应用，以免两个程序争抢设备。"
+[[claude_steps]]
+title = "Claude 读取设备报告"
+text = "它会运行 <code>rgbtray --diagnose</code>，按厂商 ID 和产品 ID 找到你的设备，并查看其哪些接口使用的是 RGB Tray 已知的协议。"
+[[claude_steps]]
+title = "它查找协议"
+text = "在 OpenRGB 或 OpenRazer 中查找，或查看你录制的厂商应用 USB 抓包（<a href=\"{{capture_doc_url}}\">方法</a>），或用 <code>--hid-send</code> 小心地逐条尝试，且只在你同意之后进行。"
+[[claude_steps]]
+title = "你就是它的眼睛"
+text = "它编写配置文件，用 <code>--profile-check</code> 检查，并用 <code>--profile-test</code> 播放颜色、分区和灯效。每一步之后，它都会询问设备的反应。"
+[[claude_steps]]
+title = "它在你的电脑上正常工作"
+text = "Claude 把配置文件复制到 <code>%APPDATA%\\rgbtray\\devices\\</code>；重启 RGB Tray，设备就会在面板上出现自己的卡片。然后它会询问你是否想分享出去。"
+
+# routes
+[[routes]]
+title = "已经可以使用"
+text = "HID LampArray 设备和支持 VIA 的 QMK 键盘由通用驱动控制。打开面板，找找它的卡片。"
+[[routes]]
+title = "已知协议的配置文件"
+text = "新的 Razer 型号只需一个小的 TOML 文件，写明其产品 ID、事务 ID 和 LED ID，这些都取自 OpenRazer。QMK/VIA 配置文件可以指定固件的灯效。"
+[[routes]]
+title = "<code>[hid]</code> 配置文件"
+text = "简单的协议（报告里带颜色，无需应答）可以写成带有 <code>{r} {g} {b}</code> 的报告模板。它还支持 XOR 或求和校验、“接管”和“交还”报告以及按 LED 设置颜色。无需编译。"
+[[routes]]
+title = "Rust 驱动"
+text = "需要应答、握手或状态的协议要用驱动：即实现 <code>Device</code> trait 的模块。<a href=\"{{contributing_url}}\">CONTRIBUTING.md</a> 对此有详细说明。"
+
+# commands
+[[commands]]
+cmd = "rgbtray --diagnose report.txt"
+text = "列出所有 HID 设备和接口，标出 RGB Tray 认识的设备，以及有错误的配置文件。"
+[[commands]]
+cmd = "rgbtray --hid-send out.txt <vid:pid[:page[:usage]]> <feature|output|get> \"<hex>\""
+text = "发送原始报告并将应答追加到文件中，用于分析协议。"
+[[commands]]
+cmd = "rgbtray --profile-check out.txt my-device.toml"
+text = "读取配置文件而不访问任何设备，并写出应用对其中每个型号的解析结果，或其中的错误。"
+[[commands]]
+cmd = "rgbtray --profile-test out.txt my-device.toml"
+text = "在 <code>[hid]</code> 配置文件所对应的设备上依次播放红、绿、蓝、暗白、各个分区、呼吸、光谱循环和关闭，并记录每一步。"
+
+# share_steps
+[[share_steps]]
+text = "配置文件放入 <code>profiles/&lt;vendor&gt;-&lt;model&gt;.toml</code>，并加入 <code>src/devices/profile.rs</code> 中的 <code>BUILT_IN</code>；只有在设备上实际检查过，才设置 <code>tested = true</code>。"
+[[share_steps]]
+text = "设备要加入每个 README 的表格。"
+[[share_steps]]
+text = "通过 CI 运行的检查：<code>cargo fmt --check</code>、<code>cargo clippy</code> 和 <code>cargo test</code>。"
+[[share_steps]]
+text = "从你的 fork 的某个分支提交 pull request，说明是哪个设备、采用哪种方式，以及在硬件上检查了什么。不想折腾 git？提交一份设备申请，附上配置文件和设备报告即可。"
+
+# install_steps
+[[install_steps]]
+text = "从最新版本下载 <code>RGBTray-Setup-&lt;version&gt;.exe</code>。"
+[[install_steps]]
+text = "运行它。应用会为当前 Windows 用户安装到 <code>%LOCALAPPDATA%\\Programs\\RGB Tray</code> 并启动。"
+[[install_steps]]
+text = "单击托盘图标即可打开面板。可在 Windows 设置 → 应用中卸载 RGB Tray。"

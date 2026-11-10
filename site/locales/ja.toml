@@ -1,0 +1,273 @@
+# Texts of the landing page (site/template.html), Japanese. Values are HTML; build.py checks that every language
+# has the same keys and the same `hue`, `view` and `cmd` values as en.toml.
+
+html_title = "RGB Tray — キーボード・マウス・ライトの RGB ライティングを 1 つで操作する小さなトレイアプリ"
+meta_description = "Logitech、Razer、ASUS、QMK/VIA、LampArray デバイスの RGB ライティングを HID で直接、Tuya 電球をローカルネットワーク経由で制御する、Windows 用の小さなトレイアプリ。G HUB、Synapse、Armoury Crate、SignalRGB は不要です。"
+og_description = "G HUB、Synapse、Armoury Crate、SignalRGB の代わりになる、Windows 用の小さなトレイアプリ。無料でオープンソース。"
+skip_link = "本文へスキップ"
+
+nav_label = "メイン"
+nav_devices = "デバイス"
+nav_add = "デバイスを追加"
+nav_download = "ダウンロード"
+opens_github = "（github.com が開きます）"
+lang_label = "言語"
+
+tag_free = "無料"
+tag_open_source = "オープンソース"
+hero_sub = "すべての RGB ライティングを、小さなトレイアプリ 1 つで。"
+hero_lede = "RGB Tray は、キーボード、マウス、ライトを HID で直接、Tuya 電球をローカルネットワーク経由で制御します。色、エフェクト、明るさを全デバイス一括またはデバイスごとに設定でき、メーカー製ソフトウェアをバックグラウンドで動かす必要はありません。"
+btn_download = "Windows 版をダウンロード"
+btn_add = "デバイスを追加"
+release_note = "バージョン {version}"
+release_size = "{mb} MB"
+replaces_label = "代わりに"
+hero_alt = "RGB Tray のパネル：全デバイス共通の色とエフェクト、全体の明るさ、各デバイスのカード"
+
+why_title = "小さなアプリ 1 つで済む理由"
+why_lede = "ブランドごとに専用のライティングアプリがあり、どれもバックグラウンドで動こうとします。RGB Tray は、そのライティング部分をまとめて 1 つで担います。"
+
+devices_title = "対応デバイス"
+devices_lede = "現在は 6 つのファミリーに対応しています。同じプロトコルを使う他のモデルも動作する可能性があり、新しいモデルは小さなテキストファイルで追加できることがよくあります。"
+devices_note = "接続方法、Razer の全モデル、Tuya キーの取得方法は"
+anchor_devices = "#対応デバイス"
+devices_link = "GitHub のデバイス一覧表"
+
+features_title = "できること"
+features_lede = "小さくても必要十分：本来ならメーカー製アプリを開いて行う操作がそろっています。"
+
+shots_title = "中を見てみる"
+shots_lede = "ダークテーマとライトテーマのパネル、そして Logitech G915 TKL のキーごとのエディター。クリックで拡大します。"
+
+limits_title = "できないこと"
+limits_lede = "何かをアンインストールする前に知っておきたい点です。"
+
+add_title = "デバイスが一覧にない？自分で追加できます"
+add_lede = "多くのデバイスはコード不要で、小さなプロファイルファイルだけで動きます。Claude Code を使えば、Rust や HID の知識も不要です。技術的な作業は Claude が行い、あなたはライトを見るだけです。"
+
+claude_title = "Claude Code で：/add-device"
+claude_text = "このリポジトリには <a href=\"https://claude.com/claude-code\">Claude Code</a> 用の <code>/add-device</code> スキルが付属しています。Claude はデバイスレポートから、テスト済みのプロファイルまたはドライバーまで、ご希望ならプルリクエストまで進めます。"
+claude_safety = "<strong>Claude にはライトが見えない</strong>ため、あなたが確認するまで動作したことにはなりません。ファームウェア更新、ブートローダー、工場出荷状態へのリセット、フラッシュへの保存のコマンドは決して送らず、自分で考えたレポートを送る前には必ず確認します。デバイスが応答しなくなったら、いったん抜いて挿し直してください。"
+
+routes_title = "4 つの方法、手軽なものから順に"
+routes_text = "Claude と進める場合も手作業の場合も、デバイスには最初に当てはまる方法が使われます。"
+
+commands_title = "アプリに内蔵のツール"
+commands_text = "プロファイルの作成と確認はアプリ自身で行え、ビルドは不要です。コンソールのない Windows プログラムなので、各ツールは結果を指定したファイルに書き出します。"
+th_command = "コマンド"
+th_what = "動作"
+commands_note = "自作のプロファイルは <code>%APPDATA%\\rgbtray\\devices\\</code> に置くと、アプリの再起動後に有効になります。<code>key</code> が同じものは組み込みプロファイルを置き換えます。各フィールドと各プロトコルのセクションは次を参照してください："
+commands_link = "docs/profiles.md"
+
+share_title = "みんなと共有する"
+share_text = "デバイスが動いたら、プルリクエストでそのデバイスをすべての RGB Tray ユーザー向けの組み込みにできます。Claude が <code>gh pr create</code> で一通り代行できます："
+share_fork = "GitHub でフォーク"
+share_request = "デバイスをリクエスト"
+share_contributing = "貢献のしかた"
+
+download_title = "ダウンロードとインストール"
+download_lede = "ファイルは 1 つだけ：インストーラーがアプリそのものです。ランタイムのインストールも管理者権限も不要です。"
+btn_releases = "すべてのリリース"
+smartscreen_head = "初回は SmartScreen が警告することがあります。"
+smartscreen_text = "インストーラーにはまだコード署名がありません。詳細情報 → 実行 を選んでください。各リリースにはインストーラーの SHA-256 が記載されています。"
+vendor_head = "メーカー製のライティングソフトウェアを終了してください。"
+vendor_text = "2 つのプログラムが同じデバイスに書き込むと、互いに競合します。Windows 11 では「Logitech LampArray」サービス（ダイナミック ライティング）によって G915 がエフェクトを無視するようになります。RGB Tray はこれを警告し、無効化を提案します。"
+settings_head = "設定は安全です。"
+settings_text = "設定は <code>%APPDATA%\\rgbtray</code> に保存され、アップデートや再インストール後も保持されます。直近 14 日間と各アップデート前のコピーは <code>backups</code> に保管され、設定ファイルが壊れた場合は正常に読める最新のコピーに置き換えられます。"
+build_title = "ソースからビルド"
+build_text = "Windows 10 または 11 と、stable 版の <a href=\"https://rustup.rs\">Rust</a>（<code>x86_64-pc-windows-gnu</code> または <code>-msvc</code> ツールチェーン）が必要です。インストーラーは同じ実行ファイルです。<code>RGBTray-Setup-*.exe</code> という名前にすると、自身をインストールします。"
+
+thanks_title = "もっと多くのデバイスを光らせるために"
+thanks_text = "RGB Tray は無料のオープンソースです。いちばん助かるのはコード不要の協力です：デバイスレポートの提供や、プロジェクトが持っていないハードウェアでのビルドのテスト。GitHub のスターも、他の人が見つける助けになります。"
+thanks_star = "GitHub でスターを付ける"
+thanks_bug = "問題を報告する"
+thanks_note = "Issue やリクエストは GitHub に送ります。書き込むには無料の GitHub アカウントが必要です。"
+
+footer_text = "RGB Tray · MIT または Apache-2.0 · Logitech、Razer、ASUS、Geekboard、Tuya とは無関係です。商標はそれぞれの所有者に帰属します。"
+footer_label = "リンク"
+footer_readme = "README"
+footer_releases = "リリース"
+footer_issues = "Issues"
+footer_security = "セキュリティ"
+
+lb_label = "スクリーンショット"
+lb_prev = "前のスクリーンショット"
+lb_next = "次のスクリーンショット"
+lb_close = "閉じる"
+
+# Lists. In TOML every key after a [[table]] header belongs to that entry, so the lists come last.
+
+# why
+[[why]]
+title = "バックグラウンドに他は不要"
+text = "各デバイスのプロトコルを自分で話すため、G HUB、Synapse、Armoury Crate、SignalRGB を動かしておく必要はありません。インストールに管理者権限は不要です。"
+[[why]]
+title = "すべてを 1 つのパネルで"
+text = "トレイアイコンを左クリックするとパネルが開きます。色、エフェクト、明るさを全デバイス一括またはデバイスごとに設定でき、グローバルホットキーに割り当てられるプリセットもあります。"
+[[why]]
+title = "PC の状態に追従"
+text = "スリープ（モダン スタンバイを含む）からの復帰時やデバイスの接続時にライティングが戻り、画面に合わせて暗くなり、画面がオフの間は消灯します。"
+
+# families
+[[families]]
+hue = "205"
+title = "Logitech"
+models = "G915 TKL（LIGHTSPEED レシーバー）"
+text = "固定色、ブリージング、スペクトラム、消灯。キーエディターによるキーごとの色。ファームウェアのウェーブとリップルのエフェクト。バッテリー。"
+[[families]]
+hue = "135"
+title = "Razer"
+models = "Naga V2 Pro、Mouse Dock Pro ほか約 90 種"
+text = "Basilisk、DeathAdder、Viper、Cobra、BlackWidow、Huntsman、Ornata、Firefly、Goliathus、Base Station など、OpenRazer のデータに基づく機種：エフェクト、マウスのゾーン、バッテリー。大半は未検証で、その旨がカードに表示されます。動作報告を歓迎します。"
+[[families]]
+hue = "350"
+title = "ASUS"
+models = "ノート PC のキーボード（Aura）"
+text = "固定色、ブリージング、スペクトラム、消灯。LampArray によるキーボードのゾーンと本体のランプ。キーボードは復帰時に白へリセットされるため、ライティングを再適用します。"
+[[families]]
+hue = "48"
+title = "QMK / VIA"
+models = "Geekboard MacroPad v2、Keychron、自作キーボード"
+text = "VIA と RGB に対応した任意の QMK キーボード：固定色、ブリージング、スペクトラム、消灯、明るさ。色は RAM にのみ設定されるため、キーボード自身の保存済み設定には手を加えません。"
+[[families]]
+hue = "268"
+title = "Windows のダイナミック ライティング"
+models = "HID LampArray デバイス"
+text = "LampArray 規格に対応したデバイス：固定色、ブリージング、スペクトラム、消灯、およびデバイス自身が示すゾーン。ブリージングとスペクトラムはアプリ側で描画します。"
+[[families]]
+hue = "28"
+title = "Tuya 電球"
+models = "Smart Life の Wi-Fi 電球、例：LINUS A60"
+text = "ローカルネットワーク経由：カラー、色味を調整できる白色、ブリージング、スペクトラム、消灯。電球は画面と連動して消灯しません。電球のローカルキーが必要で、Tuya クラウドから一度取得します。"
+
+# features
+[[features]]
+title = "明るさと速度"
+text = "全体の明るさに加えて、その上にデバイスごとの明るさを設定可能。ブリージングとスペクトラムの速度も、全体およびデバイスごとに設定できます。"
+[[features]]
+title = "キーごとのエディター"
+text = "Logitech キーボード用：ブラシ、スポイト、レインボー、2 色グラデーション、WASD のみ・文字キーのみのプリセット、単語のハイライト、スキームの保存、ANSI/ISO 配列。"
+[[features]]
+title = "ホットキーでプリセット"
+text = "ライティングを保存し、グローバルホットキーで切り替えられます。Ctrl、Alt、Shift、Win と組み合わせた F13–F24 も使えます。"
+[[features]]
+title = "デバイスごとのホットキー"
+text = "1 台のデバイスを消灯し、元の状態で再点灯します。たとえば部屋のランプに便利です。プリセットには影響しません。"
+[[features]]
+title = "ディスプレイに連動"
+text = "Windows が画面を暗くするとライティングも暗くなり、画面がオフの間（アイドル、ロック、スリープ）は消灯します。オフにすることもできます。"
+[[features]]
+title = "ワイヤレスとバッテリー"
+text = "バッテリー残量の表示、10% と 5% での警告、ワイヤレスデバイスのスリープ中は「No link」（接続なし）と表示。復帰すると色が戻ります。"
+[[features]]
+title = "複数のデバイスを区別して管理"
+text = "同じデバイスでもそれぞれ個別に設定でき、シリアル番号で区別されます。切断されたデバイスは設定ごとアーカイブで待機します。"
+[[features]]
+title = "設定を共有"
+text = "すべての設定をエクスポート／インポートできます。プリセット 1 つをファイルに保存することもでき、受け取った側の同じモデルのデバイスに適用されます。"
+[[features]]
+title = "ワンクリックでアップデート"
+text = "1 日 1 回 GitHub に最新リリースを問い合わせ、インストールできるカードを表示します。チェックはオフにできます。"
+[[features]]
+title = "Windows になじむ"
+text = "トレイアイコンが現在の色を表示し、パネルは最前面にピン留めでき、テーマは Windows に追従し、インターフェースは英語とロシア語です。"
+
+# shots
+[[shots]]
+view = "panel-dark"
+alt = "デバイスのカードが並ぶ、ダークテーマのパネル"
+caption = "パネル（ダークテーマ）"
+[[shots]]
+view = "panel-light"
+alt = "デバイスのカードが並ぶ、ライトテーマのパネル"
+caption = "パネル（ライトテーマ）"
+[[shots]]
+view = "editor-dark"
+alt = "キーボード配列、ブラシツール、プリセットを備えたキーごとのエディター"
+caption = "キーごとのエディター：ブラシ、スポイト、グラデーション、プリセット、ファームウェアエフェクト"
+
+# limits
+[[limits]]
+head = "Windows 専用。"
+text = "Windows 10 と 11 用のアプリで、macOS や Linux 版はありません。"
+[[limits]]
+head = "ライティングのみ。"
+text = "マクロ、キーの割り当て変更、マウスの DPI、ファームウェア更新には対応しません。"
+[[limits]]
+head = "メーカー製ライティングアプリとは併用不可。"
+text = "2 つのプログラムが同じデバイスに書き込むと互いに競合します。先に G HUB、Synapse、Armoury Crate、SignalRGB、OpenRGB のライティングソフトウェアを終了してください。"
+[[limits]]
+head = "アカウントもクラウドも不要。"
+text = "インターネットに接続するのは、毎日のアップデート確認（オフにできます）と、同じネットワーク内の Tuya 電球への通信だけです。"
+[[limits]]
+head = "すべてのモデルを検証しているわけではありません。"
+text = "Razer のモデルの大半は OpenRazer のデータに基づく未検証のもので、ワイヤレスの HyperSpeed キーボードは現在のところ有線接続時のみ動作します。"
+[[limits]]
+head = "まだコード署名がありません。"
+text = "Windows SmartScreen が初回にインストーラーを警告することがあります。下のダウンロードを参照してください。"
+
+# claude_steps
+[[claude_steps]]
+title = "Claude Code でリポジトリを開く"
+text = "デバイスをつないだ Windows PC で <code>github.com/Gronck2/rgb-tray</code> をクローンし、そのフォルダーで Claude Code を起動します。プロファイルならインストール済みアプリのコマンドラインツールで足ります。ドライバーには Rust が必要で、Claude がインストールを手伝います。"
+[[claude_steps]]
+title = "/add-device と入力"
+text = "どのデバイスか、どこが光るのかを伝えます。2 つのプログラムがデバイスを奪い合わないよう、先にメーカー製アプリを終了してください。"
+[[claude_steps]]
+title = "Claude がデバイスレポートを読む"
+text = "<code>rgbtray --diagnose</code> を実行し、ベンダー ID とプロダクト ID からデバイスを見つけ、RGB Tray がすでに知っているプロトコルを話すインターフェースがどれかを調べます。"
+[[claude_steps]]
+title = "プロトコルを探す"
+text = "OpenRGB や OpenRazer の中、あなたが記録したメーカー製アプリの USB キャプチャ（<a href=\"{{capture_doc_url}}\">手順</a>）、または <code>--hid-send</code> による慎重な試行で探します。試行は 1 回ずつ、あなたの了承を得てからのみです。"
+[[claude_steps]]
+title = "あなたが Claude の目になる"
+text = "プロファイルを書き、<code>--profile-check</code> で確認し、<code>--profile-test</code> で色、ゾーン、エフェクトを再生します。各ステップのあとで、デバイスがどう反応したかを尋ねます。"
+[[claude_steps]]
+title = "あなたの PC で動く"
+text = "Claude がプロファイルを <code>%APPDATA%\\rgbtray\\devices\\</code> にコピーします。RGB Tray を再起動すると、デバイスのカードがパネルに表示されます。そのあと、共有したいかどうかを尋ねます。"
+
+# routes
+[[routes]]
+title = "すでに動く"
+text = "HID LampArray デバイスと、VIA 対応の QMK キーボードは、汎用ドライバーで制御されます。パネルを開いてカードを探してください。"
+[[routes]]
+title = "既知のプロトコル用のプロファイル"
+text = "新しい Razer モデルは、プロダクト ID、トランザクション ID、LED ID を記した小さな TOML ファイルです。値は OpenRazer から取ります。QMK/VIA のプロファイルではファームウェアのエフェクトを指定できます。"
+[[routes]]
+title = "<code>[hid]</code> プロファイル"
+text = "単純なプロトコル（色を含むレポートで、応答が不要なもの）は、<code>{r} {g} {b}</code> を使ったレポートテンプレートとして記述します。XOR や合計のチェックサム、「制御を取得」「制御を返す」レポート、LED ごとの色にも対応します。コンパイル不要です。"
+[[routes]]
+title = "Rust ドライバー"
+text = "応答、ハンドシェイク、状態が必要なプロトコルにはドライバーを使います。<code>Device</code> トレイトを実装するモジュールです。手順は <a href=\"{{contributing_url}}\">CONTRIBUTING.md</a> で説明しています。"
+
+# commands
+[[commands]]
+cmd = "rgbtray --diagnose report.txt"
+text = "すべての HID デバイスとインターフェースを一覧にし、RGB Tray が認識するものに印を付け、誤りのあるプロファイルファイルも示します。"
+[[commands]]
+cmd = "rgbtray --hid-send out.txt <vid:pid[:page[:usage]]> <feature|output|get> \"<hex>\""
+text = "生のレポートを送信し、応答をファイルに追記します。プロトコルを解析するためのものです。"
+[[commands]]
+cmd = "rgbtray --profile-check out.txt my-device.toml"
+text = "デバイスに一切触れずにプロファイルを読み込み、各モデルがアプリにどう解釈されるか、または何が間違っているかを書き出します。"
+[[commands]]
+cmd = "rgbtray --profile-test out.txt my-device.toml"
+text = "<code>[hid]</code> プロファイルのデバイスで、赤、緑、青、暗めの白、各ゾーン、ブリージング、スペクトラム、消灯を再生し、各ステップを記録します。"
+
+# share_steps
+[[share_steps]]
+text = "プロファイルは <code>profiles/&lt;vendor&gt;-&lt;model&gt;.toml</code> に置き、<code>src/devices/profile.rs</code> の <code>BUILT_IN</code> に追加します。<code>tested = true</code> にするのは、実機で確認した場合のみです。"
+[[share_steps]]
+text = "デバイスをすべての README の表に追加します。"
+[[share_steps]]
+text = "CI が実行するチェックを通します：<code>cargo fmt --check</code>、<code>cargo clippy</code>、<code>cargo test</code>。"
+[[share_steps]]
+text = "フォークのブランチからプルリクエストを出し、どのデバイスか、どの方法か、ハードウェアで何を確認したかを書きます。git は避けたい？ デバイスリクエストを開き、プロファイルとデバイスレポートを添付してください。"
+
+# install_steps
+[[install_steps]]
+text = "最新リリースから <code>RGBTray-Setup-&lt;version&gt;.exe</code> をダウンロードします。"
+[[install_steps]]
+text = "実行します。現在の Windows ユーザー向けに <code>%LOCALAPPDATA%\\Programs\\RGB Tray</code> へ自身をインストールし、起動します。"
+[[install_steps]]
+text = "トレイアイコンをクリックするとパネルが開きます。RGB Tray は Windows の設定 → アプリから削除できます。"
