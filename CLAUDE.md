@@ -60,7 +60,7 @@ stops the build; in TOML the `[[lists]]` come last). The locales take their fact
 Screenshots: `docs/screenshots/<view>.png` (Russian UI) for `ru`, `<view>-en.png` for every other language, rendered by
 `.github/workflows/screenshots.yml` (Windows runner, `RGBTRAY_DEMO_IDS`; copy the artifact's files by hand).
 Self-hosted Manrope (Latin + Cyrillic; CJK falls back to system fonts); `site.js` fills the download link from the latest
-release and opens screenshots large. `site/404.html` sends case variants and paths under a language to that language.
+release and opens screenshots large. The floating Ko-fi button is a plain link (no Ko-fi widget script), its cup image is `site/kofi-cup.png`. `site/404.html` sends case variants and paths under a language to that language.
 Build into the scratchpad and screenshot it with headless Chrome to check. Published by `pages.yml` (pull requests only build).
 
 ## Runtime files

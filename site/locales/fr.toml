@@ -90,6 +90,9 @@ footer_releases = "Versions"
 footer_issues = "Tickets"
 footer_security = "Sécurité"
 
+kofi_text = "Soutenez-moi sur Ko-fi"
+kofi_title = "Soutenez-moi sur ko-fi.com"
+
 lb_label = "Capture d'écran"
 lb_prev = "Capture d'écran précédente"
 lb_next = "Capture d'écran suivante"

@@ -90,6 +90,9 @@ footer_releases = "版本发布"
 footer_issues = "问题"
 footer_security = "安全"
 
+kofi_text = "在 Ko-fi 上支持我"
+kofi_title = "在 ko-fi.com 上支持我"
+
 lb_label = "截图"
 lb_prev = "上一张截图"
 lb_next = "下一张截图"
