@@ -92,6 +92,8 @@ footer_security = "Sécurité"
 
 kofi_text = "Soutenez-moi sur Ko-fi"
 kofi_title = "Soutenez-moi sur ko-fi.com"
+boosty_text = "Soutenez-moi sur Boosty"
+boosty_title = "Soutenez-moi sur boosty.to"
 
 lb_label = "Capture d'écran"
 lb_prev = "Capture d'écran précédente"

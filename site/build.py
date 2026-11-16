@@ -59,8 +59,17 @@ def png_size(name):
     if head[:8] != b"\x89PNG\r\n\x1a\n":
         fail(f"docs/screenshots/{name} is not a PNG")
     return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
-STATIC = ["style.css", "site.js", "404.html", "favicon.svg", "fonts", "kofi-cup.png"]
+STATIC = ["style.css", "site.js", "404.html", "favicon.svg", "fonts", "kofi-cup.png", "boosty.svg"]
 
+# The floating donate buttons; their texts come from the locale through the second placeholder pass.
+DONATE = {
+    "kofi": '<a class="kofi" href="https://ko-fi.com/E2W22ARKSQ" target="_blank" rel="noopener" title="{{kofi_title:attr}}">'
+    '<img src="{{root}}kofi-cup.png" alt="" width="22" height="18">{{kofi_text}}</a>',
+    "boosty": '<a class="boosty" href="https://boosty.to/gronck" target="_blank" rel="noopener" title="{{boosty_title:attr}}">'
+    '<img src="{{root}}boosty.svg" alt="" width="18" height="22">{{boosty_text}}</a>',
+}
+# Boosty first where it is the usual way to pay (Russian), Ko-fi first elsewhere.
+DONATE_FIRST = {"ru": "boosty"}
 CURRENT = ' aria-current="page"'
 PLACEHOLDER = re.compile(r"\{\{([a-z0-9_]+)(:attr)?\}\}")
 
@@ -147,6 +156,8 @@ def blocks(lang, loc):
     out["route_list"] = "\n".join(f'<li><span class="route-n">{i}</span><div><h4>{r["title"]}</h4><p>{r["text"]}</p></div></li>' for i, r in enumerate(loc["routes"], 1))
     out["share_steps"] = "\n".join(f'<li>{s["text"]}</li>' for s in loc["share_steps"])
     out["install_steps"] = "\n".join(f'<li>{s["text"]}</li>' for s in loc["install_steps"])
+    first = DONATE_FIRST.get(lang, "kofi")
+    out["donate_list"] = "\n".join(DONATE[k] for k in sorted(DONATE, key=lambda k: k != first))
     return out
 
 

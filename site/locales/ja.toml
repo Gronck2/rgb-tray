@@ -92,6 +92,8 @@ footer_security = "セキュリティ"
 
 kofi_text = "Ko-fi で支援する"
 kofi_title = "ko-fi.com で支援する"
+boosty_text = "Boosty で支援する"
+boosty_title = "boosty.to で支援する"
 
 lb_label = "スクリーンショット"
 lb_prev = "前のスクリーンショット"
