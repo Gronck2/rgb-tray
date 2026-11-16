@@ -940,7 +940,7 @@ td:first-child code {
 
 footer {
   border-top: 1px solid var(--line);
-  /* Room under the footer so the floating Ko-fi button never covers its links at the end of the page. */
+  /* Room under the footer so the floating donate buttons never cover its links at the end of the page. */
   padding: var(--sp-6) 0 calc(var(--sp-6) + 56px);
   font-size: 14px;
   color: var(--muted);
@@ -1128,22 +1128,26 @@ footer a {
   }
 }
 
-/* Ko-fi button: floats in the bottom-right corner. Same look as Ko-fi's "Widget_2" button (dark #0e0f0f, cup icon),
-   drawn as a plain link: no third-party script, no Google Fonts request, the cup image is served from this site. */
+/* Donate buttons: Ko-fi and Boosty float together in the bottom-right corner, side by side, stacked on phones.
+   Ko-fi has the look of its "Widget_2" button (dark #0e0f0f, wiggling cup), Boosty its signature orange #F15F2C with
+   the white brand mark. Plain links: no third-party script, no web fonts, the images are served from this site. */
 
-.kofi {
+.donate {
   position: fixed;
   right: 20px;
   bottom: 20px;
   z-index: 30;
+  display: flex;
+  gap: 8px;
+}
+.donate a {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   min-height: 40px;
   padding: 2px 14px;
   border-radius: 7px;
-  background-color: #0e0f0f;
-  border: 1px solid #343a4e;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
   color: #fff;
   font-family: var(--font);
@@ -1153,18 +1157,36 @@ footer a {
   white-space: nowrap;
   text-decoration: none;
 }
-.kofi:hover {
+.donate a:hover {
   color: #f5f5f5;
   opacity: 0.85;
+}
+.kofi {
+  background-color: #0e0f0f;
+  border: 1px solid #343a4e;
 }
 .kofi img {
   width: 22px;
   height: auto;
 }
+.boosty {
+  background-color: #f15f2c;
+  border: 1px solid #f15f2c;
+}
+.boosty img {
+  width: auto;
+  height: 20px;
+}
 @media (max-width: 720px) {
-  .kofi {
+  .donate {
     right: 16px;
     bottom: 16px;
+    max-width: calc(100vw - 32px);
+    flex-direction: column;
+  }
+  /* Room for both stacked buttons under the footer links. */
+  footer {
+    padding-bottom: calc(var(--sp-6) + 104px);
   }
 }
 @media (prefers-reduced-motion: no-preference) {
