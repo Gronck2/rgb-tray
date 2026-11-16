@@ -90,6 +90,9 @@ footer_releases = "Releases"
 footer_issues = "Issues"
 footer_security = "Sicherheit"
 
+kofi_text = "Unterstütze mich auf Ko-fi"
+kofi_title = "Unterstütze mich auf ko-fi.com"
+
 lb_label = "Screenshot"
 lb_prev = "Vorheriger Screenshot"
 lb_next = "Nächster Screenshot"

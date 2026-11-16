@@ -59,7 +59,7 @@ def png_size(name):
     if head[:8] != b"\x89PNG\r\n\x1a\n":
         fail(f"docs/screenshots/{name} is not a PNG")
     return int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big")
-STATIC = ["style.css", "site.js", "404.html", "favicon.svg", "fonts"]
+STATIC = ["style.css", "site.js", "404.html", "favicon.svg", "fonts", "kofi-cup.png"]
 
 CURRENT = ' aria-current="page"'
 PLACEHOLDER = re.compile(r"\{\{([a-z0-9_]+)(:attr)?\}\}")

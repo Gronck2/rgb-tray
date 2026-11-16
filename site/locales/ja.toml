@@ -90,6 +90,9 @@ footer_releases = "リリース"
 footer_issues = "Issues"
 footer_security = "セキュリティ"
 
+kofi_text = "Ko-fi で支援する"
+kofi_title = "ko-fi.com で支援する"
+
 lb_label = "スクリーンショット"
 lb_prev = "前のスクリーンショット"
 lb_next = "次のスクリーンショット"

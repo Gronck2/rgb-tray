@@ -90,6 +90,9 @@ footer_releases = "Релизы"
 footer_issues = "Задачи"
 footer_security = "Безопасность"
 
+kofi_text = "Поддержать на Ko-fi"
+kofi_title = "Поддержать на ko-fi.com"
+
 lb_label = "Скриншот"
 lb_prev = "Предыдущий скриншот"
 lb_next = "Следующий скриншот"
