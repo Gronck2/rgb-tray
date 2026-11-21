@@ -16,6 +16,7 @@ use windows::Win32::Graphics::DirectWrite::*;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_SHIFT};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -387,9 +388,41 @@ fn leaves_work(plate: Rc, work: Rc) -> bool {
     plate.0 < work.0 || plate.1 < work.1 || plate.2 > work.2 || plate.3 > work.3
 }
 
-/// The taskbar raises itself above topmost windows when it is clicked: while the plate overlaps it, put the plate back on top.
-/// Called from the modifier timer; a no-op for a plate inside the work area. Re-asserting topmost on a window that is already
-/// on top changes nothing, so there is no flicker.
+/// A window above the plate in z-order.
+#[derive(Debug, PartialEq)]
+enum Above {
+    Taskbar,
+    /// A window of this process (panel, tray menu, alert): the plate stays under it.
+    Own,
+    Other,
+}
+
+/// `above`: windows over the plate, nearest first. Raise only when the first one that is not `Other` is a taskbar.
+fn should_raise(above: impl IntoIterator<Item = Above>) -> bool {
+    above.into_iter().find(|a| !matches!(a, Above::Other)) == Some(Above::Taskbar)
+}
+
+unsafe fn classify(hwnd: HWND, own_pid: u32) -> Above {
+    // A hidden window covers nothing (IME windows of our threads, a taskbar of a monitor that is gone).
+    if IsWindowVisible(hwnd) == 0 {
+        return Above::Other;
+    }
+    let mut pid = 0u32;
+    GetWindowThreadProcessId(hwnd, &mut pid);
+    if pid == own_pid {
+        return Above::Own;
+    }
+    let mut buf = [0u16; 32];
+    let n = GetClassNameW(hwnd, buf.as_mut_ptr(), buf.len() as i32).max(0) as usize;
+    match String::from_utf16_lossy(&buf[..n]).as_str() {
+        "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" => Above::Taskbar,
+        _ => Above::Other,
+    }
+}
+
+/// The taskbar raises itself above topmost windows when it is clicked: when the plate overlaps it and the nearest window above
+/// the plate (own windows count, other apps' windows are skipped) is a taskbar, put the plate back on top. Called from the
+/// modifier timer; a no-op for a plate inside the work area. Once the plate is on top nothing is above it, so there is no flicker.
 unsafe fn keep_above_taskbar(hwnd: HWND) {
     let mut r: RECT = zeroed();
     GetWindowRect(hwnd, &mut r);
@@ -397,7 +430,18 @@ unsafe fn keep_above_taskbar(hwnd: HWND) {
     let mut mi: MONITORINFO = zeroed();
     mi.cbSize = size_of::<MONITORINFO>() as u32;
     if !monitor.is_null() && GetMonitorInfoW(monitor, &mut mi) != 0 && leaves_work(rc(r), rc(mi.rcWork)) {
-        raise(hwnd);
+        let own_pid = GetCurrentProcessId();
+        // 512 steps at most: the chain can change while it is walked.
+        let above = std::iter::successors(Some(hwnd), |&w| {
+            let p = GetWindow(w, GW_HWNDPREV);
+            (!p.is_null()).then_some(p)
+        })
+        .skip(1)
+        .take(512)
+        .map(|w| classify(w, own_pid));
+        if should_raise(above) {
+            raise(hwnd);
+        }
     }
 }
 
@@ -831,6 +875,18 @@ mod tests {
         assert!(!leaves_work((0, 0, 1920, 1040), work));
         assert!(leaves_work((10, 1000, 300, 1060), work));
         assert!(leaves_work((-5, 10, 300, 100), work));
+    }
+
+    #[test]
+    fn raise_only_when_taskbar_is_nearest_decisive_window() {
+        use Above::*;
+        assert!(!should_raise([]));
+        assert!(should_raise([Taskbar]));
+        assert!(should_raise([Other, Other, Taskbar]));
+        assert!(!should_raise([Own, Taskbar]));
+        assert!(!should_raise([Other, Own, Taskbar]));
+        assert!(!should_raise([Other, Other]));
+        assert!(should_raise([Taskbar, Own]));
     }
 
     fn ids(v: &[&str]) -> Vec<String> {
