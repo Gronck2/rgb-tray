@@ -149,6 +149,12 @@ Low/critical colours and the dimming of a device without link stay.
 19. `--snapshot *overlay*` writes the transparent image (with alpha); `RGBTRAY_DEMO_OVERLAY_BG=light|dark|split` draws it
     over a white, a black, or a half white / half black backdrop so that it can be reviewed.
 
+### Owner check, 2026-11-21
+
+The owner verified the transparent overlay on screen: all three styles are readable and Ctrl+Shift drag works.
+Follow-up fixes after review: a lost render target is rebuilt and drawn once more (other draw errors are logged),
+and the plate follows a Windows light/dark switch (`WM_SETTINGCHANGE` calls `overlay::refresh()`).
+
 ## Notes
 
 - No significant architectural decision: a new window module next to `alert.rs`, one new config field. No ADR needed.

@@ -1587,6 +1587,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             SetTimer(hwnd, TIMER_REAPPLY, 2000, None);
             1
         }
+        // Windows switched light/dark: the overlay plate takes the new colours.
+        WM_SETTINGCHANGE => {
+            overlay::refresh();
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_POWERBROADCAST => {
             if wparam == PBT_APMRESUMEAUTOMATIC as usize {
                 schedule_wake_reapply(hwnd);

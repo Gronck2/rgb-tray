@@ -307,6 +307,11 @@ pub fn refresh() {
                 let resized = size(o.style, o.rows.len()) != size(style, rows.len());
                 o.rows = rows;
                 o.style = style;
+                let t = theme();
+                if t.dark != o.theme.dark {
+                    o.theme = t;
+                    o.brush = o.surface.as_ref().and_then(|s| s.rt.as_ref()).and_then(|rt| rt.CreateSolidColorBrush(&t.text, None).ok());
+                }
                 if resized {
                     // The surface is made for the window size.
                     o.surface = None;
@@ -507,8 +512,29 @@ fn level_color(level: Level, t: &Theme) -> D2D1_COLOR_F {
 }
 
 impl Overlay {
-    /// Draws the plate on its surface (made when missing) and puts it on screen.
+    /// Draws the plate and puts it on screen. A lost render target is rebuilt and drawn once more; any other
+    /// failure is logged and the plate stays as it was.
     fn redraw(&mut self) {
+        let Err(e) = self.paint() else { return };
+        self.surface = None;
+        self.brush = None;
+        let e = if e.code() == windows::Win32::Foundation::D2DERR_RECREATE_TARGET {
+            match self.paint() {
+                Ok(()) => return,
+                Err(e) => {
+                    self.surface = None;
+                    self.brush = None;
+                    e
+                }
+            }
+        } else {
+            e
+        };
+        crate::log(&format!("battery overlay: {e}"));
+    }
+
+    /// Draws the plate on its surface (made when missing) and puts it on screen.
+    fn paint(&mut self) -> windows::core::Result<()> {
         unsafe {
             let (w, h) = size(self.style, self.rows.len());
             let (pw, ph) = ((w * self.scale).round() as i32, (h * self.scale).round() as i32);
@@ -517,29 +543,22 @@ impl Overlay {
                 self.brush = None;
             }
             if self.surface.is_none() {
-                let Ok(s) = Surface::new(&self.d2d, pw, ph, self.scale) else { return };
+                let s = Surface::new(&self.d2d, pw, ph, self.scale)?;
                 self.brush = s.rt.as_ref().and_then(|rt| rt.CreateSolidColorBrush(&self.theme.text, None).ok());
                 self.surface = Some(s);
             }
             let s = self.surface.as_ref().unwrap();
             let rt = s.rt.clone().unwrap();
             let bound = windows::Win32::Foundation::RECT { left: 0, top: 0, right: pw, bottom: ph };
-            if rt.BindDC(windows::Win32::Graphics::Gdi::HDC(s.dc), &bound).is_err() {
-                self.surface = None;
-                return;
-            }
+            rt.BindDC(windows::Win32::Graphics::Gdi::HDC(s.dc), &bound)?;
             rt.BeginDraw();
             rt.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }));
             self.draw(&rt);
-            if rt.EndDraw(None, None).is_err() {
-                // Nothing is shown; the next redraw starts on a new target.
-                self.surface = None;
-                self.brush = None;
-                return;
-            }
+            rt.EndDraw(None, None)?;
             let size = SIZE { cx: pw, cy: ph };
             let blend = BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: 255, AlphaFormat: AC_SRC_ALPHA as u8 };
             UpdateLayeredWindow(self.hwnd, null_mut(), null(), &size, s.dc, &POINT { x: 0, y: 0 }, 0, &blend, ULW_ALPHA);
+            Ok(())
         }
     }
 
