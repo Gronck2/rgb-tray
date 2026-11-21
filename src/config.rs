@@ -1296,6 +1296,27 @@ mod tests {
     }
 
     #[test]
+    fn take_hotkey_keeps_other_combinations() {
+        let (a, b) = (Some(Hotkey { mods: 0x2, vk: 0x4C }), Some(Hotkey { mods: 0x2 | 0x4, vk: 0x4C }));
+        let mut cfg = Config::default();
+        cfg.presets.push(Preset { hotkey: b, ..cfg.snapshot("P".into()) });
+        cfg.devices.insert("tuya-A".into(), DeviceConfig { hotkey: b, ..DeviceConfig::default() });
+        cfg.overlay_hotkey = b;
+        cfg.take_hotkey(a);
+        assert!(cfg.presets[0].hotkey == b && cfg.devices["tuya-A"].hotkey == b && cfg.overlay_hotkey == b);
+    }
+
+    #[test]
+    fn overlay_hotkey_with_unknown_fields_loads() {
+        // A config of a newer version: the overlay key plus a field this version does not know.
+        let text = "brightness = 50\nfuture_field = 1\n[overlay_hotkey]\nmods = 3\nvk = 66\n";
+        let cfg = good_settings(text).unwrap();
+        assert!(cfg.overlay_hotkey == Some(Hotkey { mods: 3, vk: 0x42 }));
+        // Garbled value: an error (the loader then falls back to the last good copy), never a panic.
+        assert!(good_settings("[overlay_hotkey]\nmods = \"x\"\n").is_err());
+    }
+
+    #[test]
     fn hotkey_labels() {
         assert_eq!(Hotkey { mods: 0x2 | 0x4, vk: 0x7C }.label(), "Ctrl+Shift+F13");
         assert_eq!(Hotkey { mods: 0x1, vk: 0x41 }.label(), "Alt+A");

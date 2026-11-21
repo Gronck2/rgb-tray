@@ -411,6 +411,18 @@ mod tests {
     }
 
     #[test]
+    fn no_devices_gives_no_rows() {
+        assert!(run(&[], &[("a", b(50, false))], &[]).is_empty());
+        assert!(run(&["a"], &[], &[]).is_empty());
+    }
+
+    #[test]
+    fn asleep_low_device_keeps_its_level() {
+        let r = run(&["a"], &[("a", b(4, false))], &["a"]);
+        assert!(r[0].asleep && r[0].level == Level::Critical && r[0].percent == 4);
+    }
+
+    #[test]
     fn height_grows_with_rows_and_has_an_empty_state() {
         assert!(height(0) > 2.0 * VPAD);
         assert_eq!(height(0), height(1));
