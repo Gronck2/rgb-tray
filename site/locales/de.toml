@@ -168,6 +168,9 @@ text = "Akkustände, Warnungen bei 10 % und 5 % und der Status „No link“, so
 title = "Viele Geräte, getrennt gehalten"
 text = "Identische Geräte haben eigene Einstellungen und werden an der Seriennummer unterschieden. Getrennte Geräte warten mit ihren Einstellungen in einem Archiv."
 [[features]]
+title = "Battery overlay"
+text = "Eine kleine Plakette über allen Fenstern mit dem Ladestand jedes Geräts: ohne Hintergrund, ohne Fokus, Klicks gehen durch. Ein- und ausgeblendet per selbst aufgezeichnetem Hotkey oder über den Tray-Eintrag „Battery overlay“; Ansicht voll, Zeile oder Spalte mit Modell-Icons („Overlay style“). Strg+Umschalt+Ziehen verschiebt sie, Strg+Umschalt+Doppelklick setzt sie zurück; sie darf über der Taskleiste liegen. Sie listet auch Bluetooth-Geräte, für die Windows einen Ladestand meldet (Kopfhörer, Lautsprecher, Gamepads …), samt Warnung bei niedrigem Akkustand; der Tray-Eintrag „System devices“ schaltet das ab."
+[[features]]
 title = "Setup teilen"
 text = "Alle Einstellungen exportieren und importieren oder eine Voreinstellung in eine Datei speichern: Sie wird auf die Geräte derselben Modelle des Empfängers angewendet."
 [[features]]

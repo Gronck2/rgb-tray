@@ -170,6 +170,9 @@ text = "Battery levels, alerts at 10% and 5%, and a “No link” status while a
 title = "Many devices, kept apart"
 text = "Identical devices have their own settings, told apart by serial number. Disconnected ones wait in an archive with their settings."
 [[features]]
+title = "Battery overlay"
+text = "A small plate on top of other windows with the charge of every device: no background, no focus taken, clicks pass through. Shown and hidden by a hotkey you record or the tray item “Battery overlay”; full, row or column layout with model icons (“Overlay style”). Ctrl+Shift+drag moves it, Ctrl+Shift+double-click resets it; it may sit over the taskbar. It also lists Bluetooth devices Windows reports a level for (headphones, speakers, gamepads…), with the low-battery alert; the tray item “System devices” turns that off."
+[[features]]
 title = "Share your setup"
 text = "Export and import all settings, or save one preset to a file: it goes to the receiver's devices of the same models."
 [[features]]

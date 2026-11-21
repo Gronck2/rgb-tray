@@ -168,6 +168,9 @@ text = "Niveles de batería, avisos al 10 % y al 5 %, y un estado “No link” 
 title = "Muchos dispositivos, cada uno aparte"
 text = "Los dispositivos idénticos tienen sus propios ajustes, distinguidos por el número de serie. Los desconectados esperan en un archivo con sus ajustes."
 [[features]]
+title = "Battery overlay"
+text = "Una pequeña placa sobre las demás ventanas con la carga de cada dispositivo: sin fondo, sin tomar el foco, los clics la atraviesan. Se muestra y se oculta con un atajo que tú grabas o con el elemento «Battery overlay» del icono de la bandeja; disposición completa, en fila o en columna, con iconos de los modelos («Overlay style»). Ctrl+Mayús+arrastrar la mueve, Ctrl+Mayús+doble clic la restablece; puede quedar sobre la barra de tareas. También muestra los dispositivos Bluetooth de los que Windows informa un nivel (auriculares, altavoces, mandos…), con el aviso de batería baja; el elemento «System devices» de la bandeja lo desactiva."
+[[features]]
 title = "Comparte tu configuración"
 text = "Exporta e importa todos los ajustes, o guarda un preajuste en un archivo: se aplica a los dispositivos de los mismos modelos de quien lo recibe."
 [[features]]
