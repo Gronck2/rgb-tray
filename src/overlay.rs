@@ -7,6 +7,7 @@
 use std::cell::RefCell;
 use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use windows::core::w;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -22,6 +23,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use crate::config::{OverlayPos, OverlayStyle};
 use crate::devices::{kind_of, Battery, CRITICAL_BATTERY, LOW_BATTERY};
 use crate::draw::{cursor_monitor, register_class, Paint};
+use crate::sysbat::{self, SysDevice};
 use crate::ui::{col, text_format, text_width, theme, Theme, R};
 
 const W: f32 = 280.0;
@@ -49,6 +51,15 @@ const GRAB_ALPHA: f32 = 0.35;
 const HALO: f32 = 1.0;
 /// Timer that watches Ctrl+Shift.
 const TIMER_MODIFIERS: usize = 1;
+/// Timer that reads the system devices again (connecting or switching off headphones) while the plate is up.
+const TIMER_SYSTEM: usize = 2;
+const SYSTEM_EVERY_MS: u32 = 60_000;
+/// Most rows on the plate, so that it fits the work area in every style (Row: 872 DIPs wide, Full: 416 high).
+const MAX_ROWS: usize = 10;
+/// System devices that did not fit, to log a change once.
+static LEFT_OUT: AtomicUsize = AtomicUsize::new(0);
+/// Ticks of the modifier timer, to run the taskbar check on some of them.
+static TICKS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Level {
@@ -83,14 +94,28 @@ fn level(b: Battery) -> Level {
     }
 }
 
-/// The rows, in the order of `ids` (the panel order); devices without a battery are left out.
-fn rows(ids: &[String], status: &[(String, Battery)], no_link: &[String], name: impl Fn(&str) -> String) -> Vec<Row> {
-    ids.iter()
+/// The rows, in the order of `ids` (the panel order); devices without a battery are left out. The system devices
+/// (already filtered and sorted by `sysbat::listed`) follow, as many as fit under `MAX_ROWS`; the app's own devices
+/// are always kept.
+fn rows(ids: &[String], status: &[(String, Battery)], no_link: &[String], name: impl Fn(&str) -> String, system: &[SysDevice]) -> Vec<Row> {
+    let mut rows: Vec<Row> = ids
+        .iter()
         .filter_map(|id| {
             let b = status.iter().find(|(s, _)| s == id)?.1;
             Some(Row { name: name(id), icon: kind_of(id).icon, percent: b.percent, charging: b.charging, level: level(b), asleep: no_link.contains(id) })
         })
-        .collect()
+        .collect();
+    let room = MAX_ROWS.saturating_sub(rows.len());
+    // Windows gives no charging state for these, and a disconnected device is not listed, so none is asleep.
+    rows.extend(system.iter().take(room).map(|d| Row {
+        name: d.name.clone(),
+        icon: sysbat::glyph(d.class),
+        percent: d.percent,
+        charging: false,
+        level: level(Battery { percent: d.percent, charging: false }),
+        asleep: false,
+    }));
+    rows
 }
 
 /// Window size in DIPs of `style` for `n` devices; no devices still show one line saying so.
@@ -109,8 +134,15 @@ fn current_rows() -> Vec<Row> {
     let ids = crate::active_ids();
     let status = crate::STATUS.lock().unwrap().clone();
     let no_link = crate::NO_LINK.lock().unwrap().clone();
+    let system = sysbat::listed();
     let cfg = crate::config();
-    rows(&ids, &status, &no_link, |id| cfg.display_name(id))
+    let rows = rows(&ids, &status, &no_link, |id| cfg.display_name(id), &system);
+    let apps = ids.iter().filter(|id| status.iter().any(|(s, _)| s == *id)).count();
+    let dropped = system.len().saturating_sub(MAX_ROWS.saturating_sub(apps));
+    if LEFT_OUT.swap(dropped, Ordering::Relaxed) != dropped && dropped > 0 {
+        crate::log(&format!("battery overlay: {dropped} system device(s) left out, the plate holds {MAX_ROWS} rows"));
+    }
+    rows
 }
 
 struct Formats {
@@ -216,21 +248,26 @@ fn rc(r: RECT) -> Rc {
     (r.left, r.top, r.right, r.bottom)
 }
 
-/// The corner of `plate` nearest the edges of `work`, as the position to remember.
+/// The position of `plate` to remember: its left edge (the plate always grows to the right), and the top or bottom edge
+/// nearest the edge of `work` (it grows away from that one). `right` is only read from older configs, never set.
 fn anchor_of(plate: Rc, work: Rc) -> OverlayPos {
-    let right = plate.0 - work.0 > work.2 - plate.2;
     let bottom = plate.1 - work.1 > work.3 - plate.3;
-    OverlayPos { x: if right { plate.2 } else { plate.0 }, y: if bottom { plate.3 } else { plate.1 }, right, bottom }
+    OverlayPos { x: plate.0, y: if bottom { plate.3 } else { plate.1 }, right: false, bottom }
 }
 
-/// Top-left of a `w` x `h` plate kept at `pos`: it grows away from the anchored corner.
-fn origin(pos: OverlayPos, w: i32, h: i32) -> (i32, i32) {
-    (if pos.right { pos.x - w } else { pos.x }, if pos.bottom { pos.y - h } else { pos.y })
+/// `pos` of an older config (`right`: `x` is the plate's right edge) as a left-anchored one for a `w` wide plate.
+fn left_anchored(pos: OverlayPos, w: i32) -> OverlayPos {
+    OverlayPos { x: if pos.right { pos.x - w } else { pos.x }, right: false, ..pos }
+}
+
+/// Top-left of a `w` x `h` plate kept at `pos` (left-anchored): it grows to the right, and up or down away from the anchored edge.
+fn origin(pos: OverlayPos, h: i32) -> (i32, i32) {
+    (pos.x, if pos.bottom { pos.y - h } else { pos.y })
 }
 
 /// `origin` moved the least that puts the plate inside `work` (the top-left wins when it does not fit).
 fn placed(pos: OverlayPos, w: i32, h: i32, work: Rc) -> (i32, i32) {
-    let (l, t) = origin(pos, w, h);
+    let (l, t) = origin(pos, h);
     (l.min(work.2 - w).max(work.0), t.min(work.3 - h).max(work.1))
 }
 
@@ -247,12 +284,12 @@ fn probe(pos: OverlayPos) -> POINT {
     POINT { x: pos.x - pos.right as i32, y: pos.y - pos.bottom as i32 }
 }
 
-/// The default position: top-right of `work`, `margin` pixels in.
-fn default_pos(work: Rc, margin: i32) -> OverlayPos {
-    OverlayPos { x: work.2 - margin, y: work.1 + margin, right: true, bottom: false }
+/// The default position of a `w` wide plate: top-right of `work`, `margin` pixels in (from there it grows to the right and is clamped).
+fn default_pos(work: Rc, margin: i32, w: i32) -> OverlayPos {
+    OverlayPos { x: work.2 - margin - w, y: work.1 + margin, right: false, bottom: false }
 }
 
-/// Work area and DPI of the monitor at `pt`; `None` when no monitor holds it and `flags` says not to guess.
+/// Full rectangle (the taskbar included: the plate may sit over it) and DPI of the monitor at `pt`; `None` when no monitor holds it and `flags` says not to guess.
 unsafe fn monitor_at(pt: POINT, flags: MONITOR_FROM_FLAGS) -> Option<(Rc, u32)> {
     let monitor = MonitorFromPoint(pt, flags);
     if monitor.is_null() {
@@ -263,7 +300,7 @@ unsafe fn monitor_at(pt: POINT, flags: MONITOR_FROM_FLAGS) -> Option<(Rc, u32)> 
     GetMonitorInfoW(monitor, &mut mi);
     let (mut dpi, mut dpi_y) = (96u32, 96u32);
     GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi, &mut dpi_y);
-    Some((rc(mi.rcWork), dpi))
+    Some((rc(mi.rcMonitor), dpi))
 }
 
 thread_local! {
@@ -284,6 +321,9 @@ pub fn toggle() {
         None => {
             if let Err(e) = unsafe { open() } {
                 crate::log(&format!("battery overlay: {e}"));
+            } else {
+                // Windows keeps its own levels: reading them asks no device, so it is fine on every show.
+                sysbat::refresh_async();
             }
         }
     }
@@ -329,12 +369,36 @@ pub fn refresh() {
     }
 }
 
-/// Puts the plate at `pos`, sized `dip` (width, height in DIPs), inside the work area of its monitor.
+/// Puts the plate at `pos`, sized `dip` (width, height in DIPs), inside its monitor (the taskbar included).
 unsafe fn place(hwnd: HWND, scale: f32, pos: OverlayPos, dip: (f32, f32)) {
     let (w, h) = ((dip.0 * scale).round() as i32, (dip.1 * scale).round() as i32);
-    let work = monitor_at(probe(pos), MONITOR_DEFAULTTONEAREST).map(|m| m.0).unwrap_or((0, 0, i32::MAX, i32::MAX));
-    let (l, t) = placed(pos, w, h, work);
+    let bounds = monitor_at(probe(pos), MONITOR_DEFAULTTONEAREST).map(|m| m.0).unwrap_or((0, 0, i32::MAX, i32::MAX));
+    let (l, t) = placed(pos, w, h, bounds);
     SetWindowPos(hwnd, HWND_TOPMOST, l, t, w, h, SWP_NOACTIVATE);
+}
+
+/// Puts the plate above the other topmost windows (the taskbar is one) without activating it.
+unsafe fn raise(hwnd: HWND) {
+    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE);
+}
+
+/// Whether `plate` reaches outside `work` (the taskbar and other app bars are outside the work area).
+fn leaves_work(plate: Rc, work: Rc) -> bool {
+    plate.0 < work.0 || plate.1 < work.1 || plate.2 > work.2 || plate.3 > work.3
+}
+
+/// The taskbar raises itself above topmost windows when it is clicked: while the plate overlaps it, put the plate back on top.
+/// Called from the modifier timer; a no-op for a plate inside the work area. Re-asserting topmost on a window that is already
+/// on top changes nothing, so there is no flicker.
+unsafe fn keep_above_taskbar(hwnd: HWND) {
+    let mut r: RECT = zeroed();
+    GetWindowRect(hwnd, &mut r);
+    let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    let mut mi: MONITORINFO = zeroed();
+    mi.cbSize = size_of::<MONITORINFO>() as u32;
+    if !monitor.is_null() && GetMonitorInfoW(monitor, &mut mi) != 0 && leaves_work(rc(r), rc(mi.rcWork)) {
+        raise(hwnd);
+    }
 }
 
 /// While Ctrl and Shift are both down the plate takes the mouse (so it can be dragged); otherwise
@@ -363,13 +427,13 @@ unsafe fn save_position(hwnd: HWND) {
     let mut r: RECT = zeroed();
     GetWindowRect(hwnd, &mut r);
     let plate = rc(r);
-    let Some((work, dpi)) = monitor_at(POINT { x: (plate.0 + plate.2) / 2, y: (plate.1 + plate.3) / 2 }, MONITOR_DEFAULTTONEAREST) else { return };
+    let Some((bounds, dpi)) = monitor_at(POINT { x: (plate.0 + plate.2) / 2, y: (plate.1 + plate.3) / 2 }, MONITOR_DEFAULTTONEAREST) else { return };
     // The move loop lets the plate hang past an edge: pull it back in before remembering its corner.
-    let inside = clamped(plate, work);
+    let inside = clamped(plate, bounds);
     if inside != plate {
         SetWindowPos(hwnd, null_mut(), inside.0, inside.1, 0, 0, SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOSIZE);
     }
-    let pos = anchor_of(inside, work);
+    let pos = anchor_of(inside, bounds);
     let rescaled = OVERLAY.with(|c| {
         c.borrow_mut().as_mut().and_then(|o| {
             o.pos = pos;
@@ -396,19 +460,20 @@ unsafe fn save_position(hwnd: HWND) {
 unsafe fn reset_position(hwnd: HWND) {
     let (_, mi, dpi) = cursor_monitor(MONITOR_DEFAULTTOPRIMARY);
     let scale = dpi as f32 / 96.0;
-    let pos = default_pos(rc(mi.rcWork), (12.0 * scale).round() as i32);
-    let dip = OVERLAY.with(|c| {
+    let margin = (12.0 * scale).round() as i32;
+    let moved = OVERLAY.with(|c| {
         c.borrow_mut().as_mut().map(|o| {
-            o.pos = pos;
             if scale != o.scale {
                 o.scale = scale;
                 o.surface = None;
                 o.brush = None;
             }
-            size(o.style, o.rows.len())
+            let dip = size(o.style, o.rows.len());
+            o.pos = default_pos(rc(mi.rcWork), margin, (dip.0 * scale).round() as i32);
+            (o.pos, dip)
         })
     });
-    if let Some(dip) = dip {
+    if let Some((pos, dip)) = moved {
         place(hwnd, scale, pos, dip);
         redraw();
     }
@@ -422,15 +487,14 @@ unsafe fn open() -> windows::core::Result<()> {
     let class: Vec<u16> = "RgbTrayBatteryOverlay\0".encode_utf16().collect();
     register_class(&class, 0, wndproc);
 
-    // The saved place if a monitor still holds it, else the monitor under the cursor now (it does not
-    // follow while the plate is up).
+    // The saved place if a monitor still holds it (clamped to the whole monitor: the plate may sit over the taskbar), else the
+    // default corner of the work area of the monitor under the cursor now (it does not follow while the plate is up).
     let saved = crate::config().overlay_pos.and_then(|p| monitor_at(probe(p), MONITOR_DEFAULTTONULL).map(|m| (p, m)));
-    let (pos, work, dpi) = match saved {
-        Some((p, (work, dpi))) => (p, work, dpi),
+    let (saved_pos, bounds, dpi) = match saved {
+        Some((p, (full, dpi))) => (Some(p), full, dpi),
         None => {
             let (_, mi, dpi) = cursor_monitor(MONITOR_DEFAULTTOPRIMARY);
-            let scale = dpi as f32 / 96.0;
-            (default_pos(rc(mi.rcWork), (12.0 * scale).round() as i32), rc(mi.rcWork), dpi)
+            (None, rc(mi.rcWork), dpi)
         }
     };
     let scale = dpi as f32 / 96.0;
@@ -438,7 +502,11 @@ unsafe fn open() -> windows::core::Result<()> {
     let style = crate::config().overlay_style;
     let dip = size(style, rows.len());
     let (w, h) = ((dip.0 * scale).round() as i32, (dip.1 * scale).round() as i32);
-    let (left, top) = placed(pos, w, h, work);
+    let pos = match saved_pos {
+        Some(p) => left_anchored(p, w),
+        None => default_pos(bounds, (12.0 * scale).round() as i32, w),
+    };
+    let (left, top) = placed(pos, w, h, bounds);
 
     // What can fail comes before the window: a window without its state would be stuck.
     let d2d = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
@@ -465,8 +533,10 @@ unsafe fn open() -> windows::core::Result<()> {
     let overlay = Overlay { hwnd, scale, d2d, surface: None, brush: None, fmt, theme, rows, style, pos, movable: false, dragging: false };
     OVERLAY.with(|c| *c.borrow_mut() = Some(overlay));
     SetTimer(hwnd, TIMER_MODIFIERS, 80, None);
+    SetTimer(hwnd, TIMER_SYSTEM, SYSTEM_EVERY_MS, None);
     redraw(); // a layered window with per-pixel alpha shows nothing until it is updated
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    raise(hwnd);
     Ok(())
 }
 
@@ -676,7 +746,7 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Re
             theme,
             rows,
             style,
-            pos: default_pos((0, 0, 0, 0), 0),
+            pos: default_pos((0, 0, 0, 0), 0, 0),
             movable: false,
             dragging: false,
         };
@@ -710,6 +780,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_MOUSEACTIVATE => MA_NOACTIVATE as LRESULT,
         WM_TIMER if wparam == TIMER_MODIFIERS => {
             follow_modifiers(hwnd);
+            // Every third tick (about 240 ms).
+            if TICKS.fetch_add(1, Ordering::Relaxed).is_multiple_of(3) {
+                keep_above_taskbar(hwnd);
+            }
+            0
+        }
+        WM_TIMER if wparam == TIMER_SYSTEM => {
+            sysbat::refresh_async();
             0
         }
         WM_ENTERSIZEMOVE => {
@@ -719,6 +797,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_EXITSIZEMOVE => {
             OVERLAY.with(|c| c.borrow_mut().as_mut().map(|o| o.dragging = false));
             save_position(hwnd);
+            raise(hwnd);
             follow_modifiers(hwnd); // keys may be up by now
             redraw();
             0
@@ -731,6 +810,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_NCRBUTTONUP => 0,
         WM_DESTROY => {
             KillTimer(hwnd, TIMER_MODIFIERS);
+            KillTimer(hwnd, TIMER_SYSTEM);
             let o = OVERLAY.with(|c| c.borrow_mut().take());
             drop(o);
             0
@@ -742,6 +822,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sysbat::SysClass;
+
+    #[test]
+    fn plate_outside_work_area_overlaps_taskbar() {
+        let work = (0, 0, 1920, 1040);
+        assert!(!leaves_work((10, 10, 300, 100), work));
+        assert!(!leaves_work((0, 0, 1920, 1040), work));
+        assert!(leaves_work((10, 1000, 300, 1060), work));
+        assert!(leaves_work((-5, 10, 300, 100), work));
+    }
 
     fn ids(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
@@ -752,8 +842,62 @@ mod tests {
     }
 
     fn run(order: &[&str], status: &[(&str, Battery)], no_link: &[&str]) -> Vec<Row> {
+        run_with_system(order, status, no_link, &[])
+    }
+
+    fn run_with_system(order: &[&str], status: &[(&str, Battery)], no_link: &[&str], system: &[SysDevice]) -> Vec<Row> {
         let status: Vec<(String, Battery)> = status.iter().map(|(i, b)| (i.to_string(), *b)).collect();
-        rows(&ids(order), &status, &ids(no_link), |id| format!("name-{id}"))
+        rows(&ids(order), &status, &ids(no_link), |id| format!("name-{id}"), system)
+    }
+
+    fn sys(name: &str, class: SysClass, percent: u8) -> SysDevice {
+        SysDevice { id: format!("system-{name}"), name: name.into(), class, percent }
+    }
+
+    #[test]
+    fn system_rows_follow_the_apps_with_their_own_icon_and_levels() {
+        let system = [sys("Headphones", SysClass::Headphones, 94), sys("Pad", SysClass::Gamepad, 8), sys("Mouse", SysClass::Mouse, 4)];
+        let r = run_with_system(&["a", "b"], &[("a", b(50, false)), ("b", b(60, true))], &["a"], &system);
+        // The app's rows are as without system devices.
+        assert_eq!(&r[..2], &run(&["a", "b"], &[("a", b(50, false)), ("b", b(60, true))], &["a"])[..]);
+        assert_eq!(r.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["name-a", "name-b", "Headphones", "Pad", "Mouse"]);
+        assert_eq!(r[2].icon, sysbat::glyph(SysClass::Headphones));
+        assert_eq!(r[3].icon, sysbat::glyph(SysClass::Gamepad));
+        // Never asleep, never charging; the usual colours.
+        assert!(r[2..].iter().all(|r| !r.asleep && !r.charging));
+        assert_eq!(r[2..].iter().map(|r| r.level).collect::<Vec<_>>(), [Level::Normal, Level::Low, Level::Critical]);
+        assert_eq!(r[2].percent, 94);
+    }
+
+    #[test]
+    fn system_devices_alone_fill_the_plate() {
+        assert_eq!(run_with_system(&[], &[], &[], &[sys("X", SysClass::Other, 50)]).len(), 1);
+        assert!(run_with_system(&[], &[], &[], &[]).is_empty());
+    }
+
+    #[test]
+    fn the_cap_keeps_the_apps_devices_and_drops_system_ones_last() {
+        let system: Vec<SysDevice> = (0..8).map(|i| sys(&format!("S{i}"), SysClass::Other, 50)).collect();
+        let order: Vec<String> = (0..4).map(|i| format!("a{i}")).collect();
+        let order: Vec<&str> = order.iter().map(String::as_str).collect();
+        let status: Vec<(&str, Battery)> = order.iter().map(|id| (*id, b(50, false))).collect();
+        let r = run_with_system(&order, &status, &[], &system);
+        assert_eq!(r.len(), MAX_ROWS);
+        assert_eq!(r[MAX_ROWS - 1].name, "S5");
+        // More app devices than the cap: none is dropped, no system one is added.
+        let many: Vec<String> = (0..12).map(|i| format!("a{i}")).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        let status: Vec<(&str, Battery)> = many.iter().map(|id| (*id, b(50, false))).collect();
+        assert_eq!(run_with_system(&many, &status, &[], &system).len(), 12);
+    }
+
+    #[test]
+    fn the_plate_at_the_cap_fits_small_work_areas() {
+        // 1366x768 at 100% and 1920x1080 at 200% (960x540 DIPs) leave room below 920 x 500.
+        for style in STYLES {
+            let (w, h) = size(style, MAX_ROWS);
+            assert!(w < 920.0 && h < 500.0, "{style:?}: {w} x {h}");
+        }
     }
 
     #[test]
@@ -880,54 +1024,90 @@ mod tests {
     const WORK: Rc = (0, 0, 1920, 1040);
 
     #[test]
-    fn anchor_is_the_corner_nearest_the_edges() {
+    fn anchor_is_the_left_edge_and_the_vertical_edge_nearest_the_screen_edge() {
         let a = |l, t, w, h| anchor_of((l, t, l + w, t + h), WORK);
+        // Near the right edge the anchor is still the left edge.
         let p = a(1600, 12, 300, 100);
-        assert_eq!((p.x, p.y, p.right, p.bottom), (1900, 12, true, false));
+        assert_eq!((p.x, p.y, p.right, p.bottom), (1600, 12, false, false));
         let p = a(20, 900, 300, 100);
         assert_eq!((p.x, p.y, p.right, p.bottom), (20, 1000, false, true));
         let p = a(5, 5, 300, 100);
         assert_eq!((p.x, p.y, p.right, p.bottom), (5, 5, false, false));
-        // A plate across the middle: ties go to the left/top.
+        // A plate across the middle: ties go to the top.
         let p = a(810, 470, 300, 100);
-        assert!(p.right == (810 > 1920 - 1110) && !p.bottom == (470 <= 1040 - 570));
+        assert!(!p.right && !p.bottom == (470 <= 1040 - 570));
     }
 
     #[test]
-    fn resized_plate_grows_away_from_its_anchor() {
-        let right = OverlayPos { x: 1900, y: 12, right: true, bottom: false };
-        assert_eq!(origin(right, 300, 100), (1600, 12));
-        assert_eq!(origin(right, 500, 100), (1400, 12));
+    fn plate_on_the_left_grows_right_keeping_x() {
+        let pos = anchor_of((100, 12, 400, 112), WORK);
+        assert_eq!(placed(pos, 300, 100, WORK), (100, 12));
+        assert_eq!(placed(pos, 500, 100, WORK), (100, 12));
+        assert_eq!(placed(pos, 200, 100, WORK), (100, 12));
+    }
+
+    #[test]
+    fn plate_near_the_right_edge_grows_right_and_is_clamped_inside() {
+        let pos = anchor_of((1600, 12, 1900, 112), WORK);
+        assert_eq!(placed(pos, 300, 100, WORK), (1600, 12));
+        // Wider: its left edge would stay, but the right would leave the work area: shifted left just enough.
+        let (l, _) = placed(pos, 500, 100, WORK);
+        assert_eq!((l, l + 500), (1420, 1920));
+        // The saved x is kept, so it returns when the plate shrinks again.
+        assert_eq!(placed(pos, 300, 100, WORK), (1600, 12));
+        // Same on a monitor left of the origin.
+        let work = (-1920, 0, 0, 1040);
+        let pos = anchor_of((-400, 12, -100, 112), work);
+        assert_eq!(placed(pos, 600, 100, work), (-600, 12));
+    }
+
+    #[test]
+    fn older_right_anchored_position_becomes_left_anchored() {
+        let old = OverlayPos { x: 1900, y: 12, right: true, bottom: false };
+        let p = left_anchored(old, 300);
+        assert_eq!((p.x, p.y, p.right, p.bottom), (1600, 12, false, false));
+        assert_eq!(placed(p, 300, 100, WORK), (1600, 12));
+        // A left-anchored position is unchanged.
+        let q = OverlayPos { x: 20, y: 1000, right: false, bottom: true };
+        assert_eq!(left_anchored(q, 300), q);
+    }
+
+    #[test]
+    fn vertical_growth_is_away_from_the_nearest_edge() {
         let bottom_left = OverlayPos { x: 20, y: 1000, right: false, bottom: true };
-        assert_eq!(origin(bottom_left, 300, 100), (20, 900));
-        assert_eq!(origin(bottom_left, 300, 200), (20, 800));
-        // Same corner after a re-anchor of the unchanged rectangle.
-        let (l, t) = origin(bottom_left, 300, 100);
+        assert_eq!(origin(bottom_left, 100), (20, 900));
+        assert_eq!(origin(bottom_left, 200), (20, 800));
+        let top = OverlayPos { x: 20, y: 12, right: false, bottom: false };
+        assert_eq!(origin(top, 200), (20, 12));
+        // Same anchor after a re-anchor of the unchanged rectangle.
+        let (l, t) = origin(bottom_left, 100);
         assert_eq!(anchor_of((l, t, l + 300, t + 100), WORK), bottom_left);
     }
 
     #[test]
     fn placement_is_clamped_into_the_work_area() {
-        let at = |x, y, right, bottom, w, h| placed(OverlayPos { x, y, right, bottom }, w, h, WORK);
-        assert_eq!(at(1900, 12, true, false, 300, 100), (1600, 12));
-        // Anchored left but the plate is too wide for the room that is left.
-        assert_eq!(at(1800, 12, false, false, 300, 100), (1620, 12));
+        let at = |x, y, bottom, w, h| placed(OverlayPos { x, y, right: false, bottom }, w, h, WORK);
+        assert_eq!(at(1600, 12, false, 300, 100), (1600, 12));
+        // The plate is too wide for the room that is left on the right.
+        assert_eq!(at(1800, 12, false, 300, 100), (1620, 12));
         // Anchored at the bottom, taller than the room above: pushed down from the top edge.
-        assert_eq!(at(20, 50, false, true, 300, 100), (20, 0));
+        assert_eq!(at(20, 50, true, 300, 100), (20, 0));
         // Off the screen on the left/top.
-        assert_eq!(at(-50, -50, false, false, 300, 100), (0, 0));
+        assert_eq!(at(-50, -50, false, 300, 100), (0, 0));
         // Larger than the work area: the top-left corner stays visible.
-        assert_eq!(at(1000, 500, true, true, 3000, 2000), (0, 0));
+        assert_eq!(at(1000, 500, true, 3000, 2000), (0, 0));
         // Work area not at the origin (second monitor on the left).
         let work = (-1920, 0, 0, 1040);
-        assert_eq!(placed(OverlayPos { x: 100, y: 12, right: true, bottom: false }, 300, 100, work), (-300, 12));
+        assert_eq!(placed(OverlayPos { x: -300, y: 12, right: false, bottom: false }, 300, 100, work), (-300, 12));
     }
 
     #[test]
     fn default_is_top_right_and_probe_is_inside_the_monitor() {
-        let d = default_pos(WORK, 12);
-        assert_eq!((d.x, d.y, d.right, d.bottom), (1908, 12, true, false));
+        let d = default_pos(WORK, 12, 280);
+        assert_eq!((d.x, d.y, d.right, d.bottom), (1628, 12, false, false));
         assert_eq!(placed(d, 280, 100, WORK), (1628, 12));
+        // Then it grows right and is clamped to the margin-less edge.
+        assert_eq!(placed(d, 400, 100, WORK), (1520, 12));
         // The anchor of a right/bottom plate sits on the exclusive edge: the probe steps inside.
         let p = probe(OverlayPos { x: 1920, y: 1040, right: true, bottom: true });
         assert_eq!((p.x, p.y), (1919, 1039));
@@ -943,9 +1123,9 @@ mod tests {
             let corners = [(work.0 + 10, work.1 + 10), (work.2 - w - 10, work.1 + 10), (work.0 + 10, work.3 - h - 10), (work.2 - w - 10, work.3 - h - 10)];
             for (i, (l, t)) in corners.into_iter().enumerate() {
                 let pos = anchor_of((l, t, l + w, t + h), work);
-                assert_eq!((pos.right, pos.bottom), (i % 2 == 1, i >= 2), "{work:?} corner {i}");
+                assert_eq!((pos.right, pos.bottom), (false, i >= 2), "{work:?} corner {i}");
                 assert_eq!(placed(pos, w, h, work), (l, t), "{work:?} corner {i}");
-                // A taller and wider plate grows away from the anchor and still fits.
+                // A taller and wider plate grows (right, and away from the vertical anchor) and still fits.
                 let (bl, bt) = placed(pos, w + 100, h + 100, work);
                 assert!(bl >= work.0 && bl + w + 100 <= work.2 && bt >= work.1 && bt + h + 100 <= work.3, "{work:?} corner {i}");
                 let p = probe(pos);
@@ -976,5 +1156,26 @@ mod tests {
                 assert!(p.x >= work.0 && p.x < work.2 && p.y >= work.1 && p.y < work.3, "{work:?} {plate:?}");
             }
         }
+    }
+
+    #[test]
+    fn plate_dropped_over_the_taskbar_keeps_its_place_and_restores() {
+        // Monitor 1920x1080 with a taskbar in the bottom 40 px (work area 1920x1040), or on the right (60 px).
+        let monitor: Rc = (0, 0, 1920, 1080);
+        let (w, h) = (300, 100);
+        for plate in [(100, 960, 100 + w, 960 + h), (100, 980, 100 + w, 980 + h), (1620, 400, 1920, 400 + h), (1560, 0, 1560 + w, h)] {
+            // The monitor rect keeps the plate where it was dropped (the work area would have moved it).
+            assert_eq!(clamped(plate, monitor), plate, "{plate:?}");
+            let pos = anchor_of(plate, monitor);
+            // The probe is inside the monitor, so the saved place is found again, and it opens at the same spot.
+            let p = probe(pos);
+            assert!(p.x >= monitor.0 && p.x < monitor.2 && p.y >= monitor.1 && p.y < monitor.3, "{plate:?}");
+            assert_eq!(placed(pos, w, h, monitor), (plate.0, plate.1), "{plate:?}");
+        }
+        // Dropped half below the monitor: pulled back to its bottom edge, not to the work area.
+        assert_eq!(clamped((100, 1040, 400, 1140), monitor), (100, 980, 400, 1080));
+        // The default place stays inside the work area.
+        let d = default_pos(WORK, 12, w);
+        assert!(placed(d, w, h, WORK).1 + h <= WORK.3);
     }
 }

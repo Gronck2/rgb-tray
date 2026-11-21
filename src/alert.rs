@@ -272,7 +272,8 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32, percent: u8) -> wind
             fmt: formats()?,
             theme,
             key: "logitech".into(),
-            name: "Logitech G915 TKL".into(),
+            // A demo system device (RGBTRAY_DEMO_SYSTEM) gives the name, to see the alert of one.
+            name: crate::sysbat::listed().first().map_or_else(|| "Logitech G915 TKL".into(), |d| d.name.clone()),
             battery: Battery { percent, charging: false },
             hover: None,
             tracking: false,

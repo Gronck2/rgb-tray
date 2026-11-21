@@ -46,6 +46,7 @@ features = [
     "Win32_Networking_WinHttp",
     "Win32_Devices_HumanInterfaceDevice",
     "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Devices_Properties",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Dwm",
     "Win32_UI_HiDpi",
