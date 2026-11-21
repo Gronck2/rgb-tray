@@ -173,6 +173,13 @@ fn placed(pos: OverlayPos, w: i32, h: i32, work: Rc) -> (i32, i32) {
     (l.min(work.2 - w).max(work.0), t.min(work.3 - h).max(work.1))
 }
 
+/// `plate` moved the least that puts it inside `work`.
+fn clamped(plate: Rc, work: Rc) -> Rc {
+    let (w, h) = (plate.2 - plate.0, plate.3 - plate.1);
+    let (l, t) = placed(anchor_of(plate, work), w, h, work);
+    (l, t, l + w, t + h)
+}
+
 /// A point inside the monitor a position belongs to (the anchor lies on the plate's edge, which is
 /// outside a monitor on its right or bottom side).
 fn probe(pos: OverlayPos) -> POINT {
@@ -286,7 +293,12 @@ unsafe fn save_position(hwnd: HWND) {
     GetWindowRect(hwnd, &mut r);
     let plate = rc(r);
     let Some((work, dpi)) = monitor_at(POINT { x: (plate.0 + plate.2) / 2, y: (plate.1 + plate.3) / 2 }, MONITOR_DEFAULTTONEAREST) else { return };
-    let pos = anchor_of(plate, work);
+    // The move loop lets the plate hang past an edge: pull it back in before remembering its corner.
+    let inside = clamped(plate, work);
+    if inside != plate {
+        SetWindowPos(hwnd, null_mut(), inside.0, inside.1, 0, 0, SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOSIZE);
+    }
+    let pos = anchor_of(inside, work);
     let rescaled = OVERLAY.with(|c| {
         c.borrow_mut().as_mut().and_then(|o| {
             o.pos = pos;
@@ -802,6 +814,30 @@ mod tests {
                 assert!(bl >= work.0 && bl + w + 100 <= work.2 && bt >= work.1 && bt + h + 100 <= work.3, "{work:?} corner {i}");
                 let p = probe(pos);
                 assert!(p.x >= work.0 && p.x < work.2 && p.y >= work.1 && p.y < work.3, "{work:?} corner {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn dropped_plate_hanging_off_an_edge_is_pulled_in_before_saving() {
+        let (w, h) = (300, 100);
+        for work in [WORK, (-1920, 0, 0, 1040)] {
+            // Half off each edge, then off two edges at once, then fully inside.
+            let hangs = [
+                (work.2 - w / 2, 200, true),
+                (work.0 - w / 2, 200, true),
+                (work.0 + 400, work.1 - h / 2, true),
+                (work.0 + 400, work.3 - h / 2, true),
+                (work.2 - w / 2, work.3 - h / 2, true),
+                (work.0 + 10, work.1 + 10, false),
+            ];
+            for (l, t, moves) in hangs {
+                let plate = (l, t, l + w, t + h);
+                let inside = clamped(plate, work);
+                assert_eq!(inside != plate, moves, "{work:?} {plate:?}");
+                assert!(inside.0 >= work.0 && inside.2 <= work.2 && inside.1 >= work.1 && inside.3 <= work.3, "{work:?} {plate:?}");
+                let p = probe(anchor_of(inside, work));
+                assert!(p.x >= work.0 && p.x < work.2 && p.y >= work.1 && p.y < work.3, "{work:?} {plate:?}");
             }
         }
     }
