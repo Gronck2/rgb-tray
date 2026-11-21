@@ -168,6 +168,9 @@ text = "Niveaux de batterie, alertes à 10 % et 5 %, et statut « No link »
 title = "Plusieurs périphériques, bien distincts"
 text = "Les périphériques identiques ont leurs propres réglages, distingués par leur numéro de série. Les périphériques déconnectés attendent dans une archive avec leurs réglages."
 [[features]]
+title = "Battery overlay"
+text = "Une petite plaque au-dessus des autres fenêtres avec la charge de chaque appareil : sans fond, sans prendre le focus, les clics la traversent. Affichée et masquée par un raccourci que vous enregistrez ou par l’entrée « Battery overlay » du menu de la zone de notification ; disposition complète, en ligne ou en colonne, avec les icônes des modèles (« Overlay style »). Ctrl+Maj+glisser la déplace, Ctrl+Maj+double-clic la remet en place ; elle peut passer au-dessus de la barre des tâches. Elle liste aussi les appareils Bluetooth dont Windows connaît le niveau (casques, enceintes, manettes…), avec l’alerte de batterie faible ; l’entrée « System devices » la désactive."
+[[features]]
 title = "Partagez votre configuration"
 text = "Exportez et importez tous les réglages, ou enregistrez un préréglage dans un fichier : il s'applique aux périphériques des mêmes modèles du destinataire."
 [[features]]
