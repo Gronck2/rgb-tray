@@ -256,13 +256,11 @@ fn parse_string(ty: u32, buf: &[u8]) -> Option<String> {
     Some(String::from_utf16_lossy(&w)).filter(|s| !s.trim().is_empty())
 }
 
-/// The ids of the enumerators that could be read; an error only when none could (one may have no nodes ever, e.g. no BLE).
-fn merge_lists(lists: Vec<Result<Vec<String>, String>>) -> Result<Vec<String>, String> {
+/// The ids of the enumerators that could be read, and the errors of those that could not, joined (empty when none failed).
+/// One failing enumerator does not hide the other's nodes, but its error is still reported.
+fn merge_lists(lists: Vec<Result<Vec<String>, String>>) -> (Vec<String>, String) {
     let (ok, err): (Vec<_>, Vec<_>) = lists.into_iter().partition(|l| l.is_ok());
-    if ok.is_empty() {
-        return Err(err.into_iter().filter_map(Result::err).collect::<Vec<_>>().join("; "));
-    }
-    Ok(ok.into_iter().flatten().flatten().collect())
+    (ok.into_iter().flatten().flatten().collect(), err.into_iter().filter_map(Result::err).collect::<Vec<_>>().join("; "))
 }
 
 mod win {
@@ -324,10 +322,12 @@ mod win {
         Some((ty, buf))
     }
 
-    pub(super) fn read_nodes() -> Result<Vec<Node>, String> {
+    /// The nodes of the enumerators that could be read, and the errors of those that could not (empty when none failed).
+    pub(super) fn read_nodes() -> (Vec<Node>, String) {
         let mut nodes = Vec::new();
         let lists: Vec<_> = ["BTHENUM", "BTHLE"].into_iter().map(|e| unsafe { instance_ids(e) }).collect();
-        for instance in merge_lists(lists)? {
+        let (ids, errors) = merge_lists(lists);
+        for instance in ids {
             let mut dn = 0u32;
             if unsafe { CM_Locate_DevNodeW(&mut dn, wide(&instance).as_ptr(), CM_LOCATE_DEVNODE_NORMAL) } != CR_SUCCESS {
                 continue;
@@ -341,27 +341,25 @@ mod win {
                 instance,
             });
         }
-        Ok(nodes)
+        (nodes, errors)
     }
 }
 
-/// Reads the system again; whether the list changed. An error (no Bluetooth, no access) gives an empty list and is
-/// logged when its text changes, not on every read.
+/// Reads the system again; whether the list changed. An error (no Bluetooth, no access) is logged when its text
+/// changes, not on every read; the nodes of an enumerator that did work are still used.
 fn refresh() -> bool {
     static LAST_ERROR: Mutex<String> = Mutex::new(String::new());
-    let found = match win::read_nodes() {
-        Ok(nodes) => {
-            LAST_ERROR.lock().unwrap().clear();
-            devices(join(&nodes))
-        }
-        Err(e) => {
-            if *LAST_ERROR.lock().unwrap() != e {
-                crate::log(&format!("system batteries: {e}"));
-                *LAST_ERROR.lock().unwrap() = e;
+    let (nodes, errors) = win::read_nodes();
+    {
+        let mut last = LAST_ERROR.lock().unwrap();
+        if *last != errors {
+            if !errors.is_empty() {
+                crate::log(&format!("system batteries: {errors}"));
             }
-            Vec::new()
+            *last = errors;
         }
-    };
+    }
+    let found = devices(join(&nodes));
     let mut cur = SYSTEM.lock().unwrap();
     let changed = *cur != found;
     *cur = found;
@@ -393,12 +391,13 @@ pub fn refresh_and_notify() {
 /// `--system-batteries <out>`: every Bluetooth node with what Windows holds for it, and what the app makes of it.
 /// It is for finding out why a device does not show up; it only reads properties.
 pub fn report() -> String {
-    let nodes = match win::read_nodes() {
-        Ok(n) => n,
-        Err(e) => return format!("Cannot read the Bluetooth nodes: {e}\n"),
-    };
+    let (nodes, errors) = win::read_nodes();
     let yn = |v: Option<bool>| v.map_or("unknown", |b| if b { "yes" } else { "no" });
-    let mut out = format!("Bluetooth device nodes: {}\n\n", nodes.len());
+    let mut out = String::new();
+    if !errors.is_empty() {
+        out += &format!("Cannot read part of the Bluetooth nodes: {errors}\n");
+    }
+    out += &format!("Bluetooth device nodes: {}\n\n", nodes.len());
     for n in &nodes {
         out += &format!(
             "{}\n  name: {}\n  class of device: {}\n  connected: {}\n  battery: {}\n  address: {}\n  id: {}\n",
@@ -444,11 +443,11 @@ mod tests {
     }
 
     #[test]
-    fn a_failing_enumerator_is_skipped() {
+    fn a_failing_enumerator_is_skipped_but_reported() {
         let ok = Ok(names(&["a", "b"]));
-        assert_eq!(merge_lists(vec![Err("x".into()), ok.clone()]), ok);
-        assert_eq!(merge_lists(vec![ok.clone(), Ok(names(&["c"]))]), Ok(names(&["a", "b", "c"])));
-        assert_eq!(merge_lists(vec![Err("x".into()), Err("y".into())]), Err("x; y".into()));
+        assert_eq!(merge_lists(vec![Err("x".into()), ok.clone()]), (names(&["a", "b"]), "x".into()));
+        assert_eq!(merge_lists(vec![ok.clone(), Ok(names(&["c"]))]), (names(&["a", "b", "c"]), String::new()));
+        assert_eq!(merge_lists(vec![Err("x".into()), Err("y".into())]), (Vec::new(), "x; y".into()));
     }
 
     #[test]
