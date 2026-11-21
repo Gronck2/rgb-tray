@@ -58,6 +58,8 @@ const SYSTEM_EVERY_MS: u32 = 60_000;
 const MAX_ROWS: usize = 10;
 /// System devices that did not fit, to log a change once.
 static LEFT_OUT: AtomicUsize = AtomicUsize::new(0);
+/// Ticks of the modifier timer, to run the taskbar check on some of them.
+static TICKS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Level {
@@ -376,9 +378,27 @@ unsafe fn place(hwnd: HWND, scale: f32, pos: OverlayPos, dip: (f32, f32)) {
 }
 
 /// Puts the plate above the other topmost windows (the taskbar is one) without activating it.
-/// shortcut: the taskbar raises itself above the plate when it is clicked; the plate comes back on the next show or drag.
 unsafe fn raise(hwnd: HWND) {
     SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE);
+}
+
+/// Whether `plate` reaches outside `work` (the taskbar and other app bars are outside the work area).
+fn leaves_work(plate: Rc, work: Rc) -> bool {
+    plate.0 < work.0 || plate.1 < work.1 || plate.2 > work.2 || plate.3 > work.3
+}
+
+/// The taskbar raises itself above topmost windows when it is clicked: while the plate overlaps it, put the plate back on top.
+/// Called from the modifier timer; a no-op for a plate inside the work area. Re-asserting topmost on a window that is already
+/// on top changes nothing, so there is no flicker.
+unsafe fn keep_above_taskbar(hwnd: HWND) {
+    let mut r: RECT = zeroed();
+    GetWindowRect(hwnd, &mut r);
+    let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    let mut mi: MONITORINFO = zeroed();
+    mi.cbSize = size_of::<MONITORINFO>() as u32;
+    if !monitor.is_null() && GetMonitorInfoW(monitor, &mut mi) != 0 && leaves_work(rc(r), rc(mi.rcWork)) {
+        raise(hwnd);
+    }
 }
 
 /// While Ctrl and Shift are both down the plate takes the mouse (so it can be dragged); otherwise
@@ -760,6 +780,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_MOUSEACTIVATE => MA_NOACTIVATE as LRESULT,
         WM_TIMER if wparam == TIMER_MODIFIERS => {
             follow_modifiers(hwnd);
+            // Every third tick (about 240 ms).
+            if TICKS.fetch_add(1, Ordering::Relaxed).is_multiple_of(3) {
+                keep_above_taskbar(hwnd);
+            }
             0
         }
         WM_TIMER if wparam == TIMER_SYSTEM => {
@@ -799,6 +823,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 mod tests {
     use super::*;
     use crate::sysbat::SysClass;
+
+    #[test]
+    fn plate_outside_work_area_overlaps_taskbar() {
+        let work = (0, 0, 1920, 1040);
+        assert!(!leaves_work((10, 10, 300, 100), work));
+        assert!(!leaves_work((0, 0, 1920, 1040), work));
+        assert!(leaves_work((10, 1000, 300, 1060), work));
+        assert!(leaves_work((-5, 10, 300, 100), work));
+    }
 
     fn ids(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()

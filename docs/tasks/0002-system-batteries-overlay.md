@@ -146,5 +146,7 @@ Questions that matter, each with the recommended default (the plan follows the d
   monitor rectangle (`rcMonitor`), not the work area, so a place over the taskbar is kept and restored (the probe point is
   inside the monitor, so the saved place is still found). The default position (no saved place) stays inside the work area
   (top-right, 12 px in). The plate re-asserts `HWND_TOPMOST` (no activation) when shown and when a drag ends, so it sits above
-  the taskbar; the taskbar raises itself when clicked and can then cover the plate until the next show or drag.
+  the taskbar. The taskbar raises itself when clicked, so while the plate reaches outside the work area of its monitor the
+  existing 80 ms modifier timer re-asserts topmost every third tick (about 240 ms, no activation, no flicker). A WinEvent hook
+  was not used: a timer needs no global state and also catches the taskbar raising itself without a foreground change.
   The system move loop does not keep a `WS_POPUP` window out of the taskbar (no `WM_GETMINMAXINFO` / `WM_WINDOWPOSCHANGING` handling).
