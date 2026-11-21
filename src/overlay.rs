@@ -287,7 +287,7 @@ fn default_pos(work: Rc, margin: i32, w: i32) -> OverlayPos {
     OverlayPos { x: work.2 - margin - w, y: work.1 + margin, right: false, bottom: false }
 }
 
-/// Work area and DPI of the monitor at `pt`; `None` when no monitor holds it and `flags` says not to guess.
+/// Full rectangle (the taskbar included: the plate may sit over it) and DPI of the monitor at `pt`; `None` when no monitor holds it and `flags` says not to guess.
 unsafe fn monitor_at(pt: POINT, flags: MONITOR_FROM_FLAGS) -> Option<(Rc, u32)> {
     let monitor = MonitorFromPoint(pt, flags);
     if monitor.is_null() {
@@ -298,7 +298,7 @@ unsafe fn monitor_at(pt: POINT, flags: MONITOR_FROM_FLAGS) -> Option<(Rc, u32)> 
     GetMonitorInfoW(monitor, &mut mi);
     let (mut dpi, mut dpi_y) = (96u32, 96u32);
     GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi, &mut dpi_y);
-    Some((rc(mi.rcWork), dpi))
+    Some((rc(mi.rcMonitor), dpi))
 }
 
 thread_local! {
@@ -367,12 +367,18 @@ pub fn refresh() {
     }
 }
 
-/// Puts the plate at `pos`, sized `dip` (width, height in DIPs), inside the work area of its monitor.
+/// Puts the plate at `pos`, sized `dip` (width, height in DIPs), inside its monitor (the taskbar included).
 unsafe fn place(hwnd: HWND, scale: f32, pos: OverlayPos, dip: (f32, f32)) {
     let (w, h) = ((dip.0 * scale).round() as i32, (dip.1 * scale).round() as i32);
-    let work = monitor_at(probe(pos), MONITOR_DEFAULTTONEAREST).map(|m| m.0).unwrap_or((0, 0, i32::MAX, i32::MAX));
-    let (l, t) = placed(pos, w, h, work);
+    let bounds = monitor_at(probe(pos), MONITOR_DEFAULTTONEAREST).map(|m| m.0).unwrap_or((0, 0, i32::MAX, i32::MAX));
+    let (l, t) = placed(pos, w, h, bounds);
     SetWindowPos(hwnd, HWND_TOPMOST, l, t, w, h, SWP_NOACTIVATE);
+}
+
+/// Puts the plate above the other topmost windows (the taskbar is one) without activating it.
+/// shortcut: the taskbar raises itself above the plate when it is clicked; the plate comes back on the next show or drag.
+unsafe fn raise(hwnd: HWND) {
+    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE);
 }
 
 /// While Ctrl and Shift are both down the plate takes the mouse (so it can be dragged); otherwise
@@ -401,13 +407,13 @@ unsafe fn save_position(hwnd: HWND) {
     let mut r: RECT = zeroed();
     GetWindowRect(hwnd, &mut r);
     let plate = rc(r);
-    let Some((work, dpi)) = monitor_at(POINT { x: (plate.0 + plate.2) / 2, y: (plate.1 + plate.3) / 2 }, MONITOR_DEFAULTTONEAREST) else { return };
+    let Some((bounds, dpi)) = monitor_at(POINT { x: (plate.0 + plate.2) / 2, y: (plate.1 + plate.3) / 2 }, MONITOR_DEFAULTTONEAREST) else { return };
     // The move loop lets the plate hang past an edge: pull it back in before remembering its corner.
-    let inside = clamped(plate, work);
+    let inside = clamped(plate, bounds);
     if inside != plate {
         SetWindowPos(hwnd, null_mut(), inside.0, inside.1, 0, 0, SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOSIZE);
     }
-    let pos = anchor_of(inside, work);
+    let pos = anchor_of(inside, bounds);
     let rescaled = OVERLAY.with(|c| {
         c.borrow_mut().as_mut().and_then(|o| {
             o.pos = pos;
@@ -461,11 +467,11 @@ unsafe fn open() -> windows::core::Result<()> {
     let class: Vec<u16> = "RgbTrayBatteryOverlay\0".encode_utf16().collect();
     register_class(&class, 0, wndproc);
 
-    // The saved place if a monitor still holds it, else the monitor under the cursor now (it does not
-    // follow while the plate is up).
+    // The saved place if a monitor still holds it (clamped to the whole monitor: the plate may sit over the taskbar), else the
+    // default corner of the work area of the monitor under the cursor now (it does not follow while the plate is up).
     let saved = crate::config().overlay_pos.and_then(|p| monitor_at(probe(p), MONITOR_DEFAULTTONULL).map(|m| (p, m)));
-    let (saved_pos, work, dpi) = match saved {
-        Some((p, (work, dpi))) => (Some(p), work, dpi),
+    let (saved_pos, bounds, dpi) = match saved {
+        Some((p, (full, dpi))) => (Some(p), full, dpi),
         None => {
             let (_, mi, dpi) = cursor_monitor(MONITOR_DEFAULTTOPRIMARY);
             (None, rc(mi.rcWork), dpi)
@@ -478,9 +484,9 @@ unsafe fn open() -> windows::core::Result<()> {
     let (w, h) = ((dip.0 * scale).round() as i32, (dip.1 * scale).round() as i32);
     let pos = match saved_pos {
         Some(p) => left_anchored(p, w),
-        None => default_pos(work, (12.0 * scale).round() as i32, w),
+        None => default_pos(bounds, (12.0 * scale).round() as i32, w),
     };
-    let (left, top) = placed(pos, w, h, work);
+    let (left, top) = placed(pos, w, h, bounds);
 
     // What can fail comes before the window: a window without its state would be stuck.
     let d2d = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
@@ -510,6 +516,7 @@ unsafe fn open() -> windows::core::Result<()> {
     SetTimer(hwnd, TIMER_SYSTEM, SYSTEM_EVERY_MS, None);
     redraw(); // a layered window with per-pixel alpha shows nothing until it is updated
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    raise(hwnd);
     Ok(())
 }
 
@@ -766,6 +773,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_EXITSIZEMOVE => {
             OVERLAY.with(|c| c.borrow_mut().as_mut().map(|o| o.dragging = false));
             save_position(hwnd);
+            raise(hwnd);
             follow_modifiers(hwnd); // keys may be up by now
             redraw();
             0
@@ -1115,5 +1123,26 @@ mod tests {
                 assert!(p.x >= work.0 && p.x < work.2 && p.y >= work.1 && p.y < work.3, "{work:?} {plate:?}");
             }
         }
+    }
+
+    #[test]
+    fn plate_dropped_over_the_taskbar_keeps_its_place_and_restores() {
+        // Monitor 1920x1080 with a taskbar in the bottom 40 px (work area 1920x1040), or on the right (60 px).
+        let monitor: Rc = (0, 0, 1920, 1080);
+        let (w, h) = (300, 100);
+        for plate in [(100, 960, 100 + w, 960 + h), (100, 980, 100 + w, 980 + h), (1620, 400, 1920, 400 + h), (1560, 0, 1560 + w, h)] {
+            // The monitor rect keeps the plate where it was dropped (the work area would have moved it).
+            assert_eq!(clamped(plate, monitor), plate, "{plate:?}");
+            let pos = anchor_of(plate, monitor);
+            // The probe is inside the monitor, so the saved place is found again, and it opens at the same spot.
+            let p = probe(pos);
+            assert!(p.x >= monitor.0 && p.x < monitor.2 && p.y >= monitor.1 && p.y < monitor.3, "{plate:?}");
+            assert_eq!(placed(pos, w, h, monitor), (plate.0, plate.1), "{plate:?}");
+        }
+        // Dropped half below the monitor: pulled back to its bottom edge, not to the work area.
+        assert_eq!(clamped((100, 1040, 400, 1140), monitor), (100, 980, 400, 1080));
+        // The default place stays inside the work area.
+        let d = default_pos(WORK, 12, w);
+        assert!(placed(d, w, h, WORK).1 + h <= WORK.3);
     }
 }

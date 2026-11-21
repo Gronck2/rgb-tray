@@ -142,3 +142,9 @@ Questions that matter, each with the recommended default (the plan follows the d
   the plate grows away from it). The default (no saved position) is still top-right of the cursor's monitor at the
   first show, then it grows rightwards and is clamped. `OverlayPos` keeps its fields: `right` is no longer set; an
   older saved `right = true` still loads and is converted to the left edge with the plate's width when the plate opens.
+- 2026-11-21 (addendum): the plate may be dragged onto the Windows taskbar. Dragging, clamping and restoring use the whole
+  monitor rectangle (`rcMonitor`), not the work area, so a place over the taskbar is kept and restored (the probe point is
+  inside the monitor, so the saved place is still found). The default position (no saved place) stays inside the work area
+  (top-right, 12 px in). The plate re-asserts `HWND_TOPMOST` (no activation) when shown and when a drag ends, so it sits above
+  the taskbar; the taskbar raises itself when clicked and can then cover the plate until the next show or drag.
+  The system move loop does not keep a `WS_POPUP` window out of the taskbar (no `WM_GETMINMAXINFO` / `WM_WINDOWPOSCHANGING` handling).
