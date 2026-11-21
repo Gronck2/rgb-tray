@@ -1,5 +1,6 @@
 //! Battery overlay: a small always-on-top plate with the charge of every device, shown and hidden
-//! by a hotkey or the tray menu. It takes no focus and lets mouse clicks through, except while Ctrl and Shift are held: then it can be dragged
+//! by a hotkey or the tray menu. It has no background: only the icons, percents and (full style) names and bars are drawn, with a
+//! contrasting halo so they read on anything. It takes no focus and lets mouse clicks through, except while Ctrl and Shift are held: then it can be dragged
 //! (the position is saved), and a double click puts it back in the default corner. It shows the last
 //! known levels and never asks a device (that would wake sleeping wireless ones).
 
@@ -11,7 +12,7 @@ use windows::core::w;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectWrite::*;
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
@@ -20,7 +21,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::config::{OverlayPos, OverlayStyle};
 use crate::devices::{kind_of, Battery, CRITICAL_BATTERY, LOW_BATTERY};
-use crate::draw::{cursor_monitor, dwm_set, hwnd_target, register_class, Paint};
+use crate::draw::{cursor_monitor, register_class, Paint};
 use crate::ui::{col, text_format, text_width, theme, Theme, R};
 
 const W: f32 = 280.0;
@@ -41,8 +42,11 @@ const C_CELL_W: f32 = C_ICON_W + C_PCT_W + C_MARK_W + 4.0;
 const C_GAP: f32 = 12.0;
 /// Width of the compact plate with its one empty-state line.
 const C_EMPTY_W: f32 = 220.0;
-/// Uniform window opacity, about 85%.
-const ALPHA: u8 = 217;
+/// Alpha of the faint backdrop drawn while the plate is movable, so that all of it can be grabbed
+/// (pixels with alpha 0 get no mouse input).
+const GRAB_ALPHA: f32 = 0.35;
+/// Offset of the text halo, in DIPs.
+const HALO: f32 = 1.0;
 /// Timer that watches Ctrl+Shift.
 const TIMER_MODIFIERS: usize = 1;
 
@@ -134,7 +138,7 @@ struct Overlay {
     hwnd: HWND,
     scale: f32,
     d2d: ID2D1Factory,
-    rt: Option<ID2D1HwndRenderTarget>,
+    surface: Option<Surface>,
     brush: Option<ID2D1SolidColorBrush>,
     fmt: Formats,
     theme: Theme,
@@ -146,6 +150,63 @@ struct Overlay {
     movable: bool,
     /// The system move loop is running.
     dragging: bool,
+}
+
+/// The plate's pixels: a 32-bit top-down DIB in a memory DC with a premultiplied-alpha Direct2D target on it.
+/// `UpdateLayeredWindow` shows it with per-pixel alpha.
+struct Surface {
+    dc: HDC,
+    bmp: HBITMAP,
+    old: HGDIOBJ,
+    w: i32,
+    h: i32,
+    rt: Option<ID2D1DCRenderTarget>,
+}
+
+impl Surface {
+    unsafe fn new(d2d: &ID2D1Factory, w: i32, h: i32, scale: f32) -> windows::core::Result<Surface> {
+        use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
+        let mut bi: BITMAPINFO = zeroed();
+        bi.bmiHeader = BITMAPINFOHEADER {
+            biSize: size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: w,
+            biHeight: -h,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB,
+            ..zeroed()
+        };
+        let mut bits = null_mut();
+        let bmp = CreateDIBSection(null_mut(), &bi, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
+        if bmp.is_null() {
+            return Err(windows::core::Error::from_win32());
+        }
+        let dc = CreateCompatibleDC(null_mut());
+        let old = SelectObject(dc, bmp);
+        let mut s = Surface { dc, bmp, old, w, h, rt: None };
+        let props = D2D1_RENDER_TARGET_PROPERTIES {
+            pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
+            dpiX: 96.0 * scale,
+            dpiY: 96.0 * scale,
+            ..Default::default()
+        };
+        // On error `s` is dropped and frees the GDI objects.
+        let rt = d2d.CreateDCRenderTarget(&props)?;
+        rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+        s.rt = Some(rt);
+        Ok(s)
+    }
+}
+
+impl Drop for Surface {
+    fn drop(&mut self) {
+        self.rt = None;
+        unsafe {
+            SelectObject(self.dc, self.old);
+            DeleteObject(self.bmp);
+            DeleteDC(self.dc);
+        }
+    }
 }
 
 /// Screen rectangle: left, top, right, bottom.
@@ -228,6 +289,11 @@ pub fn toggle() {
     }
 }
 
+/// Draws the plate again and puts it on screen; nothing when it is hidden.
+fn redraw() {
+    OVERLAY.with(|c| c.borrow_mut().as_mut().map(|o| o.redraw()));
+}
+
 /// Redraws the plate with the latest levels; nothing when it is hidden.
 pub fn refresh() {
     if !is_visible() {
@@ -242,8 +308,8 @@ pub fn refresh() {
                 o.rows = rows;
                 o.style = style;
                 if resized {
-                    // The render target is made for the window size.
-                    o.rt = None;
+                    // The surface is made for the window size.
+                    o.surface = None;
                     o.brush = None;
                 }
                 (o.hwnd, resized, o.scale, o.pos, size(style, o.rows.len()))
@@ -253,7 +319,7 @@ pub fn refresh() {
             if resized {
                 place(hwnd, scale, pos, dip);
             }
-            InvalidateRect(hwnd, null(), 0);
+            redraw();
         }
     }
 }
@@ -283,7 +349,7 @@ unsafe fn follow_modifiers(hwnd: HWND) {
         let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
         let ex = if want { ex & !WS_EX_TRANSPARENT } else { ex | WS_EX_TRANSPARENT };
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex as isize);
-        InvalidateRect(hwnd, null(), 0); // the border cue
+        redraw(); // the grab backdrop and the border cue
     }
 }
 
@@ -307,7 +373,7 @@ unsafe fn save_position(hwnd: HWND) {
             let rescaled = scale != o.scale;
             if rescaled {
                 o.scale = scale;
-                o.rt = None;
+                o.surface = None;
                 o.brush = None;
             }
             rescaled.then(|| (scale, size(o.style, o.rows.len())))
@@ -331,7 +397,7 @@ unsafe fn reset_position(hwnd: HWND) {
             o.pos = pos;
             if scale != o.scale {
                 o.scale = scale;
-                o.rt = None;
+                o.surface = None;
                 o.brush = None;
             }
             size(o.style, o.rows.len())
@@ -339,7 +405,7 @@ unsafe fn reset_position(hwnd: HWND) {
     });
     if let Some(dip) = dip {
         place(hwnd, scale, pos, dip);
-        InvalidateRect(hwnd, null(), 0);
+        redraw();
     }
     let mut cfg = crate::config();
     cfg.overlay_pos = None;
@@ -389,14 +455,12 @@ unsafe fn open() -> windows::core::Result<()> {
     if hwnd.is_null() {
         return Err(windows::core::Error::from_win32());
     }
-    SetLayeredWindowAttributes(hwnd, 0, ALPHA, LWA_ALPHA);
     let theme = theme();
-    dwm_set(hwnd, 33, 2); // DWMWCP_ROUND
-    dwm_set(hwnd, 20, theme.dark as u32);
 
-    let overlay = Overlay { hwnd, scale, d2d, rt: None, brush: None, fmt, theme, rows, style, pos, movable: false, dragging: false };
+    let overlay = Overlay { hwnd, scale, d2d, surface: None, brush: None, fmt, theme, rows, style, pos, movable: false, dragging: false };
     OVERLAY.with(|c| *c.borrow_mut() = Some(overlay));
     SetTimer(hwnd, TIMER_MODIFIERS, 80, None);
+    redraw(); // a layered window with per-pixel alpha shows nothing until it is updated
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     Ok(())
 }
@@ -422,6 +486,15 @@ fn fit(name: &str, fmt: &IDWriteTextFormat, max_w: f32) -> String {
     "…".into()
 }
 
+/// The 8 directions of the halo.
+const HALO_DIRS: [(f32, f32); 8] = [(-1.0, -1.0), (0.0, -1.0), (1.0, -1.0), (-1.0, 0.0), (1.0, 0.0), (-1.0, 1.0), (0.0, 1.0), (1.0, 1.0)];
+
+/// Halo colour: black behind light text (dark theme), white behind dark text; `a` is the text's alpha (dimming).
+fn halo_color(t: &Theme, a: f32) -> D2D1_COLOR_F {
+    let (v, k) = if t.dark { (0.0, 0.3) } else { (1.0, 0.5) };
+    D2D1_COLOR_F { r: v, g: v, b: v, a: k * a }
+}
+
 /// Warning colors that read on the plate's background.
 fn level_color(level: Level, t: &Theme) -> D2D1_COLOR_F {
     match (level, t.dark) {
@@ -434,40 +507,63 @@ fn level_color(level: Level, t: &Theme) -> D2D1_COLOR_F {
 }
 
 impl Overlay {
-    fn paint(&mut self) {
+    /// Draws the plate on its surface (made when missing) and puts it on screen.
+    fn redraw(&mut self) {
         unsafe {
-            if self.rt.is_none() {
-                let Ok(rt) = hwnd_target(&self.d2d, self.hwnd, self.scale) else { return };
-                self.brush = rt.CreateSolidColorBrush(&self.theme.text, None).ok();
-                self.rt = Some(rt);
+            let (w, h) = size(self.style, self.rows.len());
+            let (pw, ph) = ((w * self.scale).round() as i32, (h * self.scale).round() as i32);
+            if self.surface.as_ref().is_some_and(|s| (s.w, s.h) != (pw, ph)) {
+                self.surface = None;
+                self.brush = None;
             }
-            let rt = self.rt.clone().unwrap();
+            if self.surface.is_none() {
+                let Ok(s) = Surface::new(&self.d2d, pw, ph, self.scale) else { return };
+                self.brush = s.rt.as_ref().and_then(|rt| rt.CreateSolidColorBrush(&self.theme.text, None).ok());
+                self.surface = Some(s);
+            }
+            let s = self.surface.as_ref().unwrap();
+            let rt = s.rt.clone().unwrap();
+            let bound = windows::Win32::Foundation::RECT { left: 0, top: 0, right: pw, bottom: ph };
+            if rt.BindDC(windows::Win32::Graphics::Gdi::HDC(s.dc), &bound).is_err() {
+                self.surface = None;
+                return;
+            }
             rt.BeginDraw();
+            rt.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }));
             self.draw(&rt);
-            if let Err(e) = rt.EndDraw(None, None) {
-                self.rt = None;
-                if e.code() == windows::Win32::Foundation::D2DERR_RECREATE_TARGET {
-                    // Nothing was shown: draw again on a new target.
-                    InvalidateRect(self.hwnd, null(), 0);
-                }
+            if rt.EndDraw(None, None).is_err() {
+                // Nothing is shown; the next redraw starts on a new target.
+                self.surface = None;
+                self.brush = None;
+                return;
             }
+            let size = SIZE { cx: pw, cy: ph };
+            let blend = BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: 255, AlphaFormat: AC_SRC_ALPHA as u8 };
+            UpdateLayeredWindow(self.hwnd, null_mut(), null(), &size, s.dc, &POINT { x: 0, y: 0 }, 0, &blend, ULW_ALPHA);
         }
+    }
+
+    /// Text with a halo of the contrasting colour around it, so that it reads on any background.
+    unsafe fn glow(&self, rt: &ID2D1RenderTarget, s: &str, fmt: &IDWriteTextFormat, r: R, c: D2D1_COLOR_F) {
+        let halo = halo_color(&self.theme, c.a);
+        for (dx, dy) in HALO_DIRS {
+            self.text(rt, s, fmt, R { x: r.x + dx * HALO, y: r.y + dy * HALO, ..r }, halo);
+        }
+        self.text(rt, s, fmt, r, c);
     }
 
     unsafe fn draw(&self, rt: &ID2D1RenderTarget) {
         let t = &self.theme;
         let (w, h) = size(self.style, self.rows.len());
-        rt.Clear(Some(&t.bg));
         if self.movable {
-            // The cue that the plate can be dragged now.
+            // The plate can be dragged now: a faint backdrop so that all of it takes the mouse, and the accent border.
+            self.fill(rt, R { x: 0.0, y: 0.0, w, h }, 0.0, D2D1_COLOR_F { a: GRAB_ALPHA, ..t.bg });
             self.stroke(rt, R { x: 1.0, y: 1.0, w: w - 2.0, h: h - 2.0 }, 0.0, t.accent, 2.0);
-        } else {
-            self.stroke(rt, R { x: 0.0, y: 0.0, w, h }, 0.0, t.stroke, 1.0);
         }
         if self.rows.is_empty() {
             let line = tr!("Нет устройств с батареей", "No devices with a battery");
             let (pad, line_h) = if self.style == OverlayStyle::Full { (PAD, ROW_H) } else { (C_PAD, C_ROW_H) };
-            self.text(rt, line, &self.fmt.name, R { x: pad, y: VPAD, w: w - 2.0 * pad, h: line_h }, t.text2);
+            self.glow(rt, line, &self.fmt.name, R { x: pad, y: VPAD, w: w - 2.0 * pad, h: line_h }, t.text2);
             return;
         }
         for (i, row) in self.rows.iter().enumerate() {
@@ -501,22 +597,25 @@ impl Overlay {
         let t = &self.theme;
         let dim = |c| Self::dim(row, c);
         let accent = level_color(row.level, t);
-        self.text(rt, row.icon, &self.fmt.glyph, R { x: PAD, y: y + 2.0, w: ICON_W - 6.0, h: 29.0 }, dim(self.value_color(row)));
+        self.glow(rt, row.icon, &self.fmt.glyph, R { x: PAD, y: y + 2.0, w: ICON_W - 6.0, h: 29.0 }, dim(self.value_color(row)));
         let left = PAD + ICON_W;
         let name_w = W - PAD - left - RIGHT_W - 8.0;
-        self.text(rt, &fit(&row.name, &self.fmt.name, name_w), &self.fmt.name, R { x: left, y: y + 2.0, w: name_w, h: 20.0 }, dim(t.text));
+        self.glow(rt, &fit(&row.name, &self.fmt.name, name_w), &self.fmt.name, R { x: left, y: y + 2.0, w: name_w, h: 20.0 }, dim(t.text));
 
         let right = R { x: W - PAD - RIGHT_W, y: y + 2.0, w: RIGHT_W, h: 20.0 };
         let percent = if row.asleep { format!("{} · {}%", tr!("спит", "asleep"), row.percent) } else { format!("{}%", row.percent) };
-        self.text(rt, &percent, &self.fmt.percent, right, dim(self.value_color(row)));
+        self.glow(rt, &percent, &self.fmt.percent, right, dim(self.value_color(row)));
         if row.charging && !row.asleep {
             // The charging mark sits left of the percent.
             let mark = R { x: right.x, w: right.w - text_width(&percent, &self.fmt.percent) - 4.0, ..right };
-            self.text(rt, "\u{E83E}", &self.fmt.icon, mark, dim(accent));
+            self.glow(rt, "\u{E83E}", &self.fmt.icon, mark, dim(accent));
         }
 
         let bar = R { x: left, y: y + 27.0, w: W - PAD - left, h: 4.0 };
-        self.fill(rt, bar, 2.0, D2D1_COLOR_F { a: 0.22, ..t.text2 });
+        // An outline of the halo colour keeps the bar visible on any background.
+        let halo = halo_color(t, if row.asleep { 0.5 } else { 1.0 });
+        self.fill(rt, R { x: bar.x - HALO, y: bar.y - HALO, w: bar.w + 2.0 * HALO, h: bar.h + 2.0 * HALO }, 2.0 + HALO, halo);
+        self.fill(rt, bar, 2.0, D2D1_COLOR_F { a: 0.45, ..t.text2 });
         let filled = (bar.w * row.percent.min(100) as f32 / 100.0).max(bar.h);
         self.fill(rt, R { w: filled, ..bar }, 2.0, dim(accent));
     }
@@ -525,10 +624,10 @@ impl Overlay {
     unsafe fn cell(&self, rt: &ID2D1RenderTarget, row: &Row, x: f32, y: f32) {
         let dim = |c| Self::dim(row, c);
         let color = dim(self.value_color(row));
-        self.text(rt, row.icon, &self.fmt.glyph, R { x, y, w: C_ICON_W, h: C_ROW_H }, color);
-        self.text(rt, &format!("{}%", row.percent), &self.fmt.percent, R { x: x + C_ICON_W, y, w: C_PCT_W, h: C_ROW_H }, color);
+        self.glow(rt, row.icon, &self.fmt.glyph, R { x, y, w: C_ICON_W, h: C_ROW_H }, color);
+        self.glow(rt, &format!("{}%", row.percent), &self.fmt.percent, R { x: x + C_ICON_W, y, w: C_PCT_W, h: C_ROW_H }, color);
         if row.charging && !row.asleep {
-            self.text(
+            self.glow(
                 rt,
                 "\u{E83E}",
                 &self.fmt.icon,
@@ -539,7 +638,8 @@ impl Overlay {
     }
 }
 
-/// Renders the plate with the current levels into a PNG file, for checking the look. The style is the
+/// Renders the plate with the current levels into a PNG file, for checking the look: transparent, as on screen, or over a
+/// backdrop with `RGBTRAY_DEMO_OVERLAY_BG=light|dark|split` (split: white left half, black right half). The style is the
 /// saved one, or `RGBTRAY_DEMO_OVERLAY_STYLE=full|row|column`.
 pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Result<()> {
     let rows = current_rows();
@@ -551,7 +651,7 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Re
             hwnd: null_mut(),
             scale,
             d2d,
-            rt: None,
+            surface: None,
             brush: Some(rt.CreateSolidColorBrush(&theme.text, None)?),
             fmt: formats()?,
             theme,
@@ -561,6 +661,17 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Re
             movable: false,
             dragging: false,
         };
+        let backdrop = std::env::var("RGBTRAY_DEMO_OVERLAY_BG").unwrap_or_default();
+        let paint = |x: f32, w: f32, v: f32| o.fill(rt, R { x, y: 0.0, w, h }, 0.0, D2D1_COLOR_F { r: v, g: v, b: v, a: 1.0 });
+        match backdrop.as_str() {
+            "light" => paint(0.0, w, 1.0),
+            "dark" => paint(0.0, w, 0.0),
+            "split" => {
+                paint(0.0, w / 2.0, 1.0);
+                paint(w / 2.0, w / 2.0, 0.0);
+            }
+            _ => {}
+        }
         o.draw(rt);
         Ok(())
     })
@@ -568,14 +679,6 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Re
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
-        WM_PAINT => {
-            let mut ps: PAINTSTRUCT = zeroed();
-            BeginPaint(hwnd, &mut ps);
-            OVERLAY.with(|c| c.borrow_mut().as_mut().map(|o| o.paint()));
-            EndPaint(hwnd, &ps);
-            0
-        }
-        WM_ERASEBKGND => 1,
         // Mouse clicks go to the window under the plate, unless Ctrl+Shift is held: then the plate is a
         // caption and the system moves it. It is never activated.
         WM_NCHITTEST => {
@@ -598,6 +701,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             OVERLAY.with(|c| c.borrow_mut().as_mut().map(|o| o.dragging = false));
             save_position(hwnd);
             follow_modifiers(hwnd); // keys may be up by now
+            redraw();
             0
         }
         WM_NCLBUTTONDBLCLK => {
@@ -685,6 +789,19 @@ mod tests {
     fn asleep_low_device_keeps_its_level() {
         let r = run(&["a"], &[("a", b(4, false))], &["a"]);
         assert!(r[0].asleep && r[0].level == Level::Critical && r[0].percent == 4);
+    }
+
+    #[test]
+    fn halo_contrasts_with_the_text_and_follows_dimming() {
+        let dark = theme_for_test(true);
+        let light = theme_for_test(false);
+        let (hd, hl) = (halo_color(&dark, 1.0), halo_color(&light, 1.0));
+        assert!(hd.r == 0.0 && hl.r == 1.0);
+        assert_eq!(halo_color(&dark, 0.5).a, hd.a / 2.0);
+    }
+
+    fn theme_for_test(dark: bool) -> Theme {
+        crate::ui::theme_for(Some(dark))
     }
 
     const STYLES: [OverlayStyle; 3] = [OverlayStyle::Full, OverlayStyle::Row, OverlayStyle::Column];

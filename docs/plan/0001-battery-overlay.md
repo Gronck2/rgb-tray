@@ -105,6 +105,24 @@ Move the "one owner per combination" rule from `take_hotkey` in `main.rs` into a
 - READMEs: feature line mentions Ctrl+Shift+drag and double-click.
 - Tests: config round trip/absent/garbled; anchor choice, resize growth, clamping, default and probe.
 
+## Addendum 2026-11-21: no background
+
+- Rendering: `LWA_ALPHA` is gone. `Surface` in `overlay.rs` is a 32-bit top-down DIB section in a memory DC with an
+  `ID2D1DCRenderTarget` (premultiplied BGRA, grayscale text AA) bound to it; `Overlay::redraw()` clears it to (0,0,0,0),
+  draws, and presents with `UpdateLayeredWindow(ULW_ALPHA)`. `redraw()` replaces the `WM_PAINT` path and is called
+  from open, `refresh`, a size or DPI change, `follow_modifiers`, `reset_position` and `WM_EXITSIZEMOVE`. The surface is
+  dropped (DIB, DC and target freed in `Drop`) when the pixel size changes or a draw fails. The DWM round-corner
+  attribute is dropped. `Cargo.toml` gets the `windows` feature `Win32_Graphics_Gdi` (needed for `BindDC`).
+- Legibility: `glow()` draws each text 8 times offset by 1 DIP in the halo colour (black for the dark theme, white for
+  the light one, alpha 0.3 / 0.5 times the text alpha), then the text itself. The level bar track is semi-transparent
+  with a halo-coloured outline.
+- Dragging: while `movable`, `draw()` adds a theme-bg backdrop at 35% alpha plus the accent border over the whole rect.
+- Snapshot: transparent PNG; `RGBTRAY_DEMO_OVERLAY_BG=light|dark|split` paints a backdrop first.
+- Tests: `halo_color` contrast and dimming. Look is checked with the snapshots over white, black and split backdrops.
+- Hardware check: 12. The plate has no background on a bright and on a dark window; text readable on both. Ctrl+Shift
+  shows the faint backdrop and the whole plate can be dragged, including between the items. Show/hide, style cycling
+  and a drag to a monitor with other scaling leave no leaked handles (watch GDI objects in Task Manager).
+
 ## Files likely touched
 
 `src/overlay.rs` (new), `src/main.rs` (mod, hotkey id, WM_HOTKEY, refresh, quit, snapshot, demo var),
@@ -156,6 +174,7 @@ opacity is not visible in a snapshot (note it for the hardware check). Also snap
 
 ## Tradeoffs considered
 
+- Superseded 2026-11-21: per-pixel alpha with `UpdateLayeredWindow` was chosen after all (the owner wants no background).
 - Layered window with uniform alpha vs per-pixel alpha (DirectComposition / `UpdateLayeredWindow`): uniform alpha keeps the
   same `HwndRenderTarget` code as `alert.rs`; per-pixel alpha gives a see-through background and soft edges but needs a new
   rendering path. Chosen: uniform alpha.

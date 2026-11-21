@@ -90,7 +90,7 @@ plate is turned on from the tray item "Battery overlay" until a key is set (no C
    hotkey menu. If the owner wants a default, suggest Ctrl+Alt+B, set only when the field is absent from the config.
 5. Auto-show on low battery?
    Recommend: no. The alert window already does it and has a snooze.
-6. Opacity and size?
+6. Opacity and size? (Opacity superseded 2026-11-21: no background, see the addendum.)
    Recommend: fixed, about 85% opaque, width about 280 px at 100% scaling, scaled by DPI, text size as in the panel.
    No settings for them in the first version.
 7. Stays until toggled or auto-hides?
@@ -132,6 +132,22 @@ and the place is remembered. Without both keys it stays click-through as before.
 14. The plate remembers its corner nearest the screen edges, so adding rows or switching to the wider Row style grows
     it away from that edge instead of off-screen.
 15. Ctrl+Shift+double-click puts it back in the default corner and clears the saved place.
+
+### Addendum, 2026-11-21 (owner): no background
+
+The plate covered what was under it. This replaces decision 6 ("about 85% opaque"): the background is removed completely,
+with no setting. Only the icons, the percents and, in the full style, the names, the charging mark and the level bar are
+drawn, each with a contrasting halo (black behind light text, white behind dark text) so that they read on any background.
+Low/critical colours and the dimming of a device without link stay.
+
+16. The plate has no background or border: the pixels between the items are fully transparent (per-pixel alpha).
+17. Text, icons and the level bar (a semi-transparent track with a halo outline) read on both a white and a black
+    background, in the dark and the light theme.
+18. While Ctrl+Shift is held the plate shows a faint translucent backdrop (about 35%) and the accent border over its
+    whole rectangle, so that all of it can be grabbed (fully transparent pixels get no mouse input); on release the
+    backdrop is gone again.
+19. `--snapshot *overlay*` writes the transparent image (with alpha); `RGBTRAY_DEMO_OVERLAY_BG=light|dark|split` draws it
+    over a white, a black, or a half white / half black backdrop so that it can be reviewed.
 
 ## Notes
 

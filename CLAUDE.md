@@ -47,7 +47,7 @@ target\release\rgbtray.exe --snapshot <out.png> [dark|light] [card] [zone]
 The file name picks the view: `*editor*` = key editor, `*setup*` = installer, `*traymenu*`, `*alert*`, `*overlay*` (battery plate); anything else = the panel.
 Env vars: `RGBTRAY_LANG=en|ru`, `RGBTRAY_DEMO_MANY=n`, `RGBTRAY_DEMO_PAGE=k`, `RGBTRAY_DEMO_WARN`,
 `RGBTRAY_DEMO_DYNLIGHT`, `RGBTRAY_DEMO_NOLINK`, `RGBTRAY_DEMO_ARCHIVE`, `RGBTRAY_DEMO_DIM`, `RGBTRAY_DEMO_SPEED`,
-`RGBTRAY_DEMO_MENU` (`=device`: hotkey menu of the last device; `=overlay`: of the battery overlay), `RGBTRAY_DEMO_BATTERY=id:percent[:c],...` (made-up levels, `c` = charging; use with `RGBTRAY_DEMO_IDS`, `RGBTRAY_DEMO_NOLINK` dims the Naga), `RGBTRAY_DEMO_OVERLAY_STYLE=full|row|column` (layout of the `*overlay*` view; else the saved `overlay_style`), `RGBTRAY_DEMO_WIN`, `RGBTRAY_DEMO_APPS=synapse,ghub` (conflict warnings),
+`RGBTRAY_DEMO_MENU` (`=device`: hotkey menu of the last device; `=overlay`: of the battery overlay), `RGBTRAY_DEMO_BATTERY=id:percent[:c],...` (made-up levels, `c` = charging; use with `RGBTRAY_DEMO_IDS`, `RGBTRAY_DEMO_NOLINK` dims the Naga), `RGBTRAY_DEMO_OVERLAY_STYLE=full|row|column` (layout of the `*overlay*` view; else the saved `overlay_style`), `RGBTRAY_DEMO_OVERLAY_BG=light|dark|split` (the overlay has no background, so its PNG is transparent; this paints a white, black or half-and-half backdrop under it for looking), `RGBTRAY_DEMO_WIN`, `RGBTRAY_DEMO_APPS=synapse,ghub` (conflict warnings),
 `RGBTRAY_DEMO_UPDATE=0.7.0[,downloading|failed|nosetup]` (update card), `RGBTRAY_DEMO_IDS=logitech-X,naga-Y` (made-up devices of these models).
 Snapshots still talk to real devices (discovery).
 
@@ -77,7 +77,7 @@ Every G915 command is logged with milliseconds.
   (wake from Modern Standby via `GUID_CONSOLE_DISPLAY_STATE`, hot-plug), hotkeys, battery poller,
   `--diagnose`, export/import.
 - `ui.rs`: the flyout panel (Direct2D/DirectWrite). `editor.rs`: per-key editor. `draw.rs`: drawing and window helpers the windows share. `traymenu.rs`,
-  `alert.rs` (low-battery window), `overlay.rs` (battery plate: topmost, click-through, shown by a hotkey or the tray item, styles full/row/column from `overlay_style`; last known levels only), `installer.rs` (the exe installs itself).
+  `alert.rs` (low-battery window), `overlay.rs` (battery plate: topmost, click-through, no background (per-pixel alpha, text with a halo), shown by a hotkey or the tray item, styles full/row/column from `overlay_style`; last known levels only), `installer.rs` (the exe installs itself).
 - `config.rs`: TOML config. Devices are keyed `"<kind>-<serial>"`, e.g. `[devices."logitech-1A2B3C4D"]`.
 - `i18n.rs`: every UI string is written in place as `tr!("рус", "eng")`. `Text = (ru, en)` tuples are used for const tables.
   Driver errors and `--diagnose` are English only.
