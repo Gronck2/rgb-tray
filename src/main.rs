@@ -1406,9 +1406,23 @@ fn toggle_overlay_system() {
     cfg.save();
     drop(cfg);
     if on {
-        sysbat::refresh_async();
+        // Posts WM_BATTERY even when the list is unchanged: a low device is warned about now, not at the next poll.
+        sysbat::refresh_and_notify();
+    } else {
+        let dropped = drop_system_warned(&mut BATTERY_WARNED.lock().unwrap());
+        for id in dropped {
+            alert::dismiss_for(&id);
+        }
+        post(WM_BATTERY);
     }
     overlay::refresh();
+}
+
+/// Forgets the warning state of the system devices (ids `system-...`); the ids dropped, whose alerts are to be closed.
+fn drop_system_warned(warned: &mut Vec<(String, u8, Option<std::time::Instant>)>) -> Vec<String> {
+    let ids = warned.iter().filter(|e| e.0.starts_with("system-")).map(|e| e.0.clone()).collect();
+    warned.retain(|e| !e.0.starts_with("system-"));
+    ids
 }
 
 /// Switches whether the lighting dims and goes off with the display.
@@ -1928,6 +1942,14 @@ fn main() {
 mod tests {
     use super::*;
 
+    #[test]
+    fn turning_system_devices_off_forgets_only_their_warnings() {
+        let now = std::time::Instant::now();
+        let mut warned = vec![("logitech-1".to_string(), 10, None), ("system-bt-aa".to_string(), 5, Some(now)), ("system-bt-bb".to_string(), 0, None)];
+        assert_eq!(drop_system_warned(&mut warned), vec!["system-bt-aa".to_string(), "system-bt-bb".to_string()]);
+        assert_eq!(warned.len(), 1);
+        assert_eq!(warned[0].0, "logitech-1");
+    }
     /// The config lock is held to the end of the statement that takes it, so a second
     /// `config()` in the same statement waits forever (the tray menu hung that way in 0.6.13).
     #[test]

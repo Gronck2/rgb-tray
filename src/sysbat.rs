@@ -256,6 +256,15 @@ fn parse_string(ty: u32, buf: &[u8]) -> Option<String> {
     Some(String::from_utf16_lossy(&w)).filter(|s| !s.trim().is_empty())
 }
 
+/// The ids of the enumerators that could be read; an error only when none could (one may have no nodes ever, e.g. no BLE).
+fn merge_lists(lists: Vec<Result<Vec<String>, String>>) -> Result<Vec<String>, String> {
+    let (ok, err): (Vec<_>, Vec<_>) = lists.into_iter().partition(|l| l.is_ok());
+    if ok.is_empty() {
+        return Err(err.into_iter().filter_map(Result::err).collect::<Vec<_>>().join("; "));
+    }
+    Ok(ok.into_iter().flatten().flatten().collect())
+}
+
 mod win {
     use std::ptr::null_mut;
 
@@ -283,17 +292,21 @@ mod win {
     unsafe fn instance_ids(enumerator: &str) -> Result<Vec<String>, String> {
         let filter = wide(enumerator);
         let flags = CM_GETIDLIST_FILTER_ENUMERATOR | CM_GETIDLIST_FILTER_PRESENT;
-        let mut len = 0u32;
-        let r = CM_Get_Device_ID_List_SizeW(&mut len, filter.as_ptr(), flags);
-        if r != CR_SUCCESS {
-            return Err(format!("{enumerator}: CM_Get_Device_ID_List_Size failed ({r:#x})"));
+        // A node may appear between the size and the list (CR_BUFFER_SMALL): ask the size again.
+        for _ in 0..4 {
+            let mut len = 0u32;
+            let r = CM_Get_Device_ID_List_SizeW(&mut len, filter.as_ptr(), flags);
+            if r != CR_SUCCESS {
+                return Err(format!("{enumerator}: CM_Get_Device_ID_List_Size failed ({r:#x})"));
+            }
+            let mut buf = vec![0u16; len as usize];
+            match CM_Get_Device_ID_ListW(filter.as_ptr(), buf.as_mut_ptr(), len, flags) {
+                CR_SUCCESS => return Ok(buf.split(|&c| c == 0).filter(|s| !s.is_empty()).map(String::from_utf16_lossy).collect()),
+                CR_BUFFER_SMALL => continue,
+                r => return Err(format!("{enumerator}: CM_Get_Device_ID_List failed ({r:#x})")),
+            }
         }
-        let mut buf = vec![0u16; len as usize];
-        let r = CM_Get_Device_ID_ListW(filter.as_ptr(), buf.as_mut_ptr(), len, flags);
-        if r != CR_SUCCESS {
-            return Err(format!("{enumerator}: CM_Get_Device_ID_List failed ({r:#x})"));
-        }
-        Ok(buf.split(|&c| c == 0).filter(|s| !s.is_empty()).map(String::from_utf16_lossy).collect())
+        Err(format!("{enumerator}: the device list kept changing"))
     }
 
     /// The type and bytes of a property of a node; `None` when it has none. Only a getter: nothing reaches the device.
@@ -313,21 +326,20 @@ mod win {
 
     pub(super) fn read_nodes() -> Result<Vec<Node>, String> {
         let mut nodes = Vec::new();
-        for enumerator in ["BTHENUM", "BTHLE"] {
-            for instance in unsafe { instance_ids(enumerator)? } {
-                let mut dn = 0u32;
-                if unsafe { CM_Locate_DevNodeW(&mut dn, wide(&instance).as_ptr(), CM_LOCATE_DEVNODE_NORMAL) } != CR_SUCCESS {
-                    continue;
-                }
-                let get = |k: &DEVPROPKEY| unsafe { property(dn, k) };
-                nodes.push(Node {
-                    name: get(&FRIENDLY_NAME).and_then(|(t, b)| parse_string(t, &b)).or_else(|| get(&NAME).and_then(|(t, b)| parse_string(t, &b))),
-                    cod: get(&CLASS_OF_DEVICE).and_then(|(t, b)| parse_u32(t, &b)),
-                    connected: get(&CONNECTED).and_then(|(t, b)| parse_bool(t, &b)),
-                    battery: get(&BATTERY).and_then(|(t, b)| parse_level(t, &b)),
-                    instance,
-                });
+        let lists: Vec<_> = ["BTHENUM", "BTHLE"].into_iter().map(|e| unsafe { instance_ids(e) }).collect();
+        for instance in merge_lists(lists)? {
+            let mut dn = 0u32;
+            if unsafe { CM_Locate_DevNodeW(&mut dn, wide(&instance).as_ptr(), CM_LOCATE_DEVNODE_NORMAL) } != CR_SUCCESS {
+                continue;
             }
+            let get = |k: &DEVPROPKEY| unsafe { property(dn, k) };
+            nodes.push(Node {
+                name: get(&FRIENDLY_NAME).and_then(|(t, b)| parse_string(t, &b)).or_else(|| get(&NAME).and_then(|(t, b)| parse_string(t, &b))),
+                cod: get(&CLASS_OF_DEVICE).and_then(|(t, b)| parse_u32(t, &b)),
+                connected: get(&CONNECTED).and_then(|(t, b)| parse_bool(t, &b)),
+                battery: get(&BATTERY).and_then(|(t, b)| parse_level(t, &b)),
+                instance,
+            });
         }
         Ok(nodes)
     }
@@ -367,6 +379,14 @@ pub fn refresh_async() {
             crate::post(crate::WM_BATTERY);
         }
         BUSY.store(false, Ordering::SeqCst);
+    });
+}
+
+/// Like `refresh_async`, but tells the main window whether or not the list changed (after the user turned the system devices on).
+pub fn refresh_and_notify() {
+    std::thread::spawn(|| {
+        refresh();
+        crate::post(crate::WM_BATTERY);
     });
 }
 
@@ -421,6 +441,14 @@ mod tests {
 
     fn names(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_failing_enumerator_is_skipped() {
+        let ok = Ok(names(&["a", "b"]));
+        assert_eq!(merge_lists(vec![Err("x".into()), ok.clone()]), ok);
+        assert_eq!(merge_lists(vec![ok.clone(), Ok(names(&["c"]))]), Ok(names(&["a", "b", "c"])));
+        assert_eq!(merge_lists(vec![Err("x".into()), Err("y".into())]), Err("x; y".into()));
     }
 
     #[test]
