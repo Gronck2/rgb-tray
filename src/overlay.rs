@@ -246,21 +246,26 @@ fn rc(r: RECT) -> Rc {
     (r.left, r.top, r.right, r.bottom)
 }
 
-/// The corner of `plate` nearest the edges of `work`, as the position to remember.
+/// The position of `plate` to remember: its left edge (the plate always grows to the right), and the top or bottom edge
+/// nearest the edge of `work` (it grows away from that one). `right` is only read from older configs, never set.
 fn anchor_of(plate: Rc, work: Rc) -> OverlayPos {
-    let right = plate.0 - work.0 > work.2 - plate.2;
     let bottom = plate.1 - work.1 > work.3 - plate.3;
-    OverlayPos { x: if right { plate.2 } else { plate.0 }, y: if bottom { plate.3 } else { plate.1 }, right, bottom }
+    OverlayPos { x: plate.0, y: if bottom { plate.3 } else { plate.1 }, right: false, bottom }
 }
 
-/// Top-left of a `w` x `h` plate kept at `pos`: it grows away from the anchored corner.
-fn origin(pos: OverlayPos, w: i32, h: i32) -> (i32, i32) {
-    (if pos.right { pos.x - w } else { pos.x }, if pos.bottom { pos.y - h } else { pos.y })
+/// `pos` of an older config (`right`: `x` is the plate's right edge) as a left-anchored one for a `w` wide plate.
+fn left_anchored(pos: OverlayPos, w: i32) -> OverlayPos {
+    OverlayPos { x: if pos.right { pos.x - w } else { pos.x }, right: false, ..pos }
+}
+
+/// Top-left of a `w` x `h` plate kept at `pos` (left-anchored): it grows to the right, and up or down away from the anchored edge.
+fn origin(pos: OverlayPos, h: i32) -> (i32, i32) {
+    (pos.x, if pos.bottom { pos.y - h } else { pos.y })
 }
 
 /// `origin` moved the least that puts the plate inside `work` (the top-left wins when it does not fit).
 fn placed(pos: OverlayPos, w: i32, h: i32, work: Rc) -> (i32, i32) {
-    let (l, t) = origin(pos, w, h);
+    let (l, t) = origin(pos, h);
     (l.min(work.2 - w).max(work.0), t.min(work.3 - h).max(work.1))
 }
 
@@ -277,9 +282,9 @@ fn probe(pos: OverlayPos) -> POINT {
     POINT { x: pos.x - pos.right as i32, y: pos.y - pos.bottom as i32 }
 }
 
-/// The default position: top-right of `work`, `margin` pixels in.
-fn default_pos(work: Rc, margin: i32) -> OverlayPos {
-    OverlayPos { x: work.2 - margin, y: work.1 + margin, right: true, bottom: false }
+/// The default position of a `w` wide plate: top-right of `work`, `margin` pixels in (from there it grows to the right and is clamped).
+fn default_pos(work: Rc, margin: i32, w: i32) -> OverlayPos {
+    OverlayPos { x: work.2 - margin - w, y: work.1 + margin, right: false, bottom: false }
 }
 
 /// Work area and DPI of the monitor at `pt`; `None` when no monitor holds it and `flags` says not to guess.
@@ -429,19 +434,20 @@ unsafe fn save_position(hwnd: HWND) {
 unsafe fn reset_position(hwnd: HWND) {
     let (_, mi, dpi) = cursor_monitor(MONITOR_DEFAULTTOPRIMARY);
     let scale = dpi as f32 / 96.0;
-    let pos = default_pos(rc(mi.rcWork), (12.0 * scale).round() as i32);
-    let dip = OVERLAY.with(|c| {
+    let margin = (12.0 * scale).round() as i32;
+    let moved = OVERLAY.with(|c| {
         c.borrow_mut().as_mut().map(|o| {
-            o.pos = pos;
             if scale != o.scale {
                 o.scale = scale;
                 o.surface = None;
                 o.brush = None;
             }
-            size(o.style, o.rows.len())
+            let dip = size(o.style, o.rows.len());
+            o.pos = default_pos(rc(mi.rcWork), margin, (dip.0 * scale).round() as i32);
+            (o.pos, dip)
         })
     });
-    if let Some(dip) = dip {
+    if let Some((pos, dip)) = moved {
         place(hwnd, scale, pos, dip);
         redraw();
     }
@@ -458,12 +464,11 @@ unsafe fn open() -> windows::core::Result<()> {
     // The saved place if a monitor still holds it, else the monitor under the cursor now (it does not
     // follow while the plate is up).
     let saved = crate::config().overlay_pos.and_then(|p| monitor_at(probe(p), MONITOR_DEFAULTTONULL).map(|m| (p, m)));
-    let (pos, work, dpi) = match saved {
-        Some((p, (work, dpi))) => (p, work, dpi),
+    let (saved_pos, work, dpi) = match saved {
+        Some((p, (work, dpi))) => (Some(p), work, dpi),
         None => {
             let (_, mi, dpi) = cursor_monitor(MONITOR_DEFAULTTOPRIMARY);
-            let scale = dpi as f32 / 96.0;
-            (default_pos(rc(mi.rcWork), (12.0 * scale).round() as i32), rc(mi.rcWork), dpi)
+            (None, rc(mi.rcWork), dpi)
         }
     };
     let scale = dpi as f32 / 96.0;
@@ -471,6 +476,10 @@ unsafe fn open() -> windows::core::Result<()> {
     let style = crate::config().overlay_style;
     let dip = size(style, rows.len());
     let (w, h) = ((dip.0 * scale).round() as i32, (dip.1 * scale).round() as i32);
+    let pos = match saved_pos {
+        Some(p) => left_anchored(p, w),
+        None => default_pos(work, (12.0 * scale).round() as i32, w),
+    };
     let (left, top) = placed(pos, w, h, work);
 
     // What can fail comes before the window: a window without its state would be stuck.
@@ -710,7 +719,7 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Re
             theme,
             rows,
             style,
-            pos: default_pos((0, 0, 0, 0), 0),
+            pos: default_pos((0, 0, 0, 0), 0, 0),
             movable: false,
             dragging: false,
         };
@@ -974,54 +983,90 @@ mod tests {
     const WORK: Rc = (0, 0, 1920, 1040);
 
     #[test]
-    fn anchor_is_the_corner_nearest_the_edges() {
+    fn anchor_is_the_left_edge_and_the_vertical_edge_nearest_the_screen_edge() {
         let a = |l, t, w, h| anchor_of((l, t, l + w, t + h), WORK);
+        // Near the right edge the anchor is still the left edge.
         let p = a(1600, 12, 300, 100);
-        assert_eq!((p.x, p.y, p.right, p.bottom), (1900, 12, true, false));
+        assert_eq!((p.x, p.y, p.right, p.bottom), (1600, 12, false, false));
         let p = a(20, 900, 300, 100);
         assert_eq!((p.x, p.y, p.right, p.bottom), (20, 1000, false, true));
         let p = a(5, 5, 300, 100);
         assert_eq!((p.x, p.y, p.right, p.bottom), (5, 5, false, false));
-        // A plate across the middle: ties go to the left/top.
+        // A plate across the middle: ties go to the top.
         let p = a(810, 470, 300, 100);
-        assert!(p.right == (810 > 1920 - 1110) && !p.bottom == (470 <= 1040 - 570));
+        assert!(!p.right && !p.bottom == (470 <= 1040 - 570));
     }
 
     #[test]
-    fn resized_plate_grows_away_from_its_anchor() {
-        let right = OverlayPos { x: 1900, y: 12, right: true, bottom: false };
-        assert_eq!(origin(right, 300, 100), (1600, 12));
-        assert_eq!(origin(right, 500, 100), (1400, 12));
+    fn plate_on_the_left_grows_right_keeping_x() {
+        let pos = anchor_of((100, 12, 400, 112), WORK);
+        assert_eq!(placed(pos, 300, 100, WORK), (100, 12));
+        assert_eq!(placed(pos, 500, 100, WORK), (100, 12));
+        assert_eq!(placed(pos, 200, 100, WORK), (100, 12));
+    }
+
+    #[test]
+    fn plate_near_the_right_edge_grows_right_and_is_clamped_inside() {
+        let pos = anchor_of((1600, 12, 1900, 112), WORK);
+        assert_eq!(placed(pos, 300, 100, WORK), (1600, 12));
+        // Wider: its left edge would stay, but the right would leave the work area: shifted left just enough.
+        let (l, _) = placed(pos, 500, 100, WORK);
+        assert_eq!((l, l + 500), (1420, 1920));
+        // The saved x is kept, so it returns when the plate shrinks again.
+        assert_eq!(placed(pos, 300, 100, WORK), (1600, 12));
+        // Same on a monitor left of the origin.
+        let work = (-1920, 0, 0, 1040);
+        let pos = anchor_of((-400, 12, -100, 112), work);
+        assert_eq!(placed(pos, 600, 100, work), (-600, 12));
+    }
+
+    #[test]
+    fn older_right_anchored_position_becomes_left_anchored() {
+        let old = OverlayPos { x: 1900, y: 12, right: true, bottom: false };
+        let p = left_anchored(old, 300);
+        assert_eq!((p.x, p.y, p.right, p.bottom), (1600, 12, false, false));
+        assert_eq!(placed(p, 300, 100, WORK), (1600, 12));
+        // A left-anchored position is unchanged.
+        let q = OverlayPos { x: 20, y: 1000, right: false, bottom: true };
+        assert_eq!(left_anchored(q, 300), q);
+    }
+
+    #[test]
+    fn vertical_growth_is_away_from_the_nearest_edge() {
         let bottom_left = OverlayPos { x: 20, y: 1000, right: false, bottom: true };
-        assert_eq!(origin(bottom_left, 300, 100), (20, 900));
-        assert_eq!(origin(bottom_left, 300, 200), (20, 800));
-        // Same corner after a re-anchor of the unchanged rectangle.
-        let (l, t) = origin(bottom_left, 300, 100);
+        assert_eq!(origin(bottom_left, 100), (20, 900));
+        assert_eq!(origin(bottom_left, 200), (20, 800));
+        let top = OverlayPos { x: 20, y: 12, right: false, bottom: false };
+        assert_eq!(origin(top, 200), (20, 12));
+        // Same anchor after a re-anchor of the unchanged rectangle.
+        let (l, t) = origin(bottom_left, 100);
         assert_eq!(anchor_of((l, t, l + 300, t + 100), WORK), bottom_left);
     }
 
     #[test]
     fn placement_is_clamped_into_the_work_area() {
-        let at = |x, y, right, bottom, w, h| placed(OverlayPos { x, y, right, bottom }, w, h, WORK);
-        assert_eq!(at(1900, 12, true, false, 300, 100), (1600, 12));
-        // Anchored left but the plate is too wide for the room that is left.
-        assert_eq!(at(1800, 12, false, false, 300, 100), (1620, 12));
+        let at = |x, y, bottom, w, h| placed(OverlayPos { x, y, right: false, bottom }, w, h, WORK);
+        assert_eq!(at(1600, 12, false, 300, 100), (1600, 12));
+        // The plate is too wide for the room that is left on the right.
+        assert_eq!(at(1800, 12, false, 300, 100), (1620, 12));
         // Anchored at the bottom, taller than the room above: pushed down from the top edge.
-        assert_eq!(at(20, 50, false, true, 300, 100), (20, 0));
+        assert_eq!(at(20, 50, true, 300, 100), (20, 0));
         // Off the screen on the left/top.
-        assert_eq!(at(-50, -50, false, false, 300, 100), (0, 0));
+        assert_eq!(at(-50, -50, false, 300, 100), (0, 0));
         // Larger than the work area: the top-left corner stays visible.
-        assert_eq!(at(1000, 500, true, true, 3000, 2000), (0, 0));
+        assert_eq!(at(1000, 500, true, 3000, 2000), (0, 0));
         // Work area not at the origin (second monitor on the left).
         let work = (-1920, 0, 0, 1040);
-        assert_eq!(placed(OverlayPos { x: 100, y: 12, right: true, bottom: false }, 300, 100, work), (-300, 12));
+        assert_eq!(placed(OverlayPos { x: -300, y: 12, right: false, bottom: false }, 300, 100, work), (-300, 12));
     }
 
     #[test]
     fn default_is_top_right_and_probe_is_inside_the_monitor() {
-        let d = default_pos(WORK, 12);
-        assert_eq!((d.x, d.y, d.right, d.bottom), (1908, 12, true, false));
+        let d = default_pos(WORK, 12, 280);
+        assert_eq!((d.x, d.y, d.right, d.bottom), (1628, 12, false, false));
         assert_eq!(placed(d, 280, 100, WORK), (1628, 12));
+        // Then it grows right and is clamped to the margin-less edge.
+        assert_eq!(placed(d, 400, 100, WORK), (1520, 12));
         // The anchor of a right/bottom plate sits on the exclusive edge: the probe steps inside.
         let p = probe(OverlayPos { x: 1920, y: 1040, right: true, bottom: true });
         assert_eq!((p.x, p.y), (1919, 1039));
@@ -1037,9 +1082,9 @@ mod tests {
             let corners = [(work.0 + 10, work.1 + 10), (work.2 - w - 10, work.1 + 10), (work.0 + 10, work.3 - h - 10), (work.2 - w - 10, work.3 - h - 10)];
             for (i, (l, t)) in corners.into_iter().enumerate() {
                 let pos = anchor_of((l, t, l + w, t + h), work);
-                assert_eq!((pos.right, pos.bottom), (i % 2 == 1, i >= 2), "{work:?} corner {i}");
+                assert_eq!((pos.right, pos.bottom), (false, i >= 2), "{work:?} corner {i}");
                 assert_eq!(placed(pos, w, h, work), (l, t), "{work:?} corner {i}");
-                // A taller and wider plate grows away from the anchor and still fits.
+                // A taller and wider plate grows (right, and away from the vertical anchor) and still fits.
                 let (bl, bt) = placed(pos, w + 100, h + 100, work);
                 assert!(bl >= work.0 && bl + w + 100 <= work.2 && bt >= work.1 && bt + h + 100 <= work.3, "{work:?} corner {i}");
                 let p = probe(pos);

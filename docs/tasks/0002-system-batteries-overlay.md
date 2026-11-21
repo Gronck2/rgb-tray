@@ -132,3 +132,13 @@ Questions that matter, each with the recommended default (the plan follows the d
 - `src/config.rs` and `src/main.rs` are security-shaped paths (settings compatibility, polling, shared state):
   extra care in review. The new code calls Win32 property APIs only; it must not open device handles
   (`CreateFile`) on Bluetooth devices.
+
+## Owner decisions
+
+- 2026-11-21: the plate grows to the right. Its left edge (`x`) is the horizontal anchor wherever it sits; when a wider
+  plate (more devices in Row style, a longer name) would leave the work area on the right, it is shifted left just
+  enough (the saved `x` is kept, so it returns when the plate shrinks). This supersedes the horizontal part of
+  0001's "grows away from the nearest edge"; the vertical rule is unchanged (top or bottom edge, whichever is nearer,
+  the plate grows away from it). The default (no saved position) is still top-right of the cursor's monitor at the
+  first show, then it grows rightwards and is clamped. `OverlayPos` keeps its fields: `right` is no longer set; an
+  older saved `right = true` still loads and is converted to the left edge with the plate's width when the plate opens.

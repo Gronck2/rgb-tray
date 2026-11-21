@@ -106,9 +106,9 @@ fn lenient_overlay_style<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Overl
     })
 }
 
-/// Where the user put the battery overlay: a corner of the plate and the screen point it sits on (pixels).
-/// `right`/`bottom` say which corner is kept: the one nearest the screen edges, so a plate that gets
-/// larger (more devices, another style) grows away from that edge and stays on the screen.
+/// Where the user put the battery overlay (pixels): `x` is the plate's left edge, so it grows to the right; `bottom` says the
+/// vertical anchor is the plate's bottom edge (`y`), the nearer one, so it grows up. `right` is only read from older configs
+/// (`x` was the right edge then) and is never set.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct OverlayPos {
     pub x: i32,
