@@ -92,6 +92,19 @@ Move the "one owner per combination" rule from `take_hotkey` in `main.rs` into a
 - Snapshots: `RGBTRAY_DEMO_OVERLAY_STYLE=full|row|column` (else the saved style); documented in `CLAUDE.md`.
 - README feature line mentions the three styles. Tests: style parse/round trip/absent, `size()` per style, rows carry the icon.
 
+## Addendum 2026-11-21: movable plate
+
+- `config.rs`: `OverlayPos { x, y, right, bottom }` (the plate corner nearest the work-area edges and its screen point),
+  field `overlay_pos: Option<_>` with a lenient deserialize (garbled reads as unset), not written when unset.
+- `overlay.rs`: pure `anchor_of` (nearest corner), `origin` (top-left of a resized plate from the anchor), `placed`
+  (clamped into the work area), `default_pos`, `probe`. A 80 ms timer (`follow_modifiers`) reads `GetAsyncKeyState`
+  for Ctrl and Shift: both down drops `WS_EX_TRANSPARENT`, `WM_NCHITTEST` answers `HTCAPTION` (the panel does the
+  same) so the system move loop drags it; `WM_MOUSEACTIVATE` stays `MA_NOACTIVATE`. `WM_EXITSIZEMOVE` saves the
+  position (and rescales when the new monitor has another DPI). `WM_NCLBUTTONDBLCLK` resets to the default.
+  `open()` uses the saved position if `MonitorFromPoint(.., DEFAULTTONULL)` finds a monitor, else the default.
+- READMEs: feature line mentions Ctrl+Shift+drag and double-click.
+- Tests: config round trip/absent/garbled; anchor choice, resize growth, clamping, default and probe.
+
 ## Files likely touched
 
 `src/overlay.rs` (new), `src/main.rs` (mod, hotkey id, WM_HOTKEY, refresh, quit, snapshot, demo var),
@@ -135,12 +148,18 @@ opacity is not visible in a snapshot (note it for the hardware check). Also snap
 7. Restart the app: the hotkey is kept; the plate starts hidden.
 8. 150% scaling and a second monitor: sharp text, correct monitor.
 
+9. Hold Ctrl+Shift: a coloured border appears and the plate can be dragged; typing in the editor underneath keeps
+   working (focus not stolen). Let go of the keys: clicks pass through again.
+10. Restart the app, show the plate: it comes back where it was left. Change the style to Row with the plate at the
+    right edge: it grows to the left, stays on screen. Drag to the second monitor (other scaling): size follows.
+11. Ctrl+Shift+double-click: back to the top-right corner.
+
 ## Tradeoffs considered
 
 - Layered window with uniform alpha vs per-pixel alpha (DirectComposition / `UpdateLayeredWindow`): uniform alpha keeps the
   same `HwndRenderTarget` code as `alert.rs`; per-pixel alpha gives a see-through background and soft edges but needs a new
   rendering path. Chosen: uniform alpha.
-- Click-through vs draggable: click-through chosen (no focus, no blocking clicks); dragging would need a move mode.
+- Click-through vs draggable: click-through chosen (no focus, no blocking clicks); dragging would need a move mode. Superseded 2026-11-21: a Ctrl+Shift "move mode" (see the addendum).
 - Reuse the hotkey menu vs a new settings control: reuse, since there is no settings window in the app (the global
   switches live in the tray menu) and a second recording UI would duplicate `capture_key`.
 - Polling on show vs last known data: last known, to avoid waking sleeping devices (see the poller comment in `main.rs`).

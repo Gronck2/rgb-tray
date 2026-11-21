@@ -1,21 +1,24 @@
 //! Battery overlay: a small always-on-top plate with the charge of every device, shown and hidden
-//! by a hotkey or the tray menu. It takes no focus and lets mouse clicks through. It shows the last
+//! by a hotkey or the tray menu. It takes no focus and lets mouse clicks through, except while Ctrl and Shift are held: then it can be dragged
+//! (the position is saved), and a double click puts it back in the default corner. It shows the last
 //! known levels and never asks a device (that would wake sleeping wireless ones).
 
 use std::cell::RefCell;
-use std::mem::zeroed;
+use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
 
 use windows::core::w;
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectWrite::*;
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_SHIFT};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use crate::config::OverlayStyle;
+use crate::config::{OverlayPos, OverlayStyle};
 use crate::devices::{kind_of, Battery, CRITICAL_BATTERY, LOW_BATTERY};
 use crate::draw::{cursor_monitor, dwm_set, hwnd_target, register_class, Paint};
 use crate::ui::{col, text_format, text_width, theme, Theme, R};
@@ -40,6 +43,8 @@ const C_GAP: f32 = 12.0;
 const C_EMPTY_W: f32 = 220.0;
 /// Uniform window opacity, about 85%.
 const ALPHA: u8 = 217;
+/// Timer that watches Ctrl+Shift.
+const TIMER_MODIFIERS: usize = 1;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Level {
@@ -135,9 +140,62 @@ struct Overlay {
     theme: Theme,
     rows: Vec<Row>,
     style: OverlayStyle,
-    /// Right edge and top of the plate on the screen (pixels), kept when it is resized.
-    right: i32,
-    top: i32,
+    /// Where the plate sits (see `OverlayPos`); kept when it is resized.
+    pos: OverlayPos,
+    /// Ctrl+Shift is held: the plate takes the mouse and can be dragged.
+    movable: bool,
+    /// The system move loop is running.
+    dragging: bool,
+}
+
+/// Screen rectangle: left, top, right, bottom.
+type Rc = (i32, i32, i32, i32);
+
+fn rc(r: RECT) -> Rc {
+    (r.left, r.top, r.right, r.bottom)
+}
+
+/// The corner of `plate` nearest the edges of `work`, as the position to remember.
+fn anchor_of(plate: Rc, work: Rc) -> OverlayPos {
+    let right = plate.0 - work.0 > work.2 - plate.2;
+    let bottom = plate.1 - work.1 > work.3 - plate.3;
+    OverlayPos { x: if right { plate.2 } else { plate.0 }, y: if bottom { plate.3 } else { plate.1 }, right, bottom }
+}
+
+/// Top-left of a `w` x `h` plate kept at `pos`: it grows away from the anchored corner.
+fn origin(pos: OverlayPos, w: i32, h: i32) -> (i32, i32) {
+    (if pos.right { pos.x - w } else { pos.x }, if pos.bottom { pos.y - h } else { pos.y })
+}
+
+/// `origin` moved the least that puts the plate inside `work` (the top-left wins when it does not fit).
+fn placed(pos: OverlayPos, w: i32, h: i32, work: Rc) -> (i32, i32) {
+    let (l, t) = origin(pos, w, h);
+    (l.min(work.2 - w).max(work.0), t.min(work.3 - h).max(work.1))
+}
+
+/// A point inside the monitor a position belongs to (the anchor lies on the plate's edge, which is
+/// outside a monitor on its right or bottom side).
+fn probe(pos: OverlayPos) -> POINT {
+    POINT { x: pos.x - pos.right as i32, y: pos.y - pos.bottom as i32 }
+}
+
+/// The default position: top-right of `work`, `margin` pixels in.
+fn default_pos(work: Rc, margin: i32) -> OverlayPos {
+    OverlayPos { x: work.2 - margin, y: work.1 + margin, right: true, bottom: false }
+}
+
+/// Work area and DPI of the monitor at `pt`; `None` when no monitor holds it and `flags` says not to guess.
+unsafe fn monitor_at(pt: POINT, flags: MONITOR_FROM_FLAGS) -> Option<(Rc, u32)> {
+    let monitor = MonitorFromPoint(pt, flags);
+    if monitor.is_null() {
+        return None;
+    }
+    let mut mi: MONITORINFO = zeroed();
+    mi.cbSize = size_of::<MONITORINFO>() as u32;
+    GetMonitorInfoW(monitor, &mut mi);
+    let (mut dpi, mut dpi_y) = (96u32, 96u32);
+    GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi, &mut dpi_y);
+    Some((rc(mi.rcWork), dpi))
 }
 
 thread_local! {
@@ -181,22 +239,99 @@ pub fn refresh() {
                     o.rt = None;
                     o.brush = None;
                 }
-                (o.hwnd, resized, o.scale, o.right, o.top, size(style, o.rows.len()))
+                (o.hwnd, resized, o.scale, o.pos, size(style, o.rows.len()))
             })
         });
-        if let Some((hwnd, resized, scale, right, top, dip)) = moved {
+        if let Some((hwnd, resized, scale, pos, dip)) = moved {
             if resized {
-                place(hwnd, scale, right, top, dip);
+                place(hwnd, scale, pos, dip);
             }
             InvalidateRect(hwnd, null(), 0);
         }
     }
 }
 
-/// Puts the plate with its right edge at `right` and its top at `top`, sized `dip` (width, height in DIPs).
-unsafe fn place(hwnd: HWND, scale: f32, right: i32, top: i32, dip: (f32, f32)) {
+/// Puts the plate at `pos`, sized `dip` (width, height in DIPs), inside the work area of its monitor.
+unsafe fn place(hwnd: HWND, scale: f32, pos: OverlayPos, dip: (f32, f32)) {
     let (w, h) = ((dip.0 * scale).round() as i32, (dip.1 * scale).round() as i32);
-    SetWindowPos(hwnd, HWND_TOPMOST, right - w, top, w, h, SWP_NOACTIVATE);
+    let work = monitor_at(probe(pos), MONITOR_DEFAULTTONEAREST).map(|m| m.0).unwrap_or((0, 0, i32::MAX, i32::MAX));
+    let (l, t) = placed(pos, w, h, work);
+    SetWindowPos(hwnd, HWND_TOPMOST, l, t, w, h, SWP_NOACTIVATE);
+}
+
+/// While Ctrl and Shift are both down the plate takes the mouse (so it can be dragged); otherwise
+/// clicks pass through it. Checked by a timer: a click-through window gets no keyboard or mouse messages.
+unsafe fn follow_modifiers(hwnd: HWND) {
+    let down = |vk| GetAsyncKeyState(vk as i32) < 0;
+    let want = down(VK_CONTROL) && down(VK_SHIFT);
+    let changed = OVERLAY.with(|c| match c.borrow_mut().as_mut() {
+        // A drag in progress keeps the plate movable even if a key is let go.
+        Some(o) if !o.dragging && o.movable != want => {
+            o.movable = want;
+            true
+        }
+        _ => false,
+    });
+    if changed {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        let ex = if want { ex & !WS_EX_TRANSPARENT } else { ex | WS_EX_TRANSPARENT };
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex as isize);
+        InvalidateRect(hwnd, null(), 0); // the border cue
+    }
+}
+
+/// The drag ended: remember the plate's corner nearest the screen edges.
+unsafe fn save_position(hwnd: HWND) {
+    let mut r: RECT = zeroed();
+    GetWindowRect(hwnd, &mut r);
+    let plate = rc(r);
+    let Some((work, dpi)) = monitor_at(POINT { x: (plate.0 + plate.2) / 2, y: (plate.1 + plate.3) / 2 }, MONITOR_DEFAULTTONEAREST) else { return };
+    let pos = anchor_of(plate, work);
+    let rescaled = OVERLAY.with(|c| {
+        c.borrow_mut().as_mut().and_then(|o| {
+            o.pos = pos;
+            let scale = dpi as f32 / 96.0;
+            // Dragged to a monitor with another DPI: size the plate for it.
+            let rescaled = scale != o.scale;
+            if rescaled {
+                o.scale = scale;
+                o.rt = None;
+                o.brush = None;
+            }
+            rescaled.then(|| (scale, size(o.style, o.rows.len())))
+        })
+    });
+    if let Some((scale, dip)) = rescaled {
+        place(hwnd, scale, pos, dip);
+    }
+    let mut cfg = crate::config();
+    cfg.overlay_pos = Some(pos);
+    cfg.save();
+}
+
+/// Back to the default corner of the monitor under the cursor; forgets the saved position.
+unsafe fn reset_position(hwnd: HWND) {
+    let (_, mi, dpi) = cursor_monitor(MONITOR_DEFAULTTOPRIMARY);
+    let scale = dpi as f32 / 96.0;
+    let pos = default_pos(rc(mi.rcWork), (12.0 * scale).round() as i32);
+    let dip = OVERLAY.with(|c| {
+        c.borrow_mut().as_mut().map(|o| {
+            o.pos = pos;
+            if scale != o.scale {
+                o.scale = scale;
+                o.rt = None;
+                o.brush = None;
+            }
+            size(o.style, o.rows.len())
+        })
+    });
+    if let Some(dip) = dip {
+        place(hwnd, scale, pos, dip);
+        InvalidateRect(hwnd, null(), 0);
+    }
+    let mut cfg = crate::config();
+    cfg.overlay_pos = None;
+    cfg.save();
 }
 
 unsafe fn open() -> windows::core::Result<()> {
@@ -204,15 +339,23 @@ unsafe fn open() -> windows::core::Result<()> {
     let class: Vec<u16> = "RgbTrayBatteryOverlay\0".encode_utf16().collect();
     register_class(&class, 0, wndproc);
 
-    // The monitor under the cursor now; it does not follow while the plate is up.
-    let (_, mi, dpi) = cursor_monitor(MONITOR_DEFAULTTOPRIMARY);
+    // The saved place if a monitor still holds it, else the monitor under the cursor now (it does not
+    // follow while the plate is up).
+    let saved = crate::config().overlay_pos.and_then(|p| monitor_at(probe(p), MONITOR_DEFAULTTONULL).map(|m| (p, m)));
+    let (pos, work, dpi) = match saved {
+        Some((p, (work, dpi))) => (p, work, dpi),
+        None => {
+            let (_, mi, dpi) = cursor_monitor(MONITOR_DEFAULTTOPRIMARY);
+            let scale = dpi as f32 / 96.0;
+            (default_pos(rc(mi.rcWork), (12.0 * scale).round() as i32), rc(mi.rcWork), dpi)
+        }
+    };
     let scale = dpi as f32 / 96.0;
-    let margin = (12.0 * scale).round() as i32;
-    let (right, top) = (mi.rcWork.right - margin, mi.rcWork.top + margin);
     let rows = current_rows();
     let style = crate::config().overlay_style;
     let dip = size(style, rows.len());
     let (w, h) = ((dip.0 * scale).round() as i32, (dip.1 * scale).round() as i32);
+    let (left, top) = placed(pos, w, h, work);
 
     // What can fail comes before the window: a window without its state would be stuck.
     let d2d = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
@@ -222,7 +365,7 @@ unsafe fn open() -> windows::core::Result<()> {
         class.as_ptr(),
         class.as_ptr(),
         WS_POPUP,
-        right - w,
+        left,
         top,
         w,
         h,
@@ -239,8 +382,9 @@ unsafe fn open() -> windows::core::Result<()> {
     dwm_set(hwnd, 33, 2); // DWMWCP_ROUND
     dwm_set(hwnd, 20, theme.dark as u32);
 
-    let overlay = Overlay { hwnd, scale, d2d, rt: None, brush: None, fmt, theme, rows, style, right, top };
+    let overlay = Overlay { hwnd, scale, d2d, rt: None, brush: None, fmt, theme, rows, style, pos, movable: false, dragging: false };
     OVERLAY.with(|c| *c.borrow_mut() = Some(overlay));
+    SetTimer(hwnd, TIMER_MODIFIERS, 80, None);
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     Ok(())
 }
@@ -302,7 +446,12 @@ impl Overlay {
         let t = &self.theme;
         let (w, h) = size(self.style, self.rows.len());
         rt.Clear(Some(&t.bg));
-        self.stroke(rt, R { x: 0.0, y: 0.0, w, h }, 0.0, t.stroke, 1.0);
+        if self.movable {
+            // The cue that the plate can be dragged now.
+            self.stroke(rt, R { x: 1.0, y: 1.0, w: w - 2.0, h: h - 2.0 }, 0.0, t.accent, 2.0);
+        } else {
+            self.stroke(rt, R { x: 0.0, y: 0.0, w, h }, 0.0, t.stroke, 1.0);
+        }
         if self.rows.is_empty() {
             let line = tr!("Нет устройств с батареей", "No devices with a battery");
             let (pad, line_h) = if self.style == OverlayStyle::Full { (PAD, ROW_H) } else { (C_PAD, C_ROW_H) };
@@ -396,8 +545,9 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Re
             theme,
             rows,
             style,
-            right: 0,
-            top: 0,
+            pos: default_pos((0, 0, 0, 0), 0),
+            movable: false,
+            dragging: false,
         };
         o.draw(rt);
         Ok(())
@@ -414,10 +564,38 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             0
         }
         WM_ERASEBKGND => 1,
-        // Mouse clicks go to the window under the plate; it is never activated.
-        WM_NCHITTEST => HTTRANSPARENT as LRESULT,
+        // Mouse clicks go to the window under the plate, unless Ctrl+Shift is held: then the plate is a
+        // caption and the system moves it. It is never activated.
+        WM_NCHITTEST => {
+            if OVERLAY.with(|c| c.borrow().as_ref().is_some_and(|o| o.movable)) {
+                HTCAPTION as LRESULT
+            } else {
+                HTTRANSPARENT as LRESULT
+            }
+        }
         WM_MOUSEACTIVATE => MA_NOACTIVATE as LRESULT,
+        WM_TIMER if wparam == TIMER_MODIFIERS => {
+            follow_modifiers(hwnd);
+            0
+        }
+        WM_ENTERSIZEMOVE => {
+            OVERLAY.with(|c| c.borrow_mut().as_mut().map(|o| o.dragging = true));
+            0
+        }
+        WM_EXITSIZEMOVE => {
+            OVERLAY.with(|c| c.borrow_mut().as_mut().map(|o| o.dragging = false));
+            save_position(hwnd);
+            follow_modifiers(hwnd); // keys may be up by now
+            0
+        }
+        WM_NCLBUTTONDBLCLK => {
+            reset_position(hwnd);
+            0
+        }
+        // No system menu from the drag area.
+        WM_NCRBUTTONUP => 0,
         WM_DESTROY => {
+            KillTimer(hwnd, TIMER_MODIFIERS);
             let o = OVERLAY.with(|c| c.borrow_mut().take());
             drop(o);
             0
@@ -548,5 +726,64 @@ mod tests {
         }
         // What the compact styles show survives in the row: the percent, the charging mark and the dimming.
         assert!(r[1].charging && r[1].percent == 60);
+    }
+
+    // Work area of 1920x1040 at the origin.
+    const WORK: Rc = (0, 0, 1920, 1040);
+
+    #[test]
+    fn anchor_is_the_corner_nearest_the_edges() {
+        let a = |l, t, w, h| anchor_of((l, t, l + w, t + h), WORK);
+        let p = a(1600, 12, 300, 100);
+        assert_eq!((p.x, p.y, p.right, p.bottom), (1900, 12, true, false));
+        let p = a(20, 900, 300, 100);
+        assert_eq!((p.x, p.y, p.right, p.bottom), (20, 1000, false, true));
+        let p = a(5, 5, 300, 100);
+        assert_eq!((p.x, p.y, p.right, p.bottom), (5, 5, false, false));
+        // A plate across the middle: ties go to the left/top.
+        let p = a(810, 470, 300, 100);
+        assert!(p.right == (810 > 1920 - 1110) && !p.bottom == (470 <= 1040 - 570));
+    }
+
+    #[test]
+    fn resized_plate_grows_away_from_its_anchor() {
+        let right = OverlayPos { x: 1900, y: 12, right: true, bottom: false };
+        assert_eq!(origin(right, 300, 100), (1600, 12));
+        assert_eq!(origin(right, 500, 100), (1400, 12));
+        let bottom_left = OverlayPos { x: 20, y: 1000, right: false, bottom: true };
+        assert_eq!(origin(bottom_left, 300, 100), (20, 900));
+        assert_eq!(origin(bottom_left, 300, 200), (20, 800));
+        // Same corner after a re-anchor of the unchanged rectangle.
+        let (l, t) = origin(bottom_left, 300, 100);
+        assert_eq!(anchor_of((l, t, l + 300, t + 100), WORK), bottom_left);
+    }
+
+    #[test]
+    fn placement_is_clamped_into_the_work_area() {
+        let at = |x, y, right, bottom, w, h| placed(OverlayPos { x, y, right, bottom }, w, h, WORK);
+        assert_eq!(at(1900, 12, true, false, 300, 100), (1600, 12));
+        // Anchored left but the plate is too wide for the room that is left.
+        assert_eq!(at(1800, 12, false, false, 300, 100), (1620, 12));
+        // Anchored at the bottom, taller than the room above: pushed down from the top edge.
+        assert_eq!(at(20, 50, false, true, 300, 100), (20, 0));
+        // Off the screen on the left/top.
+        assert_eq!(at(-50, -50, false, false, 300, 100), (0, 0));
+        // Larger than the work area: the top-left corner stays visible.
+        assert_eq!(at(1000, 500, true, true, 3000, 2000), (0, 0));
+        // Work area not at the origin (second monitor on the left).
+        let work = (-1920, 0, 0, 1040);
+        assert_eq!(placed(OverlayPos { x: 100, y: 12, right: true, bottom: false }, 300, 100, work), (-300, 12));
+    }
+
+    #[test]
+    fn default_is_top_right_and_probe_is_inside_the_monitor() {
+        let d = default_pos(WORK, 12);
+        assert_eq!((d.x, d.y, d.right, d.bottom), (1908, 12, true, false));
+        assert_eq!(placed(d, 280, 100, WORK), (1628, 12));
+        // The anchor of a right/bottom plate sits on the exclusive edge: the probe steps inside.
+        let p = probe(OverlayPos { x: 1920, y: 1040, right: true, bottom: true });
+        assert_eq!((p.x, p.y), (1919, 1039));
+        let p = probe(OverlayPos { x: 0, y: 0, right: false, bottom: false });
+        assert_eq!((p.x, p.y), (0, 0));
     }
 }

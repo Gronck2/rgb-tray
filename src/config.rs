@@ -106,6 +106,31 @@ fn lenient_overlay_style<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Overl
     })
 }
 
+/// Where the user put the battery overlay: a corner of the plate and the screen point it sits on (pixels).
+/// `right`/`bottom` say which corner is kept: the one nearest the screen edges, so a plate that gets
+/// larger (more devices, another style) grows away from that edge and stays on the screen.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct OverlayPos {
+    pub x: i32,
+    pub y: i32,
+    pub right: bool,
+    pub bottom: bool,
+}
+
+/// A garbled position reads as unset: it must never make the settings file unreadable.
+fn lenient_overlay_pos<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<OverlayPos>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Pos(OverlayPos),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Raw::deserialize(d)? {
+        Raw::Pos(p) => Some(p),
+        Raw::Other(_) => None,
+    })
+}
+
 fn full_brightness() -> u8 {
     100
 }
@@ -381,6 +406,9 @@ pub struct Config {
     /// Layout of the battery overlay; an unknown value reads as Full.
     #[serde(deserialize_with = "lenient_overlay_style", skip_serializing_if = "OverlayStyle::is_default")]
     pub overlay_style: OverlayStyle,
+    /// Where the overlay was dragged to; not set = top-right of the monitor under the cursor.
+    #[serde(deserialize_with = "lenient_overlay_pos", skip_serializing_if = "Option::is_none")]
+    pub overlay_pos: Option<OverlayPos>,
     pub presets: Vec<Preset>,
     /// Programs whose "it drives the lighting too" warning the user hid (`conflicts::App::key`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -410,6 +438,7 @@ impl Default for Config {
             panel_pos: None,
             overlay_hotkey: None,
             overlay_style: OverlayStyle::Full,
+            overlay_pos: None,
             presets: Vec::new(),
             ignored_apps: Vec::new(),
             per_key: false,
@@ -1352,6 +1381,27 @@ mod tests {
         // The cycle visits every style and returns.
         assert_eq!(OverlayStyle::Full.next().next().next(), OverlayStyle::Full);
         assert_ne!(OverlayStyle::Full.next(), OverlayStyle::Full.next().next());
+    }
+
+    #[test]
+    fn overlay_pos_round_trip_absent_and_garbled() {
+        let load = |s: &str| toml::from_str::<Config>(s).unwrap();
+        assert!(load("brightness = 50\n").overlay_pos.is_none());
+        let mut cfg = Config::default();
+        assert!(!toml::to_string(&cfg).unwrap().contains("overlay_pos"));
+        let pos = OverlayPos { x: -1500, y: 40, right: true, bottom: false };
+        cfg.overlay_pos = Some(pos);
+        cfg.brightness = 42;
+        let text = toml::to_string(&cfg).unwrap();
+        let back = load(&text);
+        assert!(back.overlay_pos == Some(pos) && back.brightness == 42);
+        // Garbled values read as unset and keep the other settings.
+        for bad in ["overlay_pos = 7\n", "overlay_pos = \"x\"\n", "[overlay_pos]\nx = \"a\"\n", "[overlay_pos]\nx = 1\n"] {
+            let c = load(&format!("brightness = 42\n{bad}"));
+            assert!(c.overlay_pos.is_none() && c.brightness == 42, "{bad}");
+        }
+        // A newer version's extra field inside the position is ignored.
+        assert!(load("[overlay_pos]\nx = 1\ny = 2\nright = false\nbottom = true\nfuture = 3\n").overlay_pos.is_some());
     }
 
     #[test]

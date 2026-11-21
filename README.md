@@ -68,7 +68,7 @@ With [Claude Code](https://claude.com/claude-code) you can get a device working 
 - Updates: once a day the app asks GitHub for the latest release; a newer version shows a card on the panel that installs it in one click. The check can be switched off in the tray menu.
 - Follows the display: the lighting dims when Windows dims the screen and goes off while the screen is off (idle, locked, asleep). Can be switched off in the tray menu.
 - Low battery alerts at 10% and 5%.
-- A small always-on-top battery plate (all devices, last known levels; full, compact row or column layout, chosen in the tray menu) shown and hidden by a hotkey you record or the tray item "Battery overlay"; it takes no focus and clicks pass through. It shows over windowed and borderless games, not over exclusive full screen.
+- A small always-on-top battery plate (all devices, last known levels; full, compact row or column layout, chosen in the tray menu) shown and hidden by a hotkey you record or the tray item "Battery overlay"; it takes no focus and clicks pass through (Ctrl+Shift+drag moves it, Ctrl+Shift+double-click resets it). It shows over windowed and borderless games, not over exclusive full screen.
 - The tray icon shows the current color.
 - Pinned mode: the panel stays open on top and can be dragged by its header.
 - Export and import of all settings to a file. Presets can be shared one by one: right-click a preset → Save to a file…, and the receiver loads it with Load settings or a preset… in the tray menu; it goes to their devices of the same models (all of them, if they have several), and the app says which models of the file they don't have.

@@ -119,6 +119,20 @@ the last percent dimmed, no "asleep" word), the empty-state line, top-right plac
 This relaxes "a settings page for it" in Out of scope for this one setting only: the choice is a tray menu item
 ("Вид индикатора" / "Overlay style"), not a page. Opacity, size and position stay fixed.
 
+### Addendum, 2026-11-21 (owner): the plate can be moved
+
+This replaces decision 1 ("fixed, not draggable, not remembered"): the plate is dragged with Ctrl+Shift+left-button
+and the place is remembered. Without both keys it stays click-through as before.
+
+12. Holding Ctrl+Shift makes the plate take the mouse (accent border as a cue); dragging it moves it and focus is not
+    stolen; releasing the keys makes it click-through again. A drag in progress is not cut by releasing the keys.
+13. The place is saved as `overlay_pos` in `config.toml` (not written when unset; a garbled value reads as unset and
+    never makes the config unreadable) and used the next time the plate is shown, if a monitor still holds it; else
+    the default (top-right of the monitor under the cursor). The plate is always kept inside the work area.
+14. The plate remembers its corner nearest the screen edges, so adding rows or switching to the wider Row style grows
+    it away from that edge instead of off-screen.
+15. Ctrl+Shift+double-click puts it back in the default corner and clears the saved place.
+
 ## Notes
 
 - No significant architectural decision: a new window module next to `alert.rs`, one new config field. No ADR needed.
