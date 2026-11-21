@@ -1386,6 +1386,15 @@ mod tests {
     }
 
     #[test]
+    fn unknown_overlay_style_keeps_the_other_settings() {
+        // A style of a newer version must not cost the user the rest of the file.
+        let text = "brightness = 42\noverlay_style = \"grid\"\nfuture_field = 1\n[overlay_hotkey]\nmods = 3\nvk = 66\n";
+        let cfg = good_settings(text).unwrap();
+        assert!(cfg.overlay_style == OverlayStyle::Full && cfg.brightness == 42);
+        assert!(cfg.overlay_hotkey == Some(Hotkey { mods: 3, vk: 0x42 }));
+    }
+
+    #[test]
     fn overlay_hotkey_with_unknown_fields_loads() {
         // A config of a newer version: the overlay key plus a field this version does not know.
         let text = "brightness = 50\nfuture_field = 1\n[overlay_hotkey]\nmods = 3\nvk = 66\n";

@@ -479,6 +479,13 @@ mod tests {
     }
 
     #[test]
+    fn rows_carry_the_model_icon() {
+        let r = run(&["logitech-1"], &[("logitech-1", b(50, false))], &[]);
+        assert_eq!(r[0].icon, kind_of("logitech-1").icon);
+        assert!(!r[0].icon.is_empty());
+    }
+
+    #[test]
     fn no_devices_gives_no_rows() {
         assert!(run(&[], &[("a", b(50, false))], &[]).is_empty());
         assert!(run(&["a"], &[], &[]).is_empty());
