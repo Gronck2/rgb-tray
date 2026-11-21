@@ -33,6 +33,8 @@ The release build is a GUI program (`windows_subsystem = "windows"`): the CLI to
 - `--profile-test <out> <profile.toml>`: plays a fixed sequence on the devices of a `[hid]` profile, step log in `<out>`.
 - `--lamparray-test <out> <rrggbb> <sec>`, `--logitech-effect-test` (G915 firmware effect variants, 2 s dark between steps, steps logged),
   `--logitech-battery-led-test` (SWControl variants, 20 s each).
+- `--system-batteries <out>`: every Bluetooth device node (`BTHENUM`, `BTHLE`) with the name, class, connection and battery level Windows holds,
+  the id the app gives it and whether the overlay lists it. Read-only (OS properties, nothing is sent to a device); use it when a device does not show up.
 - `--show`, `--install`/`--quiet` (installer), `--uninstall`. `RGBTRAY_LAMPARRAY_ALL=1` makes the
   generic LampArray driver take devices that have a native driver.
 
@@ -47,7 +49,7 @@ target\release\rgbtray.exe --snapshot <out.png> [dark|light] [card] [zone]
 The file name picks the view: `*editor*` = key editor, `*setup*` = installer, `*traymenu*`, `*alert*`, `*overlay*` (battery plate); anything else = the panel.
 Env vars: `RGBTRAY_LANG=en|ru`, `RGBTRAY_DEMO_MANY=n`, `RGBTRAY_DEMO_PAGE=k`, `RGBTRAY_DEMO_WARN`,
 `RGBTRAY_DEMO_DYNLIGHT`, `RGBTRAY_DEMO_NOLINK`, `RGBTRAY_DEMO_ARCHIVE`, `RGBTRAY_DEMO_DIM`, `RGBTRAY_DEMO_SPEED`,
-`RGBTRAY_DEMO_MENU` (`=device`: hotkey menu of the last device; `=overlay`: of the battery overlay), `RGBTRAY_DEMO_BATTERY=id:percent[:c],...` (made-up levels, `c` = charging; use with `RGBTRAY_DEMO_IDS`, `RGBTRAY_DEMO_NOLINK` dims the Naga), `RGBTRAY_DEMO_OVERLAY_STYLE=full|row|column` (layout of the `*overlay*` view; else the saved `overlay_style`), `RGBTRAY_DEMO_OVERLAY_BG=light|dark|split` (the overlay has no background, so its PNG is transparent; this paints a white, black or half-and-half backdrop under it for looking), `RGBTRAY_DEMO_WIN`, `RGBTRAY_DEMO_APPS=synapse,ghub` (conflict warnings),
+`RGBTRAY_DEMO_MENU` (`=device`: hotkey menu of the last device; `=overlay`: of the battery overlay), `RGBTRAY_DEMO_BATTERY=id:percent[:c],...` (made-up levels, `c` = charging; use with `RGBTRAY_DEMO_IDS`, `RGBTRAY_DEMO_NOLINK` dims the Naga), `RGBTRAY_DEMO_OVERLAY_STYLE=full|row|column` (layout of the `*overlay*` view; else the saved `overlay_style`), `RGBTRAY_DEMO_OVERLAY_BG=light|dark|split` (the overlay has no background, so its PNG is transparent; this paints a white, black or half-and-half backdrop under it for looking), `RGBTRAY_DEMO_SYSTEM=name:class:percent,...` (made-up system devices for the overlay, e.g. `WH-1000XM6:headphones:72`; class is headphones, headset, speaker, mouse, keyboard, gamepad, phone or other; the `*alert*` view takes its device name from the first), `RGBTRAY_DEMO_WIN`, `RGBTRAY_DEMO_APPS=synapse,ghub` (conflict warnings),
 `RGBTRAY_DEMO_UPDATE=0.7.0[,downloading|failed|nosetup]` (update card), `RGBTRAY_DEMO_IDS=logitech-X,naga-Y` (made-up devices of these models).
 Snapshots still talk to real devices (discovery).
 
@@ -78,6 +80,7 @@ Every G915 command is logged with milliseconds.
   `--diagnose`, export/import.
 - `ui.rs`: the flyout panel (Direct2D/DirectWrite). `editor.rs`: per-key editor. `draw.rs`: drawing and window helpers the windows share. `traymenu.rs`,
   `alert.rs` (low-battery window), `overlay.rs` (battery plate: topmost, click-through, no background (per-pixel alpha, text with a halo), shown by a hotkey or the tray item, styles full/row/column from `overlay_style`; last known levels only), `installer.rs` (the exe installs itself).
+- `sysbat.rs`: batteries of Bluetooth devices the app does not drive (headphones, mice, pads), read from the PnP property Windows holds (`DEVPKEY_Bluetooth_Battery`; level on a service node, connection on the `DEV_<address>` node, joined by address). OS properties only: never open a device handle or send anything. Kept apart from `PRESENT`, `STATUS` and `config.devices` (ids `system-<hash>`); `sysbat::listed()` feeds the overlay rows and the low-battery alert (`check_batteries`), honours `overlay_system` (tray item "System devices") and drops a device named like one of the app's. Read on a worker thread: at start, on the 5 min poll, when the overlay is shown, every 60 s while it is up.
 - `config.rs`: TOML config. Devices are keyed `"<kind>-<serial>"`, e.g. `[devices."logitech-1A2B3C4D"]`.
 - `i18n.rs`: every UI string is written in place as `tr!("рус", "eng")`. `Text = (ru, en)` tuples are used for const tables.
   Driver errors and `--diagnose` are English only.

@@ -7,6 +7,7 @@
 use std::cell::RefCell;
 use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use windows::core::w;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -22,6 +23,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use crate::config::{OverlayPos, OverlayStyle};
 use crate::devices::{kind_of, Battery, CRITICAL_BATTERY, LOW_BATTERY};
 use crate::draw::{cursor_monitor, register_class, Paint};
+use crate::sysbat::{self, SysDevice};
 use crate::ui::{col, text_format, text_width, theme, Theme, R};
 
 const W: f32 = 280.0;
@@ -49,6 +51,13 @@ const GRAB_ALPHA: f32 = 0.35;
 const HALO: f32 = 1.0;
 /// Timer that watches Ctrl+Shift.
 const TIMER_MODIFIERS: usize = 1;
+/// Timer that reads the system devices again (connecting or switching off headphones) while the plate is up.
+const TIMER_SYSTEM: usize = 2;
+const SYSTEM_EVERY_MS: u32 = 60_000;
+/// Most rows on the plate, so that it fits the work area in every style (Row: 872 DIPs wide, Full: 416 high).
+const MAX_ROWS: usize = 10;
+/// System devices that did not fit, to log a change once.
+static LEFT_OUT: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Level {
@@ -83,14 +92,28 @@ fn level(b: Battery) -> Level {
     }
 }
 
-/// The rows, in the order of `ids` (the panel order); devices without a battery are left out.
-fn rows(ids: &[String], status: &[(String, Battery)], no_link: &[String], name: impl Fn(&str) -> String) -> Vec<Row> {
-    ids.iter()
+/// The rows, in the order of `ids` (the panel order); devices without a battery are left out. The system devices
+/// (already filtered and sorted by `sysbat::listed`) follow, as many as fit under `MAX_ROWS`; the app's own devices
+/// are always kept.
+fn rows(ids: &[String], status: &[(String, Battery)], no_link: &[String], name: impl Fn(&str) -> String, system: &[SysDevice]) -> Vec<Row> {
+    let mut rows: Vec<Row> = ids
+        .iter()
         .filter_map(|id| {
             let b = status.iter().find(|(s, _)| s == id)?.1;
             Some(Row { name: name(id), icon: kind_of(id).icon, percent: b.percent, charging: b.charging, level: level(b), asleep: no_link.contains(id) })
         })
-        .collect()
+        .collect();
+    let room = MAX_ROWS.saturating_sub(rows.len());
+    // Windows gives no charging state for these, and a disconnected device is not listed, so none is asleep.
+    rows.extend(system.iter().take(room).map(|d| Row {
+        name: d.name.clone(),
+        icon: sysbat::glyph(d.class),
+        percent: d.percent,
+        charging: false,
+        level: level(Battery { percent: d.percent, charging: false }),
+        asleep: false,
+    }));
+    rows
 }
 
 /// Window size in DIPs of `style` for `n` devices; no devices still show one line saying so.
@@ -109,8 +132,15 @@ fn current_rows() -> Vec<Row> {
     let ids = crate::active_ids();
     let status = crate::STATUS.lock().unwrap().clone();
     let no_link = crate::NO_LINK.lock().unwrap().clone();
+    let system = sysbat::listed();
     let cfg = crate::config();
-    rows(&ids, &status, &no_link, |id| cfg.display_name(id))
+    let rows = rows(&ids, &status, &no_link, |id| cfg.display_name(id), &system);
+    let apps = ids.iter().filter(|id| status.iter().any(|(s, _)| s == *id)).count();
+    let dropped = system.len().saturating_sub(MAX_ROWS.saturating_sub(apps));
+    if LEFT_OUT.swap(dropped, Ordering::Relaxed) != dropped && dropped > 0 {
+        crate::log(&format!("battery overlay: {dropped} system device(s) left out, the plate holds {MAX_ROWS} rows"));
+    }
+    rows
 }
 
 struct Formats {
@@ -284,6 +314,9 @@ pub fn toggle() {
         None => {
             if let Err(e) = unsafe { open() } {
                 crate::log(&format!("battery overlay: {e}"));
+            } else {
+                // Windows keeps its own levels: reading them asks no device, so it is fine on every show.
+                sysbat::refresh_async();
             }
         }
     }
@@ -465,6 +498,7 @@ unsafe fn open() -> windows::core::Result<()> {
     let overlay = Overlay { hwnd, scale, d2d, surface: None, brush: None, fmt, theme, rows, style, pos, movable: false, dragging: false };
     OVERLAY.with(|c| *c.borrow_mut() = Some(overlay));
     SetTimer(hwnd, TIMER_MODIFIERS, 80, None);
+    SetTimer(hwnd, TIMER_SYSTEM, SYSTEM_EVERY_MS, None);
     redraw(); // a layered window with per-pixel alpha shows nothing until it is updated
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     Ok(())
@@ -712,6 +746,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             follow_modifiers(hwnd);
             0
         }
+        WM_TIMER if wparam == TIMER_SYSTEM => {
+            sysbat::refresh_async();
+            0
+        }
         WM_ENTERSIZEMOVE => {
             OVERLAY.with(|c| c.borrow_mut().as_mut().map(|o| o.dragging = true));
             0
@@ -731,6 +769,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_NCRBUTTONUP => 0,
         WM_DESTROY => {
             KillTimer(hwnd, TIMER_MODIFIERS);
+            KillTimer(hwnd, TIMER_SYSTEM);
             let o = OVERLAY.with(|c| c.borrow_mut().take());
             drop(o);
             0
@@ -742,6 +781,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sysbat::SysClass;
 
     fn ids(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
@@ -752,8 +792,62 @@ mod tests {
     }
 
     fn run(order: &[&str], status: &[(&str, Battery)], no_link: &[&str]) -> Vec<Row> {
+        run_with_system(order, status, no_link, &[])
+    }
+
+    fn run_with_system(order: &[&str], status: &[(&str, Battery)], no_link: &[&str], system: &[SysDevice]) -> Vec<Row> {
         let status: Vec<(String, Battery)> = status.iter().map(|(i, b)| (i.to_string(), *b)).collect();
-        rows(&ids(order), &status, &ids(no_link), |id| format!("name-{id}"))
+        rows(&ids(order), &status, &ids(no_link), |id| format!("name-{id}"), system)
+    }
+
+    fn sys(name: &str, class: SysClass, percent: u8) -> SysDevice {
+        SysDevice { id: format!("system-{name}"), name: name.into(), class, percent }
+    }
+
+    #[test]
+    fn system_rows_follow_the_apps_with_their_own_icon_and_levels() {
+        let system = [sys("Headphones", SysClass::Headphones, 94), sys("Pad", SysClass::Gamepad, 8), sys("Mouse", SysClass::Mouse, 4)];
+        let r = run_with_system(&["a", "b"], &[("a", b(50, false)), ("b", b(60, true))], &["a"], &system);
+        // The app's rows are as without system devices.
+        assert_eq!(&r[..2], &run(&["a", "b"], &[("a", b(50, false)), ("b", b(60, true))], &["a"])[..]);
+        assert_eq!(r.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["name-a", "name-b", "Headphones", "Pad", "Mouse"]);
+        assert_eq!(r[2].icon, sysbat::glyph(SysClass::Headphones));
+        assert_eq!(r[3].icon, sysbat::glyph(SysClass::Gamepad));
+        // Never asleep, never charging; the usual colours.
+        assert!(r[2..].iter().all(|r| !r.asleep && !r.charging));
+        assert_eq!(r[2..].iter().map(|r| r.level).collect::<Vec<_>>(), [Level::Normal, Level::Low, Level::Critical]);
+        assert_eq!(r[2].percent, 94);
+    }
+
+    #[test]
+    fn system_devices_alone_fill_the_plate() {
+        assert_eq!(run_with_system(&[], &[], &[], &[sys("X", SysClass::Other, 50)]).len(), 1);
+        assert!(run_with_system(&[], &[], &[], &[]).is_empty());
+    }
+
+    #[test]
+    fn the_cap_keeps_the_apps_devices_and_drops_system_ones_last() {
+        let system: Vec<SysDevice> = (0..8).map(|i| sys(&format!("S{i}"), SysClass::Other, 50)).collect();
+        let order: Vec<String> = (0..4).map(|i| format!("a{i}")).collect();
+        let order: Vec<&str> = order.iter().map(String::as_str).collect();
+        let status: Vec<(&str, Battery)> = order.iter().map(|id| (*id, b(50, false))).collect();
+        let r = run_with_system(&order, &status, &[], &system);
+        assert_eq!(r.len(), MAX_ROWS);
+        assert_eq!(r[MAX_ROWS - 1].name, "S5");
+        // More app devices than the cap: none is dropped, no system one is added.
+        let many: Vec<String> = (0..12).map(|i| format!("a{i}")).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        let status: Vec<(&str, Battery)> = many.iter().map(|id| (*id, b(50, false))).collect();
+        assert_eq!(run_with_system(&many, &status, &[], &system).len(), 12);
+    }
+
+    #[test]
+    fn the_plate_at_the_cap_fits_small_work_areas() {
+        // 1366x768 at 100% and 1920x1080 at 200% (960x540 DIPs) leave room below 920 x 500.
+        for style in STYLES {
+            let (w, h) = size(style, MAX_ROWS);
+            assert!(w < 920.0 && h < 500.0, "{style:?}: {w} x {h}");
+        }
     }
 
     #[test]

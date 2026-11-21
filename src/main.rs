@@ -13,6 +13,7 @@ mod installer;
 mod keymap;
 mod overlay;
 mod services;
+mod sysbat;
 mod traymenu;
 mod ui;
 mod update;
@@ -54,6 +55,8 @@ const TIMER_REAPPLY: usize = 1;
 const TIMER_REAPPLY_LATE: usize = 2;
 /// First pass right after wake, to cut the white flash of the ASUS keyboard short.
 const TIMER_REAPPLY_EARLY: usize = 3;
+/// Reads the system devices again, 2 s after the last device change (only while the overlay is up).
+const TIMER_SYSTEM: usize = 4;
 
 /// GUID_CONSOLE_DISPLAY_STATE: 0 off, 1 on, 2 dimmed. Modern Standby (S0ix) laptops
 /// send no resume broadcast, so the display turning back on is the wake signal.
@@ -491,6 +494,8 @@ fn idle_seconds() -> u32 {
 fn spawn_battery_poller() {
     std::thread::spawn(|| loop {
         std::thread::sleep(BATTERY_POLL);
+        // Windows' own levels of Bluetooth devices: a property read asks no device, so idleness does not matter.
+        sysbat::refresh_async();
         if idle_seconds() > IDLE_SKIP {
             continue;
         }
@@ -571,38 +576,67 @@ fn spawn_link_watch() {
     });
 }
 
-/// Shows the low-battery alert when a device crosses 10% or 5%, once per threshold.
+/// What `check_batteries` does about one device after a new level.
+#[derive(Debug, PartialEq)]
+enum Warn {
+    Nothing,
+    /// Above the re-arm level or charging: warnings are armed again; `dismiss` when one had been shown.
+    Rearmed {
+        dismiss: bool,
+    },
+    Show,
+}
+
+/// Decides about one device from its warning state `entry` (highest warning shown, snooze deadline): a warning is
+/// shown once per threshold, again after a snooze, and not again before the level went above `BATTERY_REARM`.
+fn warn_step(entry: &mut (u8, Option<std::time::Instant>), b: devices::Battery, now: std::time::Instant) -> Warn {
+    if b.charging || b.percent > BATTERY_REARM {
+        let dismiss = entry.0 > 0;
+        *entry = (0, None);
+        return Warn::Rearmed { dismiss };
+    }
+    let level = if b.percent <= devices::CRITICAL_BATTERY {
+        2
+    } else if b.percent <= devices::LOW_BATTERY {
+        1
+    } else {
+        0
+    };
+    let snooze_over = entry.1.is_some_and(|until| now >= until);
+    if level > entry.0 || (level > 0 && snooze_over) {
+        *entry = (level.max(entry.0), None);
+        Warn::Show
+    } else {
+        Warn::Nothing
+    }
+}
+
+/// Shows the low-battery alert when a device crosses 10% or 5%, once per threshold. The devices are the app's own
+/// (by their id) and the connected system devices (`system-...` ids, their Windows name).
 fn check_batteries() {
     let status = STATUS.lock().unwrap().clone();
     let no_link = NO_LINK.lock().unwrap().clone();
-    let mut warned = BATTERY_WARNED.lock().unwrap();
     // A stale level of an unreachable device isn't news.
-    for (id, b) in status.into_iter().filter(|(k, _)| !no_link.contains(k)) {
+    let mut levels: Vec<(String, Option<String>, devices::Battery)> =
+        status.into_iter().filter(|(k, _)| !no_link.contains(k)).map(|(k, b)| (k, None, b)).collect();
+    // Only connected ones are listed, and Windows gives no charging state for them.
+    levels.extend(sysbat::listed().into_iter().map(|d| (d.id, Some(d.name), devices::Battery { percent: d.percent, charging: false })));
+    let mut warned = BATTERY_WARNED.lock().unwrap();
+    for (id, system_name, b) in levels {
         let pos = warned.iter().position(|(k, _, _)| *k == id).unwrap_or_else(|| {
             warned.push((id.clone(), 0, None));
             warned.len() - 1
         });
-        let entry = &mut warned[pos];
-        if b.charging || b.percent > BATTERY_REARM {
-            if entry.1 > 0 {
-                alert::dismiss_for(&id);
+        let mut state = (warned[pos].1, warned[pos].2);
+        let step = warn_step(&mut state, b, std::time::Instant::now());
+        (warned[pos].1, warned[pos].2) = state;
+        match step {
+            Warn::Rearmed { dismiss: true } => alert::dismiss_for(&id),
+            Warn::Show => {
+                let name = system_name.unwrap_or_else(|| config().display_name(&id));
+                alert::show(id, &name, b);
             }
-            *entry = (id, 0, None);
-            continue;
-        }
-        let level = if b.percent <= devices::CRITICAL_BATTERY {
-            2
-        } else if b.percent <= devices::LOW_BATTERY {
-            1
-        } else {
-            0
-        };
-        let snooze_over = entry.2.is_some_and(|until| std::time::Instant::now() >= until);
-        if level > entry.1 || (level > 0 && snooze_over) {
-            entry.1 = level.max(entry.1);
-            entry.2 = None;
-            let name = config().display_name(&id);
-            alert::show(id, &name, b);
+            _ => {}
         }
     }
 }
@@ -1364,6 +1398,33 @@ fn cycle_overlay_style() {
     overlay::refresh();
 }
 
+/// Switches the Bluetooth devices Windows reports a level for on the overlay (and their low-battery alert).
+fn toggle_overlay_system() {
+    let mut cfg = config();
+    cfg.overlay_system = !cfg.overlay_system;
+    let on = cfg.overlay_system;
+    cfg.save();
+    drop(cfg);
+    if on {
+        // Posts WM_BATTERY even when the list is unchanged: a low device is warned about now, not at the next poll.
+        sysbat::refresh_and_notify();
+    } else {
+        let dropped = drop_system_warned(&mut BATTERY_WARNED.lock().unwrap());
+        for id in dropped {
+            alert::dismiss_for(&id);
+        }
+        post(WM_BATTERY);
+    }
+    overlay::refresh();
+}
+
+/// Forgets the warning state of the system devices (ids `system-...`); the ids dropped, whose alerts are to be closed.
+fn drop_system_warned(warned: &mut Vec<(String, u8, Option<std::time::Instant>)>) -> Vec<String> {
+    let ids = warned.iter().filter(|e| e.0.starts_with("system-")).map(|e| e.0.clone()).collect();
+    warned.retain(|e| !e.0.starts_with("system-"));
+    ids
+}
+
 /// Switches whether the lighting dims and goes off with the display.
 fn toggle_follow_display() {
     let mut cfg = config();
@@ -1585,6 +1646,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         // Devices plugged/unplugged or the PC woke up: re-apply once things settle.
         WM_DEVICECHANGE if wparam == DBT_DEVNODES_CHANGED as usize => {
             SetTimer(hwnd, TIMER_REAPPLY, 2000, None);
+            // Headphones connecting may be announced this way: read them at once while the plate is up.
+            if overlay::is_visible() {
+                SetTimer(hwnd, TIMER_SYSTEM, 2000, None);
+            }
             1
         }
         // Windows switched light/dark: the overlay plate takes the new colours.
@@ -1649,6 +1714,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             reapply_all();
             0
         }
+        WM_TIMER if wparam == TIMER_SYSTEM => {
+            KillTimer(hwnd, TIMER_SYSTEM);
+            sysbat::refresh_async();
+            0
+        }
         WM_APPLIED | WM_BATTERY => {
             check_batteries();
             update_tray(hwnd, NIM_MODIFY);
@@ -1682,6 +1752,12 @@ fn main() {
     // `--diagnose [file.txt]`: device report for adding support for new devices.
     if let Some(i) = args.iter().position(|a| a == "--diagnose") {
         diagnose(args.get(i + 1).map(std::path::PathBuf::from));
+        return;
+    }
+    // `--system-batteries <out.txt>`: what Windows holds for the Bluetooth devices (levels, connection), read-only.
+    if let Some(i) = args.iter().position(|a| a == "--system-batteries") {
+        let out = args.get(i + 1).cloned().unwrap_or_else(|| "system-batteries.txt".into());
+        let _ = std::fs::write(&out, sysbat::report());
         return;
     }
     // `--logitech-effect-test`: G915 firmware effect variants, 2 s dark between steps, steps logged.
@@ -1786,6 +1862,11 @@ fn main() {
             }
         }
         *STATUS.lock().unwrap() = status;
+        // RGBTRAY_DEMO_SYSTEM=WH-1000XM6:headphones:72,Pad:gamepad:4: made-up system devices (class: headphones, headset, speaker,
+        // mouse, keyboard, gamepad, phone, other). The alert snapshot names its device after the first of them.
+        if let Ok(spec) = std::env::var("RGBTRAY_DEMO_SYSTEM") {
+            sysbat::demo(&spec);
+        }
         // Optional: selected card and zone of the panel.
         let num = |k: usize| args.get(i + k).and_then(|s| s.parse().ok()).unwrap_or(0);
         let res = if path.contains("editor") {
@@ -1841,6 +1922,7 @@ fn main() {
         apply_all();
         devices::logitech::spawn_watcher(|| post(WM_REAPPLY_SOON));
         spawn_battery_poller();
+        sysbat::refresh_async();
         spawn_link_watch();
         update::spawn_checker();
         if std::env::args().any(|a| a == "--show") {
@@ -1860,6 +1942,14 @@ fn main() {
 mod tests {
     use super::*;
 
+    #[test]
+    fn turning_system_devices_off_forgets_only_their_warnings() {
+        let now = std::time::Instant::now();
+        let mut warned = vec![("logitech-1".to_string(), 10, None), ("system-bt-aa".to_string(), 5, Some(now)), ("system-bt-bb".to_string(), 0, None)];
+        assert_eq!(drop_system_warned(&mut warned), vec!["system-bt-aa".to_string(), "system-bt-bb".to_string()]);
+        assert_eq!(warned.len(), 1);
+        assert_eq!(warned[0].0, "logitech-1");
+    }
     /// The config lock is held to the end of the statement that takes it, so a second
     /// `config()` in the same statement waits forever (the tray menu hung that way in 0.6.13).
     #[test]
@@ -1878,6 +1968,69 @@ mod tests {
             }
         }
         assert!(checked > 10);
+    }
+
+    fn bat(percent: u8, charging: bool) -> devices::Battery {
+        devices::Battery { percent, charging }
+    }
+
+    #[test]
+    fn a_warning_is_shown_once_per_threshold_and_not_on_every_poll() {
+        let now = std::time::Instant::now();
+        let mut e = (0u8, None);
+        assert_eq!(warn_step(&mut e, bat(50, false), now), Warn::Rearmed { dismiss: false });
+        assert_eq!(warn_step(&mut e, bat(10, false), now), Warn::Show);
+        // The same level, polled again and again (a system device is read every few minutes): quiet.
+        for _ in 0..5 {
+            assert_eq!(warn_step(&mut e, bat(10, false), now), Warn::Nothing);
+            assert_eq!(warn_step(&mut e, bat(9, false), now), Warn::Nothing);
+        }
+        assert_eq!(warn_step(&mut e, bat(5, false), now), Warn::Show);
+        assert_eq!(warn_step(&mut e, bat(5, false), now), Warn::Nothing);
+        // Between 10% and the re-arm level the warning stays down; above it the alert is closed and armed again.
+        assert_eq!(warn_step(&mut e, bat(14, false), now), Warn::Nothing);
+        assert_eq!(warn_step(&mut e, bat(16, false), now), Warn::Rearmed { dismiss: true });
+        assert_eq!(warn_step(&mut e, bat(9, false), now), Warn::Show);
+    }
+
+    #[test]
+    fn a_snoozed_warning_comes_back_after_the_snooze_and_a_charging_device_is_never_warned() {
+        let now = std::time::Instant::now();
+        let mut e = (1u8, Some(now + SNOOZE));
+        assert_eq!(warn_step(&mut e, bat(9, false), now), Warn::Nothing);
+        assert_eq!(warn_step(&mut e, bat(9, false), now + SNOOZE), Warn::Show);
+        assert_eq!(e.1, None);
+        assert_eq!(warn_step(&mut e, bat(9, false), now + 2 * SNOOZE), Warn::Nothing);
+        let mut e = (0u8, None);
+        assert_eq!(warn_step(&mut e, bat(3, true), now), Warn::Rearmed { dismiss: false });
+    }
+
+    #[test]
+    fn a_system_device_is_warned_by_its_own_id_independently() {
+        let now = std::time::Instant::now();
+        let (mut a, mut sys) = ((0u8, None), (0u8, None));
+        assert_eq!(warn_step(&mut a, bat(8, false), now), Warn::Show);
+        // Same level, another id: its own state, its own alert; the first one stays quiet.
+        assert_eq!(warn_step(&mut sys, bat(8, false), now), Warn::Show);
+        assert_eq!(warn_step(&mut a, bat(8, false), now), Warn::Nothing);
+        assert_eq!(warn_step(&mut sys, bat(8, false), now), Warn::Nothing);
+    }
+
+    #[test]
+    fn rearm_level_is_a_boundary_and_a_deeper_level_overrides_a_snooze() {
+        let now = std::time::Instant::now();
+        let mut e = (1u8, None);
+        // Exactly at the re-arm level the warning stays down; one above re-arms.
+        assert_eq!(warn_step(&mut e, bat(BATTERY_REARM, false), now), Warn::Nothing);
+        assert_eq!(warn_step(&mut e, bat(BATTERY_REARM + 1, false), now), Warn::Rearmed { dismiss: true });
+        assert_eq!(e, (0, None));
+        // Snoozed at the low level, then critical before the snooze ends: shown at once.
+        let mut e = (1u8, Some(now + SNOOZE));
+        assert_eq!(warn_step(&mut e, bat(4, false), now), Warn::Show);
+        assert_eq!(e, (2, None));
+        // Between the thresholds and the re-arm level nothing is shown.
+        let mut e = (0u8, None);
+        assert_eq!(warn_step(&mut e, bat(12, false), now), Warn::Nothing);
     }
 
     #[test]

@@ -131,6 +131,24 @@ fn lenient_overlay_pos<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<
     })
 }
 
+/// A value that is not a bool reads as true: it must never make the settings file unreadable.
+fn lenient_bool_true<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Bool(bool),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Raw::deserialize(d)? {
+        Raw::Bool(b) => b,
+        Raw::Other(_) => true,
+    })
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
 fn full_brightness() -> u8 {
     100
 }
@@ -409,6 +427,9 @@ pub struct Config {
     /// Where the overlay was dragged to; not set = top-right of the monitor under the cursor.
     #[serde(deserialize_with = "lenient_overlay_pos", skip_serializing_if = "Option::is_none")]
     pub overlay_pos: Option<OverlayPos>,
+    /// Bluetooth devices Windows reports a level for are listed on the overlay and raise the low-battery alert; a garbled value reads as on.
+    #[serde(deserialize_with = "lenient_bool_true", skip_serializing_if = "is_true")]
+    pub overlay_system: bool,
     pub presets: Vec<Preset>,
     /// Programs whose "it drives the lighting too" warning the user hid (`conflicts::App::key`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -439,6 +460,7 @@ impl Default for Config {
             overlay_hotkey: None,
             overlay_style: OverlayStyle::Full,
             overlay_pos: None,
+            overlay_system: true,
             presets: Vec::new(),
             ignored_apps: Vec::new(),
             per_key: false,
@@ -1358,6 +1380,25 @@ mod tests {
         assert!(back.overlay_hotkey == Some(Hotkey { mods: 0x3, vk: 0x42 }));
         let old: Config = toml::from_str("brightness = 50\n").unwrap();
         assert!(old.overlay_hotkey.is_none());
+    }
+
+    #[test]
+    fn overlay_system_defaults_on_is_lenient_and_written_only_when_off() {
+        let load = |s: &str| toml::from_str::<Config>(s).unwrap().overlay_system;
+        assert!(Config::default().overlay_system);
+        assert!(load("brightness = 50\n"));
+        assert!(load("overlay_system = true\nfuture_field = 1\n"));
+        assert!(!load("overlay_system = false\n"));
+        // A garbled value reads as on and keeps the other settings.
+        for bad in ["\"no\"", "7", "[1]", "{ a = 1 }"] {
+            let cfg = toml::from_str::<Config>(&format!("brightness = 42\noverlay_system = {bad}\n")).unwrap();
+            assert!(cfg.overlay_system && cfg.brightness == 42, "{bad}");
+        }
+        let mut cfg = Config::default();
+        assert!(!toml::to_string(&cfg).unwrap().contains("overlay_system"));
+        cfg.overlay_system = false;
+        let text = toml::to_string(&cfg).unwrap();
+        assert!(text.contains("overlay_system = false") && !toml::from_str::<Config>(&text).unwrap().overlay_system);
     }
 
     #[test]
