@@ -5,6 +5,7 @@ the tray and drives RGB lighting of keyboards, mice and lights directly over HID
 
 - Entry point and global state: `src/main.rs` (CLI tools, hidden window and message loop, apply/reapply on wake
   and hot-plug, hotkeys, battery poller).
+- System batteries: `src/sysbat.rs` (Bluetooth devices Windows reports a level for, read-only; shown on the overlay and covered by the low-battery alert).
 - UI: `src/ui.rs` (flyout panel), `src/editor.rs` (per-key editor), `src/traymenu.rs`, `src/alert.rs`,
   `src/installer.rs`; shared drawing in `src/draw.rs`; strings via `tr!` in `src/i18n.rs`.
 - Settings: `src/config.rs` (TOML in `%APPDATA%\rgbtray`, devices keyed `"<kind>-<serial>"`, backups).

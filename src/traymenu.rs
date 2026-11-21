@@ -28,6 +28,7 @@ enum Item {
     Overlay,
     OverlayKey,
     OverlayStyle,
+    OverlaySystem,
     Reapply,
     Autostart,
     FollowDisplay,
@@ -48,12 +49,13 @@ enum Row {
     Version,
 }
 
-const ROWS: [Row; 18] = [
+const ROWS: [Row; 19] = [
     Row::Item(Item::Open),
     Row::Item(Item::Keys),
     Row::Item(Item::Overlay),
     Row::Item(Item::OverlayKey),
     Row::Item(Item::OverlayStyle),
+    Row::Item(Item::OverlaySystem),
     Row::Item(Item::Reapply),
     Row::Item(Item::Autostart),
     Row::Item(Item::FollowDisplay),
@@ -118,6 +120,8 @@ struct Menu {
     overlay_key: Option<String>,
     /// Layout of the battery overlay, named on its item.
     overlay_style: crate::config::OverlayStyle,
+    /// Bluetooth devices Windows reports a level for are on the overlay.
+    overlay_system: bool,
 }
 
 thread_local! {
@@ -184,9 +188,9 @@ unsafe fn open() -> windows::core::Result<()> {
     let keyboard = crate::PRESENT.lock().unwrap().iter().find(|id| crate::devices::caps(id).per_key).cloned();
     // One lock of the config: a guard taken inside the struct literal below would live to the
     // end of the statement, and a second one there would wait for it forever.
-    let (follow_display, check_updates, overlay_key, overlay_style) = {
+    let (follow_display, check_updates, overlay_key, overlay_style, overlay_system) = {
         let cfg = crate::config();
-        (cfg.follow_display, cfg.check_updates, cfg.overlay_hotkey.map(|h| h.label()), cfg.overlay_style)
+        (cfg.follow_display, cfg.check_updates, cfg.overlay_hotkey.map(|h| h.label()), cfg.overlay_style, cfg.overlay_system)
     };
     let menu = Menu {
         hwnd,
@@ -204,6 +208,7 @@ unsafe fn open() -> windows::core::Result<()> {
         check_updates,
         overlay_key,
         overlay_style,
+        overlay_system,
     };
     MENU.with(|m| *m.borrow_mut() = Some(menu));
     ShowWindow(hwnd, SW_SHOW);
@@ -268,6 +273,7 @@ impl Menu {
                         Item::Overlay => ("\u{E83F}", tr!("Индикатор батарей", "Battery overlay")),
                         Item::OverlayKey => ("\u{E765}", tr!("Клавиша индикатора…", "Overlay hotkey…")),
                         Item::OverlayStyle => ("\u{E8FD}", tr!("Вид индикатора", "Overlay style")),
+                        Item::OverlaySystem => ("\u{E702}", tr!("Системные устройства", "System devices")),
                         Item::Reapply => ("\u{E72C}", tr!("Применить заново", "Apply again")),
                         Item::Autostart => ("\u{E823}", tr!("Запускать с Windows", "Start with Windows")),
                         Item::FollowDisplay => ("\u{E708}", tr!("Гасить вместе с экраном", "Off with the display")),
@@ -286,6 +292,7 @@ impl Menu {
                         Item::Autostart => Some(self.autostart),
                         Item::FollowDisplay => Some(self.follow_display),
                         Item::CheckUpdates => Some(self.check_updates),
+                        Item::OverlaySystem => Some(self.overlay_system),
                         _ => None,
                     };
                     // The overlay items show a value on the right: its hotkey, its style.
@@ -351,6 +358,7 @@ fn run(item: Item, keyboard: Option<String>) {
         Item::Overlay => crate::overlay::toggle(),
         Item::OverlayKey => crate::ui::open_overlay_hotkey_menu(),
         Item::OverlayStyle => crate::cycle_overlay_style(),
+        Item::OverlaySystem => crate::toggle_overlay_system(),
         Item::Reapply => crate::reapply_all(),
         Item::Autostart => crate::set_autostart(!crate::autostart_enabled()),
         Item::FollowDisplay => crate::toggle_follow_display(),
@@ -453,6 +461,7 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Re
             check_updates: true,
             overlay_key: Some("Ctrl+Alt+B".into()),
             overlay_style: crate::config::OverlayStyle::Row,
+            overlay_system: true,
         };
         m.draw(rt);
         Ok(())
