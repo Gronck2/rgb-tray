@@ -122,6 +122,8 @@ struct Node {
     cod: Option<u32>,
     connected: Option<bool>,
     battery: Option<u8>,
+    /// Whether the node is started now: a connected device may keep its level on a service node that is not (A2DP only, no Hands-Free).
+    present: Option<bool>,
 }
 
 /// All the nodes of one device, joined by address.
@@ -165,7 +167,8 @@ fn join(nodes: &[Node]) -> Vec<Joined> {
                 name: name.unwrap_or_else(|| "Bluetooth device".into()),
                 class: class_of(nodes.iter().find_map(|n| n.cod)),
                 connected: nodes.iter().any(|n| n.connected == Some(true)),
-                percent: nodes.iter().find_map(|n| n.battery),
+                // A level from a present node first, else from any (not present) one.
+                percent: nodes.iter().filter(|n| n.present != Some(false)).find_map(|n| n.battery).or_else(|| nodes.iter().find_map(|n| n.battery)),
             }
         })
         .collect()
@@ -277,6 +280,7 @@ mod win {
     }
 
     const BATTERY: DEVPROPKEY = key(0x104EA319_6EE2_4701_BD47_8DDBF425BBE5, 2);
+    const IS_PRESENT: DEVPROPKEY = key(0x540B947E_8B40_45BC_A8A2_6A0B894CBDA2, 5);
     const CONNECTED: DEVPROPKEY = key(0x83DA6326_97A6_4088_9453_A1923F573B29, 15);
     const FRIENDLY_NAME: DEVPROPKEY = key(0xA45C254E_DF1C_4EFD_8020_67D146A850E0, 14);
     const NAME: DEVPROPKEY = key(0xB725F130_47EF_101A_A5F1_02608C9EEBAC, 10);
@@ -286,10 +290,10 @@ mod win {
         s.encode_utf16().chain([0]).collect()
     }
 
-    /// The present device nodes under one enumerator (`BTHENUM`, `BTHLE`).
+    /// The device nodes under one enumerator (`BTHENUM`, `BTHLE`), the not present ones too.
     unsafe fn instance_ids(enumerator: &str) -> Result<Vec<String>, String> {
         let filter = wide(enumerator);
-        let flags = CM_GETIDLIST_FILTER_ENUMERATOR | CM_GETIDLIST_FILTER_PRESENT;
+        let flags = CM_GETIDLIST_FILTER_ENUMERATOR;
         // A node may appear between the size and the list (CR_BUFFER_SMALL): ask the size again.
         for _ in 0..4 {
             let mut len = 0u32;
@@ -329,7 +333,7 @@ mod win {
         let (ids, errors) = merge_lists(lists);
         for instance in ids {
             let mut dn = 0u32;
-            if unsafe { CM_Locate_DevNodeW(&mut dn, wide(&instance).as_ptr(), CM_LOCATE_DEVNODE_NORMAL) } != CR_SUCCESS {
+            if unsafe { CM_Locate_DevNodeW(&mut dn, wide(&instance).as_ptr(), CM_LOCATE_DEVNODE_PHANTOM) } != CR_SUCCESS {
                 continue;
             }
             let get = |k: &DEVPROPKEY| unsafe { property(dn, k) };
@@ -338,6 +342,7 @@ mod win {
                 cod: get(&CLASS_OF_DEVICE).and_then(|(t, b)| parse_u32(t, &b)),
                 connected: get(&CONNECTED).and_then(|(t, b)| parse_bool(t, &b)),
                 battery: get(&BATTERY).and_then(|(t, b)| parse_level(t, &b)),
+                present: get(&IS_PRESENT).and_then(|(t, b)| parse_bool(t, &b)),
                 instance,
             });
         }
@@ -400,10 +405,11 @@ pub fn report() -> String {
     out += &format!("Bluetooth device nodes: {}\n\n", nodes.len());
     for n in &nodes {
         out += &format!(
-            "{}\n  name: {}\n  class of device: {}\n  connected: {}\n  battery: {}\n  address: {}\n  id: {}\n",
+            "{}\n  name: {}\n  class of device: {}\n  present: {}\n  connected: {}\n  battery: {}\n  address: {}\n  id: {}\n",
             n.instance,
             n.name.as_deref().unwrap_or("none"),
             n.cod.map_or("none".into(), |c| format!("{c:#08x} -> {:?}", class_of(Some(c)))),
+            yn(n.present),
             yn(n.connected),
             n.battery.map_or("none".into(), |b| format!("{b}%")),
             address_of(&n.instance).unwrap_or_else(|| "none".into()),
@@ -431,7 +437,7 @@ mod tests {
     const XM6_HFP: &str = "BTHENUM\\{0000111E-0000-1000-8000-00805F9B34FB}_VID&0002054C_PID&0DF3\\8&2A3B4C5D&0&58186221E9F9_C00000000";
 
     fn node(instance: &str, name: Option<&str>, cod: Option<u32>, connected: Option<bool>, battery: Option<u8>) -> Node {
-        Node { instance: instance.into(), name: name.map(String::from), cod, connected, battery }
+        Node { instance: instance.into(), name: name.map(String::from), cod, connected, battery, present: Some(true) }
     }
 
     fn sys(name: &str, percent: u8) -> SysDevice {
@@ -596,6 +602,37 @@ mod tests {
         assert_eq!(j[0].name, "WH-1000XM6");
         // An explicit "no" with nothing else known stays disconnected.
         assert!(!join(&[node(XM6_DEVICE, Some("X"), None, Some(false), Some(5)), node(XM6_HFP, None, None, None, None)])[0].connected);
+    }
+
+    fn phantom(mut n: Node) -> Node {
+        n.present = Some(false);
+        n
+    }
+
+    const XB33_DEVICE: &str = "BTHENUM\\DEV_6C4760E7DAEF\\9&bfcbf6&0&BLUETOOTHDEVICE_6C4760E7DAEF";
+    const XB33_HFP: &str = "BTHENUM\\{0000111E-0000-1000-8000-00805F9B34FB}_VID&00010094_PID&0004\\9&bfcbf6&0&6C4760E7DAEF_C00000000";
+
+    #[test]
+    fn a_level_on_a_not_present_service_node_counts_for_a_connected_device() {
+        let hfp = phantom(node(XB33_HFP, Some("SRS-XB33 Hands-Free AG"), None, None, Some(10)));
+        let list = devices(join(&[node(XB33_DEVICE, Some("SRS-XB33"), None, Some(true), None), hfp.clone()]));
+        assert_eq!(list.len(), 1);
+        assert_eq!((list[0].name.as_str(), list[0].percent), ("SRS-XB33", 10));
+        // Disconnected: the stale level stays hidden.
+        assert!(devices(join(&[node(XB33_DEVICE, Some("SRS-XB33"), None, Some(false), None), hfp])).is_empty());
+    }
+
+    #[test]
+    fn a_present_level_wins_over_a_not_present_one() {
+        let old = phantom(node(XB33_HFP, None, None, None, Some(10)));
+        let new = node("BTHLE\\DEV_6C4760E7DAEF\\1&2&3", None, None, Some(true), Some(70));
+        assert_eq!(join(&[old.clone(), new.clone()])[0].percent, Some(70));
+        assert_eq!(join(&[new, old])[0].percent, Some(70));
+    }
+
+    #[test]
+    fn a_not_present_device_node_is_not_connected() {
+        assert!(devices(join(&[phantom(node(XB33_DEVICE, Some("Old"), None, None, Some(30)))])).is_empty());
     }
 
     #[test]
