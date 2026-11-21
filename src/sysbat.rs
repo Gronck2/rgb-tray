@@ -543,6 +543,61 @@ mod tests {
     }
 
     #[test]
+    fn address_edge_cases() {
+        // Lower case hex.
+        assert_eq!(address_of("bthenum\\dev_58186221e9f9\\x").as_deref(), Some("58186221E9F9"));
+        // Too short, malformed, empty.
+        assert_eq!(address_of("BTHENUM\\DEV_58186221E9\\1&2"), None);
+        assert_eq!(address_of(""), None);
+        assert_eq!(address_of("DEV_"), None);
+        // Non-ASCII text must not panic.
+        assert_eq!(address_of("BTHENUM\\DEV_яяяяяяяя\\1"), None);
+    }
+
+    #[test]
+    fn several_service_nodes_and_an_le_node_join_into_one_device() {
+        let hfp2 = "BTHENUM\\{0000110B-0000-1000-8000-00805F9B34FB}_VID&0002054C_PID&0DF3\\8&2A3B4C5D&0&58186221E9F9_C00000000";
+        let nodes = [
+            node(hfp2, Some("WH-1000XM6"), None, None, None),
+            node(XM6_HFP, Some("WH-1000XM6 Hands-Free"), None, None, Some(90)),
+            node("BTHLE\\DEV_58186221E9F9\\1&2&3", None, None, Some(true), Some(91)),
+        ];
+        let j = join(&nodes);
+        assert_eq!(j.len(), 1);
+        assert!(j[0].connected);
+        assert_eq!(j[0].percent, Some(90)); // the first node that has a level
+        assert_eq!(j[0].name, "WH-1000XM6");
+        // An explicit "no" with nothing else known stays disconnected.
+        assert!(!join(&[node(XM6_DEVICE, Some("X"), None, Some(false), Some(5)), node(XM6_HFP, None, None, None, None)])[0].connected);
+    }
+
+    #[test]
+    fn plain_name_strips_the_suffix_only_at_the_end() {
+        assert_eq!(plain_name("Buds HANDS-FREE AG"), "Buds");
+        assert_eq!(plain_name("Buds Hands-Free"), "Buds");
+        assert_eq!(plain_name("Hands-Free Buds"), "Hands-Free Buds");
+    }
+
+    #[test]
+    fn duplicate_corner_cases() {
+        // Exactly 4 characters counts as a part; 3 does not; case does not matter.
+        assert!(is_duplicate("NAGA", &names(&["Razer Naga V2"])));
+        assert!(!is_duplicate("Nag", &names(&["Razer Naga V2"])));
+        assert!(is_duplicate("Razer Naga V2 Pro Dongle", &names(&["x", "naga v2"])));
+        assert!(!is_duplicate("   ", &names(&["   ", "a"])));
+        assert!(!is_duplicate("WH-1000XM6", &[]));
+    }
+
+    #[test]
+    fn visible_with_equal_names_orders_by_id() {
+        let (mut a, mut b) = (sys("Pad", 1), sys("pad", 2));
+        a.id = "system-B".into();
+        b.id = "system-A".into();
+        let v = visible(&[a, b], true, &[]);
+        assert_eq!(v.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), ["system-A", "system-B"]);
+    }
+
+    #[test]
     fn demo_spec_is_parsed_leniently() {
         let v = parse_demo("WH-1000XM6:headphones:72, Pad:gamepad:4,bad,Other:what:200,x:mouse:abc");
         assert_eq!(

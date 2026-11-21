@@ -1995,6 +1995,23 @@ mod tests {
     }
 
     #[test]
+    fn rearm_level_is_a_boundary_and_a_deeper_level_overrides_a_snooze() {
+        let now = std::time::Instant::now();
+        let mut e = (1u8, None);
+        // Exactly at the re-arm level the warning stays down; one above re-arms.
+        assert_eq!(warn_step(&mut e, bat(BATTERY_REARM, false), now), Warn::Nothing);
+        assert_eq!(warn_step(&mut e, bat(BATTERY_REARM + 1, false), now), Warn::Rearmed { dismiss: true });
+        assert_eq!(e, (0, None));
+        // Snoozed at the low level, then critical before the snooze ends: shown at once.
+        let mut e = (1u8, Some(now + SNOOZE));
+        assert_eq!(warn_step(&mut e, bat(4, false), now), Warn::Show);
+        assert_eq!(e, (2, None));
+        // Between the thresholds and the re-arm level nothing is shown.
+        let mut e = (0u8, None);
+        assert_eq!(warn_step(&mut e, bat(12, false), now), Warn::Nothing);
+    }
+
+    #[test]
     fn short_ids() {
         assert_eq!(short_id("naga-123456H78900012"), "naga-…0012");
         assert_eq!(short_id("dock-AB12"), "dock-AB12");
