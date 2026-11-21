@@ -403,6 +403,10 @@ fn should_raise(above: impl IntoIterator<Item = Above>) -> bool {
 }
 
 unsafe fn classify(hwnd: HWND, own_pid: u32) -> Above {
+    // A hidden window covers nothing (IME windows of our threads, a taskbar of a monitor that is gone).
+    if IsWindowVisible(hwnd) == 0 {
+        return Above::Other;
+    }
     let mut pid = 0u32;
     GetWindowThreadProcessId(hwnd, &mut pid);
     if pid == own_pid {
