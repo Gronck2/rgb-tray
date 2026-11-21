@@ -25,6 +25,8 @@ const GAP: f32 = 9.0;
 enum Item {
     Open,
     Keys,
+    Overlay,
+    OverlayKey,
     Reapply,
     Autostart,
     FollowDisplay,
@@ -45,9 +47,11 @@ enum Row {
     Version,
 }
 
-const ROWS: [Row; 15] = [
+const ROWS: [Row; 17] = [
     Row::Item(Item::Open),
     Row::Item(Item::Keys),
+    Row::Item(Item::Overlay),
+    Row::Item(Item::OverlayKey),
     Row::Item(Item::Reapply),
     Row::Item(Item::Autostart),
     Row::Item(Item::FollowDisplay),
@@ -89,6 +93,7 @@ fn layout() -> Vec<(R, Row)> {
 struct Formats {
     text: IDWriteTextFormat,
     small: IDWriteTextFormat,
+    small_right: IDWriteTextFormat,
     icon: IDWriteTextFormat,
 }
 
@@ -107,6 +112,8 @@ struct Menu {
     autostart: bool,
     follow_display: bool,
     check_updates: bool,
+    /// Label of the overlay hotkey, if one is set.
+    overlay_key: Option<String>,
 }
 
 thread_local! {
@@ -120,6 +127,7 @@ fn formats() -> windows::core::Result<Formats> {
     Ok(Formats {
         text: text_format(&dw, ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL, lead)?,
         small: text_format(&dw, ui, 12.0, DWRITE_FONT_WEIGHT_NORMAL, lead)?,
+        small_right: text_format(&dw, ui, 12.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_TRAILING)?,
         icon: text_format(&dw, w!("Segoe Fluent Icons"), 14.0, DWRITE_FONT_WEIGHT_NORMAL, center)?,
     })
 }
@@ -172,9 +180,9 @@ unsafe fn open() -> windows::core::Result<()> {
     let keyboard = crate::PRESENT.lock().unwrap().iter().find(|id| crate::devices::caps(id).per_key).cloned();
     // One lock of the config: a guard taken inside the struct literal below would live to the
     // end of the statement, and a second one there would wait for it forever.
-    let (follow_display, check_updates) = {
+    let (follow_display, check_updates, overlay_key) = {
         let cfg = crate::config();
-        (cfg.follow_display, cfg.check_updates)
+        (cfg.follow_display, cfg.check_updates, cfg.overlay_hotkey.map(|h| h.label()))
     };
     let menu = Menu {
         hwnd,
@@ -190,6 +198,7 @@ unsafe fn open() -> windows::core::Result<()> {
         autostart: crate::autostart_enabled(),
         follow_display,
         check_updates,
+        overlay_key,
     };
     MENU.with(|m| *m.borrow_mut() = Some(menu));
     ShowWindow(hwnd, SW_SHOW);
@@ -251,6 +260,8 @@ impl Menu {
                     let (icon, label) = match item {
                         Item::Open => ("\u{E790}", tr!("Открыть панель", "Open panel")),
                         Item::Keys => ("\u{E765}", tr!("Цвета клавиш…", "Key colors…")),
+                        Item::Overlay => ("\u{E83F}", tr!("Индикатор батарей", "Battery overlay")),
+                        Item::OverlayKey => ("\u{E765}", tr!("Клавиша индикатора…", "Overlay hotkey…")),
                         Item::Reapply => ("\u{E72C}", tr!("Применить заново", "Apply again")),
                         Item::Autostart => ("\u{E823}", tr!("Запускать с Windows", "Start with Windows")),
                         Item::FollowDisplay => ("\u{E708}", tr!("Гасить вместе с экраном", "Off with the display")),
@@ -271,8 +282,18 @@ impl Menu {
                         Item::CheckUpdates => Some(self.check_updates),
                         _ => None,
                     };
-                    let label_w = if switch.is_some() { r.w - 100.0 } else { r.w - 44.0 };
+                    let key = if item == Item::Overlay { self.overlay_key.as_deref() } else { None };
+                    let label_w = if switch.is_some() {
+                        r.w - 100.0
+                    } else if key.is_some() {
+                        r.w - 144.0
+                    } else {
+                        r.w - 44.0
+                    };
                     self.text(rt, label, &self.fmt.text, R { x: r.x + 40.0, y: r.y, w: label_w, h: r.h }, fg);
+                    if let Some(key) = key {
+                        self.text(rt, key, &self.fmt.small_right, R { x: r.x + r.w - 104.0, y: r.y, w: 94.0, h: r.h }, t.text2);
+                    }
                     if let Some(on) = switch {
                         // A small switch, like the one in the panel.
                         let sw = R { x: r.x + r.w - 46.0, y: r.cy() - 9.0, w: 36.0, h: 18.0 };
@@ -307,6 +328,8 @@ fn run(item: Item, keyboard: Option<String>) {
                 crate::editor::open(&id);
             }
         }
+        Item::Overlay => crate::overlay::toggle(),
+        Item::OverlayKey => crate::ui::open_overlay_hotkey_menu(),
         Item::Reapply => crate::reapply_all(),
         Item::Autostart => crate::set_autostart(!crate::autostart_enabled()),
         Item::FollowDisplay => crate::toggle_follow_display(),
@@ -407,6 +430,7 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Re
             autostart: true,
             follow_display: true,
             check_updates: true,
+            overlay_key: Some("Ctrl+Alt+B".into()),
         };
         m.draw(rt);
         Ok(())

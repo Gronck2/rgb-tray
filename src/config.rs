@@ -323,6 +323,9 @@ pub struct Config {
     /// Top-left corner (screen pixels) of the pinned panel after the user dragged it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub panel_pos: Option<(i32, i32)>,
+    /// Hotkey that shows and hides the battery overlay.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overlay_hotkey: Option<Hotkey>,
     pub presets: Vec<Preset>,
     /// Programs whose "it drives the lighting too" warning the user hid (`conflicts::App::key`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -350,6 +353,7 @@ impl Default for Config {
             skipped_version: None,
             language: None,
             panel_pos: None,
+            overlay_hotkey: None,
             presets: Vec::new(),
             ignored_apps: Vec::new(),
             per_key: false,
@@ -708,6 +712,22 @@ impl Config {
 }
 
 impl Config {
+    /// A hotkey belongs to one preset, device or the overlay only: the others lose it.
+    pub fn take_hotkey(&mut self, hotkey: Option<Hotkey>) {
+        if hotkey.is_none() {
+            return;
+        }
+        for p in self.presets.iter_mut().filter(|p| p.hotkey == hotkey) {
+            p.hotkey = None;
+        }
+        for d in self.devices.values_mut().filter(|d| d.hotkey == hotkey) {
+            d.hotkey = None;
+        }
+        if self.overlay_hotkey == hotkey {
+            self.overlay_hotkey = None;
+        }
+    }
+
     pub fn dir() -> PathBuf {
         let base = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
         base.join("rgbtray")
@@ -1242,6 +1262,37 @@ mod tests {
         cfg.devices.insert("naga-A".into(), DeviceConfig { name: "a".into(), ..DeviceConfig::default() });
         let v = cfg.sorted(ids(&["asus", "naga-B", "logitech-X", "naga-A"]));
         assert_eq!(v, ids(&["logitech-X", "naga-A", "naga-B", "asus"]));
+    }
+
+    #[test]
+    fn overlay_hotkey_round_trip_and_absent() {
+        let mut cfg = Config::default();
+        assert!(!toml::to_string(&cfg).unwrap().contains("overlay_hotkey"));
+        cfg.overlay_hotkey = Some(Hotkey { mods: 0x3, vk: 0x42 });
+        let back: Config = toml::from_str(&toml::to_string(&cfg).unwrap()).unwrap();
+        assert!(back.overlay_hotkey == Some(Hotkey { mods: 0x3, vk: 0x42 }));
+        let old: Config = toml::from_str("brightness = 50\n").unwrap();
+        assert!(old.overlay_hotkey.is_none());
+    }
+
+    #[test]
+    fn take_hotkey_moves_between_owners() {
+        let hk = Some(Hotkey { mods: 0x2, vk: 0x4C });
+        let mut cfg = Config::default();
+        cfg.presets.push(Preset { hotkey: hk, ..cfg.snapshot("P".into()) });
+        cfg.devices.insert("tuya-A".into(), DeviceConfig { hotkey: hk, ..DeviceConfig::default() });
+        // To the overlay: the preset and the device lose it.
+        cfg.take_hotkey(hk);
+        cfg.overlay_hotkey = hk;
+        assert!(cfg.presets[0].hotkey.is_none() && cfg.devices["tuya-A"].hotkey.is_none());
+        // From the overlay to a device.
+        cfg.take_hotkey(hk);
+        cfg.devices.get_mut("tuya-A").unwrap().hotkey = hk;
+        assert!(cfg.overlay_hotkey.is_none() && cfg.devices["tuya-A"].hotkey == hk);
+        // None changes nothing.
+        cfg.overlay_hotkey = Some(Hotkey { mods: 0, vk: 0x7C });
+        cfg.take_hotkey(None);
+        assert!(cfg.overlay_hotkey.is_some() && cfg.devices["tuya-A"].hotkey == hk);
     }
 
     #[test]
