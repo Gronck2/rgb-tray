@@ -136,3 +136,42 @@ Never change the id scheme of an existing model: settings are keyed by it.
 - Never edit files with Cyrillic text through PowerShell 5.1 `Get-Content`/`Set-Content`, because it mangles UTF-8.
   Use the Edit/Write tools or Bash.
 - Never run the setup exe with `Start-Process -Wait` or pipe its output: it launches the tray app and the command hangs.
+
+## Pipeline contract
+
+- **Base branch:** main
+- **PR target:** main
+- **Forge:** gh
+- **Branch naming:** task/NNNN-slug; docs-only work on docs/<slug>
+- **Docs layout:** tasks docs/tasks/, plans docs/plan/ (shared NNNN numbering), ADRs docs/adr/ (immutable),
+  living docs: docs/arch/overview.md. Docs language: English. `ROADMAP.md` (Russian) stays the owner's task list
+  and is updated when a task is done or checked on hardware; docs/tasks/ holds only the pipeline's task files.
+- **Test paths:** inline `#[cfg(test)] mod tests` at the bottom of `src/**/*.rs` (there is no `tests/` dir);
+  hardware-free logic only (see "Build and check").
+- **Gate commands** (whole project, the same as `.github/workflows/ci.yml`; `cargo` may be in `%USERPROFILE%\.cargo\bin`
+  and not on PATH; CI uses MSVC, the gnu toolchain works locally):
+  - format: `cargo fmt --check`
+  - lint: `cargo clippy --release --all-targets -- -D warnings`
+  - tests: `cargo test --release`
+  - build: `cargo build --release`
+  - landing page, only when `site/` changes: `python3 site/build.py <out dir in the scratchpad>` (needs Python;
+    `pages.yml` builds it on pull requests)
+- **Security-shaped paths:** `src/update.rs` (download and quiet install), `src/installer.rs`, `src/main.rs`
+  (CLI incl. `--hid-send`, export/import), `src/hid.rs` and `src/devices/**` (what is sent to devices),
+  `src/devices/tuya.rs` and `tuya.toml` handling (local keys), `src/config.rs` (settings compatibility),
+  `src/conflicts.rs`, `src/services.rs`, `.github/workflows/**`, `scripts/release.ps1`, `version` in `Cargo.toml`.
+- **Merge/release policy:** a PR is opened without asking; merging (merge commit, as in PRs #1-#4), direct pushes
+  to main, tags and force-push only on the owner's explicit request; never propose merging a PR whose CI is red
+  or pending (required check: `build`). Never bump `version` or push `v*` tags unless asked (release flow:
+  bump version -> `scripts\release.ps1` -> tag `v<ver>` -> draft release via `release.yml`).
+- **Extra rules:** everything in this file applies, in particular: you cannot see the lights, so device behaviour
+  is checked by the person; never send firmware update, bootloader or "save to flash" commands; the
+  "Hardware gotchas" are verified and not to be "fixed"; never change the id scheme of an existing model or make a
+  settings value unreadable for older/newer versions; device changes update every README translation; UI strings
+  go through `tr!`; UI changes are checked with `--snapshot`; the setup exe and PowerShell rules in
+  "Windows shell pitfalls".
+
+## Agent pipeline
+
+Non-trivial work goes through the `dev-pipeline` plugin (`/dev-pipeline:run-task`); project specifics are the
+Pipeline contract. Do not add same-named `.claude/agents/` copies unless a deliberate override is needed.
