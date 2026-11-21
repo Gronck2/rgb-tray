@@ -786,4 +786,23 @@ mod tests {
         let p = probe(OverlayPos { x: 0, y: 0, right: false, bottom: false });
         assert_eq!((p.x, p.y), (0, 0));
     }
+
+    #[test]
+    fn anchor_then_place_is_stable_in_every_corner_and_on_negative_monitors() {
+        // Primary, a monitor to the left (negative x), one above (negative y) and one up-left (both).
+        for work in [WORK, (-1920, 0, 0, 1040), (0, -1080, 1920, 0), (-1600, -900, 0, -40)] {
+            let (w, h) = (300, 100);
+            let corners = [(work.0 + 10, work.1 + 10), (work.2 - w - 10, work.1 + 10), (work.0 + 10, work.3 - h - 10), (work.2 - w - 10, work.3 - h - 10)];
+            for (i, (l, t)) in corners.into_iter().enumerate() {
+                let pos = anchor_of((l, t, l + w, t + h), work);
+                assert_eq!((pos.right, pos.bottom), (i % 2 == 1, i >= 2), "{work:?} corner {i}");
+                assert_eq!(placed(pos, w, h, work), (l, t), "{work:?} corner {i}");
+                // A taller and wider plate grows away from the anchor and still fits.
+                let (bl, bt) = placed(pos, w + 100, h + 100, work);
+                assert!(bl >= work.0 && bl + w + 100 <= work.2 && bt >= work.1 && bt + h + 100 <= work.3, "{work:?} corner {i}");
+                let p = probe(pos);
+                assert!(p.x >= work.0 && p.x < work.2 && p.y >= work.1 && p.y < work.3, "{work:?} corner {i}");
+            }
+        }
+    }
 }
