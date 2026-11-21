@@ -164,9 +164,11 @@ Never change the id scheme of an existing model: settings are keyed by it.
   (CLI incl. `--hid-send`, export/import), `src/hid.rs` and `src/devices/**` (what is sent to devices),
   `src/devices/tuya.rs` and `tuya.toml` handling (local keys), `src/config.rs` (settings compatibility),
   `src/conflicts.rs`, `src/services.rs`, `.github/workflows/**`, `scripts/release.ps1`, `version` in `Cargo.toml`.
-- **Merge/release policy:** a PR is opened without asking; merging (merge commit, as in PRs #1-#4), direct pushes
-  to main, tags and force-push only on the owner's explicit request; never propose merging a PR whose CI is red
-  or pending (required check: `build`). Never bump `version` or push `v*` tags unless asked (release flow:
+- **Merge/release policy:** a PR is opened without asking. The session merges its own PR (merge commit, as in
+  PRs #1-#7, `--delete-branch`, then fast-forward the local main) once CI is green (required check: `build`) and the
+  pipeline has passed (tester, code-reviewer, qa-mr); a change that needs a check on a real screen or device is
+  merged only after the owner confirmed it (standing permission from the owner, 21.11.2026). Never merge or
+  propose merging with CI red or pending. Direct pushes to main, tags and force-push only on the owner's explicit request. Never bump `version` or push `v*` tags unless asked (release flow:
   bump version -> `scripts\release.ps1` -> tag `v<ver>` -> draft release via `release.yml`).
 - **Extra rules:** everything in this file applies, in particular: you cannot see the lights, so device behaviour
   is checked by the person; never send firmware update, bootloader or "save to flash" commands; the
