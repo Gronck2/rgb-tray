@@ -64,6 +64,10 @@ with the same key.
 8. `cargo fmt --check`, `cargo clippy --release --all-targets -- -D warnings`, `cargo test --release`,
    `cargo build --release` pass. New tests cover the logic listed in the plan.
 9. The owner confirmed on real hardware (see the plan, "Hardware check").
+10. Each row shows the device's icon, the same glyph as the panel's card for that model.
+11. Three styles are selectable from the tray menu item "Overlay style" (cycles Full, Row, Column; the current name is
+    shown on the item), saved as `overlay_style` in `config.toml`; the plate re-lays-out at once when visible.
+    An unknown value in the file reads as Full and never makes the config unreadable; Full is not written.
 
 ## Owner decisions
 
@@ -101,6 +105,19 @@ plate is turned on from the tray item "Battery overlay" until a key is set (no C
     Recommend: a tray menu item "Battery overlay" that toggles the plate and shows the current combination, and
     the panel's existing hotkey menu (keyboard button) opened for it. The plan describes the options; the owner
     picks if the simplest one is not acceptable.
+
+### Addendum, 2026-11-21 (owner, after trying it): icon, percent and three styles
+
+Show the device icon and the charge in percent; three layouts, all selectable, icons the same as in the app:
+
+1. Full (default): icon + name + percent (+ charging mark) + level bar.
+2. Row: one compact horizontal line, icon + percent per device side by side, no names, no bar; the plate fits its content.
+3. Column: one line per device, icon + percent, no name, no bar; narrow plate.
+
+Kept in every style: charging mark, low/critical colours, dimming of a device without link (the compact styles show
+the last percent dimmed, no "asleep" word), the empty-state line, top-right placement, click-through, no activation.
+This relaxes "a settings page for it" in Out of scope for this one setting only: the choice is a tray menu item
+("Вид индикатора" / "Overlay style"), not a page. Opacity, size and position stay fixed.
 
 ## Notes
 

@@ -54,6 +54,58 @@ fn effect_named(name: &str) -> Effect {
     known.unwrap_or(Effect::Static)
 }
 
+/// How the battery overlay is laid out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OverlayStyle {
+    /// Icon, name, percent and a level bar per device.
+    #[default]
+    Full,
+    /// Icon and percent of every device side by side.
+    Row,
+    /// Icon and percent, one device per line.
+    Column,
+}
+
+impl OverlayStyle {
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "full" => Some(Self::Full),
+            "row" => Some(Self::Row),
+            "column" => Some(Self::Column),
+            _ => None,
+        }
+    }
+
+    /// The next style in the cycle Full, Row, Column.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Full => Self::Row,
+            Self::Row => Self::Column,
+            Self::Column => Self::Full,
+        }
+    }
+
+    fn is_default(&self) -> bool {
+        *self == Self::Full
+    }
+}
+
+/// A style this version doesn't know (or a value of another type) reads as Full: it must never make
+/// the settings file unreadable.
+fn lenient_overlay_style<'de, D: serde::Deserializer<'de>>(d: D) -> Result<OverlayStyle, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Name(String),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Raw::deserialize(d)? {
+        Raw::Name(s) => OverlayStyle::parse(&s).unwrap_or_default(),
+        Raw::Other(_) => OverlayStyle::Full,
+    })
+}
+
 fn full_brightness() -> u8 {
     100
 }
@@ -326,6 +378,9 @@ pub struct Config {
     /// Hotkey that shows and hides the battery overlay.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overlay_hotkey: Option<Hotkey>,
+    /// Layout of the battery overlay; an unknown value reads as Full.
+    #[serde(deserialize_with = "lenient_overlay_style", skip_serializing_if = "OverlayStyle::is_default")]
+    pub overlay_style: OverlayStyle,
     pub presets: Vec<Preset>,
     /// Programs whose "it drives the lighting too" warning the user hid (`conflicts::App::key`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -354,6 +409,7 @@ impl Default for Config {
             language: None,
             panel_pos: None,
             overlay_hotkey: None,
+            overlay_style: OverlayStyle::Full,
             presets: Vec::new(),
             ignored_apps: Vec::new(),
             per_key: false,
@@ -1273,6 +1329,29 @@ mod tests {
         assert!(back.overlay_hotkey == Some(Hotkey { mods: 0x3, vk: 0x42 }));
         let old: Config = toml::from_str("brightness = 50\n").unwrap();
         assert!(old.overlay_hotkey.is_none());
+    }
+
+    #[test]
+    fn overlay_style_lenient_round_trip_and_absent() {
+        let load = |s: &str| toml::from_str::<Config>(s).unwrap().overlay_style;
+        // Absent, the default and unknown or garbled values read as Full.
+        assert_eq!(load("brightness = 50\n"), OverlayStyle::Full);
+        assert_eq!(load("overlay_style = \"future\"\n"), OverlayStyle::Full);
+        assert_eq!(load("overlay_style = 7\n"), OverlayStyle::Full);
+        assert_eq!(load("overlay_style = [1]\n"), OverlayStyle::Full);
+        assert_eq!(load("overlay_style = \"column\"\nfuture_field = 1\n"), OverlayStyle::Column);
+        // Full is not written; the others survive a round trip.
+        let mut cfg = Config::default();
+        assert!(!toml::to_string(&cfg).unwrap().contains("overlay_style"));
+        for style in [OverlayStyle::Row, OverlayStyle::Column] {
+            cfg.overlay_style = style;
+            let text = toml::to_string(&cfg).unwrap();
+            assert!(text.contains("overlay_style"));
+            assert_eq!(toml::from_str::<Config>(&text).unwrap().overlay_style, style);
+        }
+        // The cycle visits every style and returns.
+        assert_eq!(OverlayStyle::Full.next().next().next(), OverlayStyle::Full);
+        assert_ne!(OverlayStyle::Full.next(), OverlayStyle::Full.next().next());
     }
 
     #[test]

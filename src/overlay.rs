@@ -15,7 +15,8 @@ use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use crate::devices::{Battery, CRITICAL_BATTERY, LOW_BATTERY};
+use crate::config::OverlayStyle;
+use crate::devices::{kind_of, Battery, CRITICAL_BATTERY, LOW_BATTERY};
 use crate::draw::{cursor_monitor, dwm_set, hwnd_target, register_class, Paint};
 use crate::ui::{col, text_format, text_width, theme, Theme, R};
 
@@ -24,6 +25,19 @@ const PAD: f32 = 14.0;
 const VPAD: f32 = 8.0;
 const ROW_H: f32 = 40.0;
 const RIGHT_W: f32 = 96.0;
+/// Width of the device icon in the full style (the name and the bar start after it).
+const ICON_W: f32 = 28.0;
+// The compact styles: a cell is the icon, the percent (right-aligned) and room for the charging mark.
+const C_PAD: f32 = 12.0;
+const C_ROW_H: f32 = 28.0;
+const C_ICON_W: f32 = 20.0;
+const C_PCT_W: f32 = 36.0;
+const C_MARK_W: f32 = 14.0;
+const C_CELL_W: f32 = C_ICON_W + C_PCT_W + C_MARK_W + 4.0;
+/// Space between the cells of the row style.
+const C_GAP: f32 = 12.0;
+/// Width of the compact plate with its one empty-state line.
+const C_EMPTY_W: f32 = 220.0;
 /// Uniform window opacity, about 85%.
 const ALPHA: u8 = 217;
 
@@ -38,6 +52,8 @@ enum Level {
 #[derive(Clone, PartialEq, Debug)]
 struct Row {
     name: String,
+    /// The model's glyph of Segoe Fluent Icons, as on the panel's card.
+    icon: &'static str,
     percent: u8,
     charging: bool,
     level: Level,
@@ -63,14 +79,20 @@ fn rows(ids: &[String], status: &[(String, Battery)], no_link: &[String], name: 
     ids.iter()
         .filter_map(|id| {
             let b = status.iter().find(|(s, _)| s == id)?.1;
-            Some(Row { name: name(id), percent: b.percent, charging: b.charging, level: level(b), asleep: no_link.contains(id) })
+            Some(Row { name: name(id), icon: kind_of(id).icon, percent: b.percent, charging: b.charging, level: level(b), asleep: no_link.contains(id) })
         })
         .collect()
 }
 
-/// Window height in DIPs for `n` rows; no rows still show one line saying so.
-fn height(n: usize) -> f32 {
-    2.0 * VPAD + n.max(1) as f32 * ROW_H
+/// Window size in DIPs of `style` for `n` devices; no devices still show one line saying so.
+fn size(style: OverlayStyle, n: usize) -> (f32, f32) {
+    let k = n.max(1) as f32;
+    match style {
+        OverlayStyle::Full => (W, 2.0 * VPAD + k * ROW_H),
+        _ if n == 0 => (C_EMPTY_W, 2.0 * VPAD + C_ROW_H),
+        OverlayStyle::Row => (2.0 * C_PAD + k * C_CELL_W + (k - 1.0) * C_GAP, 2.0 * VPAD + C_ROW_H),
+        OverlayStyle::Column => (2.0 * C_PAD + C_CELL_W, 2.0 * VPAD + k * C_ROW_H),
+    }
 }
 
 fn current_rows() -> Vec<Row> {
@@ -85,7 +107,10 @@ fn current_rows() -> Vec<Row> {
 struct Formats {
     name: IDWriteTextFormat,
     percent: IDWriteTextFormat,
+    /// The charging mark.
     icon: IDWriteTextFormat,
+    /// The device icon.
+    glyph: IDWriteTextFormat,
 }
 
 fn formats() -> windows::core::Result<Formats> {
@@ -93,6 +118,7 @@ fn formats() -> windows::core::Result<Formats> {
     let ui = w!("Segoe UI Variable Text");
     let (lead, trail) = (DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING);
     Ok(Formats {
+        glyph: text_format(&dw, w!("Segoe Fluent Icons"), 16.0, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER)?,
         name: text_format(&dw, ui, 13.0, DWRITE_FONT_WEIGHT_NORMAL, lead)?,
         percent: text_format(&dw, ui, 13.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, trail)?,
         icon: text_format(&dw, w!("Segoe Fluent Icons"), 12.0, DWRITE_FONT_WEIGHT_NORMAL, trail)?,
@@ -108,6 +134,7 @@ struct Overlay {
     fmt: Formats,
     theme: Theme,
     rows: Vec<Row>,
+    style: OverlayStyle,
     /// Right edge and top of the plate on the screen (pixels), kept when it is resized.
     right: i32,
     top: i32,
@@ -142,31 +169,33 @@ pub fn refresh() {
         return;
     }
     let rows = current_rows();
+    let style = crate::config().overlay_style;
     unsafe {
         let moved = OVERLAY.with(|c| {
             c.borrow_mut().as_mut().map(|o| {
-                let resized = o.rows.len().max(1) != rows.len().max(1);
+                let resized = size(o.style, o.rows.len()) != size(style, rows.len());
                 o.rows = rows;
+                o.style = style;
                 if resized {
                     // The render target is made for the window size.
                     o.rt = None;
                     o.brush = None;
                 }
-                (o.hwnd, resized, o.scale, o.right, o.top, o.rows.len())
+                (o.hwnd, resized, o.scale, o.right, o.top, size(style, o.rows.len()))
             })
         });
-        if let Some((hwnd, resized, scale, right, top, n)) = moved {
+        if let Some((hwnd, resized, scale, right, top, dip)) = moved {
             if resized {
-                place(hwnd, scale, right, top, n);
+                place(hwnd, scale, right, top, dip);
             }
             InvalidateRect(hwnd, null(), 0);
         }
     }
 }
 
-/// Puts the plate with its right edge at `right` and its top at `top`, sized for `n` rows.
-unsafe fn place(hwnd: HWND, scale: f32, right: i32, top: i32, n: usize) {
-    let (w, h) = ((W * scale).round() as i32, (height(n) * scale).round() as i32);
+/// Puts the plate with its right edge at `right` and its top at `top`, sized `dip` (width, height in DIPs).
+unsafe fn place(hwnd: HWND, scale: f32, right: i32, top: i32, dip: (f32, f32)) {
+    let (w, h) = ((dip.0 * scale).round() as i32, (dip.1 * scale).round() as i32);
     SetWindowPos(hwnd, HWND_TOPMOST, right - w, top, w, h, SWP_NOACTIVATE);
 }
 
@@ -181,7 +210,9 @@ unsafe fn open() -> windows::core::Result<()> {
     let margin = (12.0 * scale).round() as i32;
     let (right, top) = (mi.rcWork.right - margin, mi.rcWork.top + margin);
     let rows = current_rows();
-    let (w, h) = ((W * scale).round() as i32, (height(rows.len()) * scale).round() as i32);
+    let style = crate::config().overlay_style;
+    let dip = size(style, rows.len());
+    let (w, h) = ((dip.0 * scale).round() as i32, (dip.1 * scale).round() as i32);
 
     // What can fail comes before the window: a window without its state would be stuck.
     let d2d = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
@@ -208,7 +239,7 @@ unsafe fn open() -> windows::core::Result<()> {
     dwm_set(hwnd, 33, 2); // DWMWCP_ROUND
     dwm_set(hwnd, 20, theme.dark as u32);
 
-    let overlay = Overlay { hwnd, scale, d2d, rt: None, brush: None, fmt, theme, rows, right, top };
+    let overlay = Overlay { hwnd, scale, d2d, rt: None, brush: None, fmt, theme, rows, style, right, top };
     OVERLAY.with(|c| *c.borrow_mut() = Some(overlay));
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     Ok(())
@@ -269,55 +300,91 @@ impl Overlay {
 
     unsafe fn draw(&self, rt: &ID2D1RenderTarget) {
         let t = &self.theme;
-        let h = height(self.rows.len());
+        let (w, h) = size(self.style, self.rows.len());
         rt.Clear(Some(&t.bg));
-        self.stroke(rt, R { x: 0.0, y: 0.0, w: W, h }, 0.0, t.stroke, 1.0);
+        self.stroke(rt, R { x: 0.0, y: 0.0, w, h }, 0.0, t.stroke, 1.0);
         if self.rows.is_empty() {
             let line = tr!("Нет устройств с батареей", "No devices with a battery");
-            self.text(rt, line, &self.fmt.name, R { x: PAD, y: VPAD, w: W - 2.0 * PAD, h: ROW_H }, t.text2);
+            let (pad, line_h) = if self.style == OverlayStyle::Full { (PAD, ROW_H) } else { (C_PAD, C_ROW_H) };
+            self.text(rt, line, &self.fmt.name, R { x: pad, y: VPAD, w: w - 2.0 * pad, h: line_h }, t.text2);
             return;
         }
         for (i, row) in self.rows.iter().enumerate() {
-            let y = VPAD + i as f32 * ROW_H;
-            // A device without link is dimmed: it keeps its last level.
-            let dim = |mut c: D2D1_COLOR_F| {
-                if row.asleep {
-                    c.a *= 0.5;
-                }
-                c
-            };
-            let accent = level_color(row.level, t);
-            let name_w = W - 2.0 * PAD - RIGHT_W - 8.0;
-            self.text(rt, &fit(&row.name, &self.fmt.name, name_w), &self.fmt.name, R { x: PAD, y: y + 2.0, w: name_w, h: 20.0 }, dim(t.text));
-
-            let right = R { x: W - PAD - RIGHT_W, y: y + 2.0, w: RIGHT_W, h: 20.0 };
-            let percent = if row.asleep { format!("{} · {}%", tr!("спит", "asleep"), row.percent) } else { format!("{}%", row.percent) };
-            let value_color = if row.level == Level::Normal && !row.asleep {
-                t.text
-            } else if row.level == Level::Normal {
-                t.text2
-            } else {
-                accent
-            };
-            self.text(rt, &percent, &self.fmt.percent, right, dim(value_color));
-            if row.charging && !row.asleep {
-                // The charging mark sits left of the percent.
-                let mark = R { x: right.x, w: right.w - text_width(&percent, &self.fmt.percent) - 4.0, ..right };
-                self.text(rt, "\u{E83E}", &self.fmt.icon, mark, dim(accent));
+            match self.style {
+                OverlayStyle::Full => self.full_row(rt, row, VPAD + i as f32 * ROW_H),
+                OverlayStyle::Row => self.cell(rt, row, C_PAD + i as f32 * (C_CELL_W + C_GAP), VPAD),
+                OverlayStyle::Column => self.cell(rt, row, C_PAD, VPAD + i as f32 * C_ROW_H),
             }
+        }
+    }
 
-            let bar = R { x: PAD, y: y + 27.0, w: W - 2.0 * PAD, h: 4.0 };
-            self.fill(rt, bar, 2.0, D2D1_COLOR_F { a: 0.22, ..t.text2 });
-            let filled = (bar.w * row.percent.min(100) as f32 / 100.0).max(bar.h);
-            self.fill(rt, R { w: filled, ..bar }, 2.0, dim(accent));
+    /// Color of the percent and the icon: the warning one, grey when the device is asleep.
+    fn value_color(&self, row: &Row) -> D2D1_COLOR_F {
+        match (row.level, row.asleep) {
+            (Level::Normal, false) => self.theme.text,
+            (Level::Normal, true) => self.theme.text2,
+            (level, _) => level_color(level, &self.theme),
+        }
+    }
+
+    /// A device without link is dimmed: it keeps its last level.
+    fn dim(row: &Row, mut c: D2D1_COLOR_F) -> D2D1_COLOR_F {
+        if row.asleep {
+            c.a *= 0.5;
+        }
+        c
+    }
+
+    /// The full style: icon, name, percent with the charging mark, and the level bar.
+    unsafe fn full_row(&self, rt: &ID2D1RenderTarget, row: &Row, y: f32) {
+        let t = &self.theme;
+        let dim = |c| Self::dim(row, c);
+        let accent = level_color(row.level, t);
+        self.text(rt, row.icon, &self.fmt.glyph, R { x: PAD, y: y + 2.0, w: ICON_W - 6.0, h: 29.0 }, dim(self.value_color(row)));
+        let left = PAD + ICON_W;
+        let name_w = W - PAD - left - RIGHT_W - 8.0;
+        self.text(rt, &fit(&row.name, &self.fmt.name, name_w), &self.fmt.name, R { x: left, y: y + 2.0, w: name_w, h: 20.0 }, dim(t.text));
+
+        let right = R { x: W - PAD - RIGHT_W, y: y + 2.0, w: RIGHT_W, h: 20.0 };
+        let percent = if row.asleep { format!("{} · {}%", tr!("спит", "asleep"), row.percent) } else { format!("{}%", row.percent) };
+        self.text(rt, &percent, &self.fmt.percent, right, dim(self.value_color(row)));
+        if row.charging && !row.asleep {
+            // The charging mark sits left of the percent.
+            let mark = R { x: right.x, w: right.w - text_width(&percent, &self.fmt.percent) - 4.0, ..right };
+            self.text(rt, "\u{E83E}", &self.fmt.icon, mark, dim(accent));
+        }
+
+        let bar = R { x: left, y: y + 27.0, w: W - PAD - left, h: 4.0 };
+        self.fill(rt, bar, 2.0, D2D1_COLOR_F { a: 0.22, ..t.text2 });
+        let filled = (bar.w * row.percent.min(100) as f32 / 100.0).max(bar.h);
+        self.fill(rt, R { w: filled, ..bar }, 2.0, dim(accent));
+    }
+
+    /// A compact cell at (`x`, `y`): icon, percent and the charging mark; no name, no bar.
+    unsafe fn cell(&self, rt: &ID2D1RenderTarget, row: &Row, x: f32, y: f32) {
+        let dim = |c| Self::dim(row, c);
+        let color = dim(self.value_color(row));
+        self.text(rt, row.icon, &self.fmt.glyph, R { x, y, w: C_ICON_W, h: C_ROW_H }, color);
+        self.text(rt, &format!("{}%", row.percent), &self.fmt.percent, R { x: x + C_ICON_W, y, w: C_PCT_W, h: C_ROW_H }, color);
+        if row.charging && !row.asleep {
+            self.text(
+                rt,
+                "\u{E83E}",
+                &self.fmt.icon,
+                R { x: x + C_ICON_W + C_PCT_W + 4.0, y, w: C_MARK_W, h: C_ROW_H },
+                dim(level_color(row.level, &self.theme)),
+            );
         }
     }
 }
 
-/// Renders the plate with the current levels into a PNG file, for checking the look.
+/// Renders the plate with the current levels into a PNG file, for checking the look. The style is the
+/// saved one, or `RGBTRAY_DEMO_OVERLAY_STYLE=full|row|column`.
 pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Result<()> {
     let rows = current_rows();
-    crate::ui::render_png(path, W, height(rows.len()), scale, |rt, d2d| unsafe {
+    let style = std::env::var("RGBTRAY_DEMO_OVERLAY_STYLE").ok().and_then(|s| OverlayStyle::parse(&s)).unwrap_or(crate::config().overlay_style);
+    let (w, h) = size(style, rows.len());
+    crate::ui::render_png(path, w, h, scale, |rt, d2d| unsafe {
         let theme = crate::ui::theme_for(dark);
         let o = Overlay {
             hwnd: null_mut(),
@@ -328,6 +395,7 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32) -> windows::core::Re
             fmt: formats()?,
             theme,
             rows,
+            style,
             right: 0,
             top: 0,
         };
@@ -422,10 +490,56 @@ mod tests {
         assert!(r[0].asleep && r[0].level == Level::Critical && r[0].percent == 4);
     }
 
+    const STYLES: [OverlayStyle; 3] = [OverlayStyle::Full, OverlayStyle::Row, OverlayStyle::Column];
+
     #[test]
     fn height_grows_with_rows_and_has_an_empty_state() {
+        let height = |n| size(OverlayStyle::Full, n).1;
         assert!(height(0) > 2.0 * VPAD);
         assert_eq!(height(0), height(1));
         assert!(height(3) > height(2) && height(2) > height(1));
+    }
+
+    #[test]
+    fn full_is_fixed_width_and_column_is_narrow() {
+        for n in 0..5 {
+            assert_eq!(size(OverlayStyle::Full, n).0, W);
+        }
+        for n in 1..5 {
+            let (cw, _) = size(OverlayStyle::Column, n);
+            assert!(cw < W && cw == size(OverlayStyle::Column, 1).0);
+        }
+    }
+
+    #[test]
+    fn row_grows_in_width_and_column_in_height() {
+        let (w1, h1) = size(OverlayStyle::Row, 1);
+        let (w3, h3) = size(OverlayStyle::Row, 3);
+        assert!(w3 > w1 && h3 == h1);
+        let (cw1, ch1) = size(OverlayStyle::Column, 1);
+        let (cw3, ch3) = size(OverlayStyle::Column, 3);
+        assert!(ch3 > ch1 && cw3 == cw1);
+        // The compact plates are lower than the full one for the same devices.
+        assert!(h3 < size(OverlayStyle::Full, 3).1 && ch3 < size(OverlayStyle::Full, 3).1);
+    }
+
+    #[test]
+    fn empty_state_fits_one_line_in_every_style() {
+        for style in STYLES {
+            let (w, h) = size(style, 0);
+            assert!(w >= C_EMPTY_W && h > 2.0 * VPAD);
+            assert_eq!(size(style, 0).1, if style == OverlayStyle::Full { size(style, 1).1 } else { 2.0 * VPAD + C_ROW_H });
+        }
+    }
+
+    #[test]
+    fn rows_carry_the_icon_of_the_model() {
+        let r = run(&["logitech-A", "naga-B", "unknown-C"], &[("logitech-A", b(50, false)), ("naga-B", b(60, true)), ("unknown-C", b(70, false))], &[]);
+        for (row, id) in r.iter().zip(["logitech-A", "naga-B", "unknown-C"]) {
+            assert!(!row.icon.is_empty());
+            assert_eq!(row.icon, kind_of(id).icon);
+        }
+        // What the compact styles show survives in the row: the percent, the charging mark and the dimming.
+        assert!(r[1].charging && r[1].percent == 60);
     }
 }

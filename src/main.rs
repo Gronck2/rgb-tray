@@ -1355,6 +1355,15 @@ fn toggle_check_updates() {
     post(WM_APPLIED);
 }
 
+/// Switches the battery overlay to its next style, remembers it and re-lays the plate out if it is up.
+fn cycle_overlay_style() {
+    let mut cfg = config();
+    cfg.overlay_style = cfg.overlay_style.next();
+    cfg.save();
+    drop(cfg);
+    overlay::refresh();
+}
+
 /// Switches whether the lighting dims and goes off with the display.
 fn toggle_follow_display() {
     let mut cfg = config();

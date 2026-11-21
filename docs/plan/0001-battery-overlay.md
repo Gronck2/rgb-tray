@@ -79,6 +79,19 @@ Move the "one owner per combination" rule from `take_hotkey` in `main.rs` into a
 7. README: add the feature and the hotkey in `README.md` and all translations (ru, zh-CN, es, de, fr, pt-BR, ja); note the
    exclusive-fullscreen limit. `ROADMAP.md` is the owner's; the main thread updates it on the owner's confirmation.
 
+## Addendum 2026-11-21: icon and overlay styles
+
+- `config.rs`: `enum OverlayStyle { Full, Row, Column }` (default Full), field `overlay_style` with a lenient
+  deserialize (unknown or garbled value reads as Full, like `lenient_effect`), not written when Full. `next()` cycles.
+- `overlay.rs`: `Row` gets `icon` from `devices::kind_of(id).icon` (the panel's glyph, Segoe Fluent Icons). A pure
+  `size(style, n) -> (w, h)` replaces `height()`: Full is 280 wide with 40 per row; Row and Column use fixed-width
+  cells (icon, right-aligned percent, charging mark), Row grows in width, Column in height; the empty state is one line.
+  `refresh()` also re-lays-out when the style changed.
+- `traymenu.rs`: item "Overlay style" under "Overlay hotkey..." with the style name on the right; click calls
+  `main::cycle_overlay_style` (next style, save, `overlay::refresh()`).
+- Snapshots: `RGBTRAY_DEMO_OVERLAY_STYLE=full|row|column` (else the saved style); documented in `CLAUDE.md`.
+- README feature line mentions the three styles. Tests: style parse/round trip/absent, `size()` per style, rows carry the icon.
+
 ## Files likely touched
 
 `src/overlay.rs` (new), `src/main.rs` (mod, hotkey id, WM_HOTKEY, refresh, quit, snapshot, demo var),
