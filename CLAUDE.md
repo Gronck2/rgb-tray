@@ -154,7 +154,8 @@ Never change the id scheme of an existing model: settings are keyed by it.
   - lint: `cargo clippy --release --all-targets -- -D warnings`
   - tests: `cargo test --release`
   - build: `cargo build --release`
-  - landing page, only when `site/` changes: `python3 site/build.py <out dir in the scratchpad>` (needs Python;
+  - landing page, only when `site/` changes: `uv run --no-project python site/build.py <out dir in the scratchpad>`
+    (on this machine `python3` is only the Store alias; in CI and elsewhere `python3 site/build.py <out>`;
     `pages.yml` builds it on pull requests)
 - **Security-shaped paths:** `src/update.rs` (download and quiet install), `src/installer.rs`, `src/main.rs`
   (CLI incl. `--hid-send`, export/import), `src/hid.rs` and `src/devices/**` (what is sent to devices),
