@@ -166,7 +166,8 @@ fn join(nodes: &[Node]) -> Vec<Joined> {
                 id,
                 name: name.unwrap_or_else(|| "Bluetooth device".into()),
                 class: class_of(nodes.iter().find_map(|n| n.cod)),
-                connected: nodes.iter().any(|n| n.connected == Some(true)),
+                // Only a present node knows: a node left behind (radio off, dongle out) keeps its last "connected".
+                connected: nodes.iter().any(|n| n.present != Some(false) && n.connected == Some(true)),
                 // A level from a present node first, else from any (not present) one.
                 percent: nodes.iter().filter(|n| n.present != Some(false)).find_map(|n| n.battery).or_else(|| nodes.iter().find_map(|n| n.battery)),
             }
@@ -633,6 +634,9 @@ mod tests {
     #[test]
     fn a_not_present_device_node_is_not_connected() {
         assert!(devices(join(&[phantom(node(XB33_DEVICE, Some("Old"), None, None, Some(30)))])).is_empty());
+        // Radio off or dongle out while connected: the nodes go away still saying "connected".
+        let stale = [phantom(node(XB33_DEVICE, Some("Old"), None, Some(true), None)), phantom(node(XB33_HFP, None, None, None, Some(30)))];
+        assert!(devices(join(&stale)).is_empty());
     }
 
     #[test]
