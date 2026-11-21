@@ -455,7 +455,7 @@ fn update_skip_rect(card: R) -> R {
 
 /// Width of a text in a format (cached: measuring builds a DirectWrite layout, and the same
 /// texts are measured on every paint).
-fn text_width(s: &str, fmt: &IDWriteTextFormat) -> f32 {
+pub(crate) fn text_width(s: &str, fmt: &IDWriteTextFormat) -> f32 {
     /// (font family, size, weight, text) → width.
     type Key = (String, u32, i32, String);
     thread_local! {
@@ -624,14 +624,18 @@ fn capturing_device() -> Option<String> {
     CAPTURE_DEVICE.lock().unwrap().clone()
 }
 
-/// A hotkey of a preset or a device is being recorded.
+/// The battery overlay's hotkey is being recorded.
+static CAPTURE_OVERLAY: AtomicBool = AtomicBool::new(false);
+
+/// A hotkey of a preset, a device or the overlay is being recorded.
 fn capturing() -> bool {
-    CAPTURE.load(Ordering::Relaxed) != usize::MAX || capturing_device().is_some()
+    CAPTURE.load(Ordering::Relaxed) != usize::MAX || capturing_device().is_some() || CAPTURE_OVERLAY.load(Ordering::Relaxed)
 }
 
 fn stop_capture() {
     CAPTURE.store(usize::MAX, Ordering::Relaxed);
     CAPTURE_DEVICE.lock().unwrap().take();
+    CAPTURE_OVERLAY.store(false, Ordering::Relaxed);
 }
 /// Preset being renamed in place (usize::MAX = none) and the text typed so far.
 static RENAME: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -701,6 +705,8 @@ enum MenuItem {
 enum MenuTarget {
     Preset(usize),
     Device(String),
+    /// The battery overlay's show/hide hotkey.
+    Overlay,
 }
 
 impl MenuTarget {
@@ -709,6 +715,7 @@ impl MenuTarget {
         match self {
             MenuTarget::Preset(i) => cfg.presets.get(*i).and_then(|p| p.hotkey),
             MenuTarget::Device(id) => cfg.devices.get(id).and_then(|d| d.hotkey),
+            MenuTarget::Overlay => cfg.overlay_hotkey,
         }
     }
 
@@ -716,7 +723,23 @@ impl MenuTarget {
         match self {
             MenuTarget::Preset(i) => crate::set_preset_hotkey(*i, hotkey),
             MenuTarget::Device(id) => crate::set_device_hotkey(id, hotkey),
+            MenuTarget::Overlay => crate::set_overlay_hotkey(hotkey),
         }
+    }
+}
+
+/// Opens the panel with the hotkey menu of the battery overlay (from the tray menu).
+pub fn open_overlay_hotkey_menu() {
+    unsafe {
+        if flyout_hwnd().is_none() {
+            if let Err(e) = open() {
+                crate::log(&format!("panel: {e}"));
+                return;
+            }
+        }
+        stop_capture();
+        open_menu(MenuTarget::Overlay, PAD + 40.0, 160.0);
+        invalidate();
     }
 }
 
@@ -829,6 +852,7 @@ unsafe fn menu_action(hwnd: HWND, target: MenuTarget, item: MenuItem) {
             match target {
                 MenuTarget::Preset(i) => CAPTURE.store(i, Ordering::Relaxed),
                 MenuTarget::Device(id) => *CAPTURE_DEVICE.lock().unwrap() = Some(id),
+                MenuTarget::Overlay => CAPTURE_OVERLAY.store(true, Ordering::Relaxed),
             }
             SetForegroundWindow(hwnd);
         }
@@ -856,7 +880,8 @@ unsafe fn menu_action(hwnd: HWND, target: MenuTarget, item: MenuItem) {
 unsafe fn capture_key(vk: u32) -> bool {
     let i = CAPTURE.load(Ordering::Relaxed);
     let device = capturing_device();
-    if i == usize::MAX && device.is_none() {
+    let overlay = CAPTURE_OVERLAY.load(Ordering::Relaxed);
+    if i == usize::MAX && device.is_none() && !overlay {
         return false;
     }
     let down = |k: u16| GetKeyState(k as i32) < 0;
@@ -888,6 +913,7 @@ unsafe fn capture_key(vk: u32) -> bool {
         _ => Some(crate::config::Hotkey { mods, vk }),
     };
     match device {
+        _ if overlay => crate::set_overlay_hotkey(hotkey),
         Some(id) => crate::set_device_hotkey(&id, hotkey),
         None => crate::set_preset_hotkey(i, hotkey),
     }
@@ -1672,7 +1698,7 @@ impl Flyout {
         // Global presets.
         self.text(rt, tr!("Пресеты", "Presets"), &f.label, R { x: PAD, y: PRESET_LABEL_Y, w: 120.0, h: 20.0 }, t.text);
         let capture = CAPTURE.load(Ordering::Relaxed);
-        let (hint, hint_color) = if capture != usize::MAX {
+        let (hint, hint_color) = if capture != usize::MAX || CAPTURE_OVERLAY.load(Ordering::Relaxed) {
             (tr!("Нажмите сочетание · Del — убрать · Esc", "Press a shortcut · Del — remove · Esc"), t.accent)
         } else if renaming_any() {
             (tr!("Enter — сохранить · Esc — отмена", "Enter — save · Esc — cancel"), t.accent)
@@ -2080,6 +2106,7 @@ impl Flyout {
                 let name = crate::config().display_name(id);
                 (name, target.hotkey(), false)
             }
+            MenuTarget::Overlay => (tr!("Индикатор батарей", "Battery overlay").to_string(), target.hotkey(), false),
         };
         let t = &self.theme;
         let f = &self.fmt;
@@ -2189,13 +2216,14 @@ impl Flyout {
         }
         // Divider and the hotkey section title.
         self.fill(rt, R { x: panel.x, y: line_after_actions + MENU_GAP / 2.0 - 0.5, w: panel.w, h: 1.0 }, 0.0, t.stroke);
-        self.text(
-            rt,
-            tr!("Горячая клавиша", "Hotkey"),
-            &f.sub,
-            R { x: panel.x + 14.0, y: line_after_actions + MENU_GAP, w: panel.w - 28.0, h: MENU_LABEL_H - 4.0 },
-            t.text2,
-        );
+        // The overlay's saved key may be held by another program: say so in place of the title.
+        let taken = target == MenuTarget::Overlay && hotkey.is_some() && crate::OVERLAY_HOTKEY_TAKEN.load(Ordering::Relaxed);
+        let (title, title_color) = if taken {
+            (tr!("Клавишу занимает другая программа", "Key is taken by another program"), t.accent)
+        } else {
+            (tr!("Горячая клавиша", "Hotkey"), t.text2)
+        };
+        self.text(rt, title, &f.sub, R { x: panel.x + 14.0, y: line_after_actions + MENU_GAP, w: panel.w - 28.0, h: MENU_LABEL_H - 4.0 }, title_color);
     }
 }
 
@@ -2250,6 +2278,7 @@ pub fn snapshot(path: &str, dark: Option<bool>, scale: f32, card: usize, zone: u
                 open_menu(MenuTarget::Device(id), PAD + 40.0, 160.0);
             }
         }
+        Some("overlay") => open_menu(MenuTarget::Overlay, PAD + 40.0, 160.0),
         Some(_) => open_menu(MenuTarget::Preset(0), PAD + 40.0, Layout::new().lower_y() + PRESET_Y + 20.0),
         None => {}
     }

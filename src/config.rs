@@ -54,6 +54,83 @@ fn effect_named(name: &str) -> Effect {
     known.unwrap_or(Effect::Static)
 }
 
+/// How the battery overlay is laid out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OverlayStyle {
+    /// Icon, name, percent and a level bar per device.
+    #[default]
+    Full,
+    /// Icon and percent of every device side by side.
+    Row,
+    /// Icon and percent, one device per line.
+    Column,
+}
+
+impl OverlayStyle {
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "full" => Some(Self::Full),
+            "row" => Some(Self::Row),
+            "column" => Some(Self::Column),
+            _ => None,
+        }
+    }
+
+    /// The next style in the cycle Full, Row, Column.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Full => Self::Row,
+            Self::Row => Self::Column,
+            Self::Column => Self::Full,
+        }
+    }
+
+    fn is_default(&self) -> bool {
+        *self == Self::Full
+    }
+}
+
+/// A style this version doesn't know (or a value of another type) reads as Full: it must never make
+/// the settings file unreadable.
+fn lenient_overlay_style<'de, D: serde::Deserializer<'de>>(d: D) -> Result<OverlayStyle, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Name(String),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Raw::deserialize(d)? {
+        Raw::Name(s) => OverlayStyle::parse(&s).unwrap_or_default(),
+        Raw::Other(_) => OverlayStyle::Full,
+    })
+}
+
+/// Where the user put the battery overlay: a corner of the plate and the screen point it sits on (pixels).
+/// `right`/`bottom` say which corner is kept: the one nearest the screen edges, so a plate that gets
+/// larger (more devices, another style) grows away from that edge and stays on the screen.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub struct OverlayPos {
+    pub x: i32,
+    pub y: i32,
+    pub right: bool,
+    pub bottom: bool,
+}
+
+/// A garbled position reads as unset: it must never make the settings file unreadable.
+fn lenient_overlay_pos<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<OverlayPos>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Pos(OverlayPos),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Raw::deserialize(d)? {
+        Raw::Pos(p) => Some(p),
+        Raw::Other(_) => None,
+    })
+}
+
 fn full_brightness() -> u8 {
     100
 }
@@ -323,6 +400,15 @@ pub struct Config {
     /// Top-left corner (screen pixels) of the pinned panel after the user dragged it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub panel_pos: Option<(i32, i32)>,
+    /// Hotkey that shows and hides the battery overlay.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overlay_hotkey: Option<Hotkey>,
+    /// Layout of the battery overlay; an unknown value reads as Full.
+    #[serde(deserialize_with = "lenient_overlay_style", skip_serializing_if = "OverlayStyle::is_default")]
+    pub overlay_style: OverlayStyle,
+    /// Where the overlay was dragged to; not set = top-right of the monitor under the cursor.
+    #[serde(deserialize_with = "lenient_overlay_pos", skip_serializing_if = "Option::is_none")]
+    pub overlay_pos: Option<OverlayPos>,
     pub presets: Vec<Preset>,
     /// Programs whose "it drives the lighting too" warning the user hid (`conflicts::App::key`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -350,6 +436,9 @@ impl Default for Config {
             skipped_version: None,
             language: None,
             panel_pos: None,
+            overlay_hotkey: None,
+            overlay_style: OverlayStyle::Full,
+            overlay_pos: None,
             presets: Vec::new(),
             ignored_apps: Vec::new(),
             per_key: false,
@@ -708,6 +797,22 @@ impl Config {
 }
 
 impl Config {
+    /// A hotkey belongs to one preset, device or the overlay only: the others lose it.
+    pub fn take_hotkey(&mut self, hotkey: Option<Hotkey>) {
+        if hotkey.is_none() {
+            return;
+        }
+        for p in self.presets.iter_mut().filter(|p| p.hotkey == hotkey) {
+            p.hotkey = None;
+        }
+        for d in self.devices.values_mut().filter(|d| d.hotkey == hotkey) {
+            d.hotkey = None;
+        }
+        if self.overlay_hotkey == hotkey {
+            self.overlay_hotkey = None;
+        }
+    }
+
     pub fn dir() -> PathBuf {
         let base = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
         base.join("rgbtray")
@@ -1242,6 +1347,111 @@ mod tests {
         cfg.devices.insert("naga-A".into(), DeviceConfig { name: "a".into(), ..DeviceConfig::default() });
         let v = cfg.sorted(ids(&["asus", "naga-B", "logitech-X", "naga-A"]));
         assert_eq!(v, ids(&["logitech-X", "naga-A", "naga-B", "asus"]));
+    }
+
+    #[test]
+    fn overlay_hotkey_round_trip_and_absent() {
+        let mut cfg = Config::default();
+        assert!(!toml::to_string(&cfg).unwrap().contains("overlay_hotkey"));
+        cfg.overlay_hotkey = Some(Hotkey { mods: 0x3, vk: 0x42 });
+        let back: Config = toml::from_str(&toml::to_string(&cfg).unwrap()).unwrap();
+        assert!(back.overlay_hotkey == Some(Hotkey { mods: 0x3, vk: 0x42 }));
+        let old: Config = toml::from_str("brightness = 50\n").unwrap();
+        assert!(old.overlay_hotkey.is_none());
+    }
+
+    #[test]
+    fn overlay_style_lenient_round_trip_and_absent() {
+        let load = |s: &str| toml::from_str::<Config>(s).unwrap().overlay_style;
+        // Absent, the default and unknown or garbled values read as Full.
+        assert_eq!(load("brightness = 50\n"), OverlayStyle::Full);
+        assert_eq!(load("overlay_style = \"future\"\n"), OverlayStyle::Full);
+        assert_eq!(load("overlay_style = 7\n"), OverlayStyle::Full);
+        assert_eq!(load("overlay_style = [1]\n"), OverlayStyle::Full);
+        assert_eq!(load("overlay_style = \"column\"\nfuture_field = 1\n"), OverlayStyle::Column);
+        // Full is not written; the others survive a round trip.
+        let mut cfg = Config::default();
+        assert!(!toml::to_string(&cfg).unwrap().contains("overlay_style"));
+        for style in [OverlayStyle::Row, OverlayStyle::Column] {
+            cfg.overlay_style = style;
+            let text = toml::to_string(&cfg).unwrap();
+            assert!(text.contains("overlay_style"));
+            assert_eq!(toml::from_str::<Config>(&text).unwrap().overlay_style, style);
+        }
+        // The cycle visits every style and returns.
+        assert_eq!(OverlayStyle::Full.next().next().next(), OverlayStyle::Full);
+        assert_ne!(OverlayStyle::Full.next(), OverlayStyle::Full.next().next());
+    }
+
+    #[test]
+    fn overlay_pos_round_trip_absent_and_garbled() {
+        let load = |s: &str| toml::from_str::<Config>(s).unwrap();
+        assert!(load("brightness = 50\n").overlay_pos.is_none());
+        let mut cfg = Config::default();
+        assert!(!toml::to_string(&cfg).unwrap().contains("overlay_pos"));
+        let pos = OverlayPos { x: -1500, y: 40, right: true, bottom: false };
+        cfg.overlay_pos = Some(pos);
+        cfg.brightness = 42;
+        let text = toml::to_string(&cfg).unwrap();
+        let back = load(&text);
+        assert!(back.overlay_pos == Some(pos) && back.brightness == 42);
+        // Garbled values read as unset and keep the other settings.
+        for bad in ["overlay_pos = 7\n", "overlay_pos = \"x\"\n", "[overlay_pos]\nx = \"a\"\n", "[overlay_pos]\nx = 1\n"] {
+            let c = load(&format!("brightness = 42\n{bad}"));
+            assert!(c.overlay_pos.is_none() && c.brightness == 42, "{bad}");
+        }
+        // A newer version's extra field inside the position is ignored.
+        assert!(load("[overlay_pos]\nx = 1\ny = 2\nright = false\nbottom = true\nfuture = 3\n").overlay_pos.is_some());
+    }
+
+    #[test]
+    fn take_hotkey_moves_between_owners() {
+        let hk = Some(Hotkey { mods: 0x2, vk: 0x4C });
+        let mut cfg = Config::default();
+        cfg.presets.push(Preset { hotkey: hk, ..cfg.snapshot("P".into()) });
+        cfg.devices.insert("tuya-A".into(), DeviceConfig { hotkey: hk, ..DeviceConfig::default() });
+        // To the overlay: the preset and the device lose it.
+        cfg.take_hotkey(hk);
+        cfg.overlay_hotkey = hk;
+        assert!(cfg.presets[0].hotkey.is_none() && cfg.devices["tuya-A"].hotkey.is_none());
+        // From the overlay to a device.
+        cfg.take_hotkey(hk);
+        cfg.devices.get_mut("tuya-A").unwrap().hotkey = hk;
+        assert!(cfg.overlay_hotkey.is_none() && cfg.devices["tuya-A"].hotkey == hk);
+        // None changes nothing.
+        cfg.overlay_hotkey = Some(Hotkey { mods: 0, vk: 0x7C });
+        cfg.take_hotkey(None);
+        assert!(cfg.overlay_hotkey.is_some() && cfg.devices["tuya-A"].hotkey == hk);
+    }
+
+    #[test]
+    fn take_hotkey_keeps_other_combinations() {
+        let (a, b) = (Some(Hotkey { mods: 0x2, vk: 0x4C }), Some(Hotkey { mods: 0x2 | 0x4, vk: 0x4C }));
+        let mut cfg = Config::default();
+        cfg.presets.push(Preset { hotkey: b, ..cfg.snapshot("P".into()) });
+        cfg.devices.insert("tuya-A".into(), DeviceConfig { hotkey: b, ..DeviceConfig::default() });
+        cfg.overlay_hotkey = b;
+        cfg.take_hotkey(a);
+        assert!(cfg.presets[0].hotkey == b && cfg.devices["tuya-A"].hotkey == b && cfg.overlay_hotkey == b);
+    }
+
+    #[test]
+    fn unknown_overlay_style_keeps_the_other_settings() {
+        // A style of a newer version must not cost the user the rest of the file.
+        let text = "brightness = 42\noverlay_style = \"grid\"\nfuture_field = 1\n[overlay_hotkey]\nmods = 3\nvk = 66\n";
+        let cfg = good_settings(text).unwrap();
+        assert!(cfg.overlay_style == OverlayStyle::Full && cfg.brightness == 42);
+        assert!(cfg.overlay_hotkey == Some(Hotkey { mods: 3, vk: 0x42 }));
+    }
+
+    #[test]
+    fn overlay_hotkey_with_unknown_fields_loads() {
+        // A config of a newer version: the overlay key plus a field this version does not know.
+        let text = "brightness = 50\nfuture_field = 1\n[overlay_hotkey]\nmods = 3\nvk = 66\n";
+        let cfg = good_settings(text).unwrap();
+        assert!(cfg.overlay_hotkey == Some(Hotkey { mods: 3, vk: 0x42 }));
+        // Garbled value: an error (the loader then falls back to the last good copy), never a panic.
+        assert!(good_settings("[overlay_hotkey]\nmods = \"x\"\n").is_err());
     }
 
     #[test]

@@ -11,6 +11,7 @@ mod editor;
 mod hid;
 mod installer;
 mod keymap;
+mod overlay;
 mod services;
 mod traymenu;
 mod ui;
@@ -620,20 +621,30 @@ const MAX_HOTKEYS: i32 = 64;
 /// Devices with a hotkey, in the order of their hotkey ids (`HOTKEY_BASE + MAX_HOTKEYS + i`).
 static DEVICE_HOTKEYS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-/// (Re)registers the global hotkeys of all presets (ids from HOTKEY_BASE) and devices (after them).
+/// The battery overlay's hotkey, after those of presets and devices.
+const OVERLAY_HOTKEY_ID: i32 = 2 * MAX_HOTKEYS;
+
+/// The overlay's saved combination could not be registered (another program holds it).
+static OVERLAY_HOTKEY_TAKEN: AtomicBool = AtomicBool::new(false);
+
+/// (Re)registers the global hotkeys of all presets (ids from HOTKEY_BASE), devices (after them) and the overlay.
 fn register_hotkeys() {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, MOD_NOREPEAT};
     let hwnd = HWND_MAIN.load(Ordering::Relaxed) as HWND;
     unsafe {
-        for id in 0..2 * MAX_HOTKEYS {
+        for id in 0..=OVERLAY_HOTKEY_ID {
             UnregisterHotKey(hwnd, HOTKEY_BASE + id);
         }
         let cfg = config();
         let register = |id: i32, h: config::Hotkey, what: &str| {
-            if RegisterHotKey(hwnd, HOTKEY_BASE + id, h.mods | MOD_NOREPEAT, h.vk) == 0 {
+            let ok = RegisterHotKey(hwnd, HOTKEY_BASE + id, h.mods | MOD_NOREPEAT, h.vk) != 0;
+            if !ok {
                 log(&format!("hotkey {} for \"{what}\" is taken by another app", h.label()));
             }
+            ok
         };
+        let overlay_ok = cfg.overlay_hotkey.is_none_or(|h| register(OVERLAY_HOTKEY_ID, h, "battery overlay"));
+        OVERLAY_HOTKEY_TAKEN.store(!overlay_ok, Ordering::Relaxed);
         for (i, p) in cfg.presets.iter().enumerate().take(MAX_HOTKEYS as usize) {
             if let Some(h) = p.hotkey {
                 register(i as i32, h, &p.name);
@@ -653,23 +664,19 @@ fn device_hotkeys(cfg: &Config) -> Vec<(String, config::Hotkey)> {
     cfg.devices.iter().filter_map(|(id, d)| Some((id.clone(), d.hotkey?))).take(MAX_HOTKEYS as usize).collect()
 }
 
-/// A hotkey belongs to one preset or device only: the others lose it.
-fn take_hotkey(cfg: &mut Config, hotkey: Option<config::Hotkey>) {
-    if hotkey.is_none() {
-        return;
-    }
-    for p in cfg.presets.iter_mut().filter(|p| p.hotkey == hotkey) {
-        p.hotkey = None;
-    }
-    for d in cfg.devices.values_mut().filter(|d| d.hotkey == hotkey) {
-        d.hotkey = None;
-    }
-}
-
 fn set_device_hotkey(id: &str, hotkey: Option<config::Hotkey>) {
     let mut cfg = config();
-    take_hotkey(&mut cfg, hotkey);
+    cfg.take_hotkey(hotkey);
     cfg.device_mut(id).hotkey = hotkey;
+    cfg.save();
+    drop(cfg);
+    register_hotkeys();
+}
+
+fn set_overlay_hotkey(hotkey: Option<config::Hotkey>) {
+    let mut cfg = config();
+    cfg.take_hotkey(hotkey);
+    cfg.overlay_hotkey = hotkey;
     cfg.save();
     drop(cfg);
     register_hotkeys();
@@ -742,7 +749,7 @@ fn rename_preset(i: usize, name: &str) {
 
 fn set_preset_hotkey(i: usize, hotkey: Option<config::Hotkey>) {
     let mut cfg = config();
-    take_hotkey(&mut cfg, hotkey);
+    cfg.take_hotkey(hotkey);
     if let Some(p) = cfg.presets.get_mut(i) {
         p.hotkey = hotkey;
     }
@@ -1348,6 +1355,15 @@ fn toggle_check_updates() {
     post(WM_APPLIED);
 }
 
+/// Switches the battery overlay to its next style, remembers it and re-lays the plate out if it is up.
+fn cycle_overlay_style() {
+    let mut cfg = config();
+    cfg.overlay_style = cfg.overlay_style.next();
+    cfg.save();
+    drop(cfg);
+    overlay::refresh();
+}
+
 /// Switches whether the lighting dims and goes off with the display.
 fn toggle_follow_display() {
     let mut cfg = config();
@@ -1571,6 +1587,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             SetTimer(hwnd, TIMER_REAPPLY, 2000, None);
             1
         }
+        // Windows switched light/dark: the overlay plate takes the new colours.
+        WM_SETTINGCHANGE => {
+            overlay::refresh();
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_POWERBROADCAST => {
             if wparam == PBT_APMRESUMEAUTOMATIC as usize {
                 schedule_wake_reapply(hwnd);
@@ -1594,7 +1615,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_HOTKEY => {
             let id = wparam as i32 - HOTKEY_BASE;
-            if (0..MAX_HOTKEYS).contains(&id) {
+            if id == OVERLAY_HOTKEY_ID {
+                overlay::toggle();
+            } else if (0..MAX_HOTKEYS).contains(&id) {
                 apply_preset(id as usize);
                 ui::refresh();
             } else if let Some(device) = usize::try_from(id - MAX_HOTKEYS).ok().and_then(|i| DEVICE_HOTKEYS.lock().unwrap().get(i).cloned()) {
@@ -1630,6 +1653,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             check_batteries();
             update_tray(hwnd, NIM_MODIFY);
             ui::refresh();
+            overlay::refresh();
             0
         }
         WM_DESTROY => {
@@ -1751,7 +1775,17 @@ fn main() {
             *CONFLICTS.lock().unwrap() = conflicts::find(&running, &present, &[]);
         }
         *PRESENT.lock().unwrap() = present;
-        *STATUS.lock().unwrap() = d.found.iter().filter_map(|f| f.dev.battery().map(|b| (f.id.clone(), b))).collect();
+        let mut status: Vec<(String, devices::Battery)> = d.found.iter().filter_map(|f| f.dev.battery().map(|b| (f.id.clone(), b))).collect();
+        // RGBTRAY_DEMO_BATTERY=logitech-DEMO1:82,naga-DEMO2:8,asus-DEMO3:55:c: made-up levels (c = charging).
+        if let Ok(spec) = std::env::var("RGBTRAY_DEMO_BATTERY") {
+            for item in spec.split(',') {
+                let mut p = item.trim().split(':');
+                if let (Some(id), Some(percent)) = (p.next(), p.next().and_then(|v| v.parse::<u8>().ok())) {
+                    status.push((id.to_string(), devices::Battery { percent, charging: p.next() == Some("c") }));
+                }
+            }
+        }
+        *STATUS.lock().unwrap() = status;
         // Optional: selected card and zone of the panel.
         let num = |k: usize| args.get(i + k).and_then(|s| s.parse().ok()).unwrap_or(0);
         let res = if path.contains("editor") {
@@ -1762,6 +1796,8 @@ fn main() {
             traymenu::snapshot(&path, dark, 1.5)
         } else if path.contains("alert") {
             alert::snapshot(&path, dark, 1.5, num(3) as u8)
+        } else if path.contains("overlay") {
+            overlay::snapshot(&path, dark, 1.5)
         } else {
             ui::snapshot(&path, dark, 1.5, num(3), num(4))
         };
