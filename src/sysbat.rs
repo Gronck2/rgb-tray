@@ -365,7 +365,9 @@ fn refresh() -> bool {
             *last = errors;
         }
     }
-    let found = devices(join(&nodes));
+    let mut found = devices(join(&nodes));
+    // Wireless mice and headsets Windows has no level for: Logitech ones over HID++.
+    found.extend(crate::devices::logitech::other_batteries());
     let mut cur = SYSTEM.lock().unwrap();
     let changed = *cur != found;
     *cur = found;
@@ -395,7 +397,7 @@ pub fn refresh_and_notify() {
 }
 
 /// `--system-batteries <out>`: every Bluetooth node with what Windows holds for it, and what the app makes of it.
-/// It is for finding out why a device does not show up; it only reads properties.
+/// It is for finding out why a device does not show up; it only reads properties (and Logitech batteries over HID++).
 pub fn report() -> String {
     let (nodes, errors) = win::read_nodes();
     let yn = |v: Option<bool>| v.map_or("unknown", |b| if b { "yes" } else { "no" });
@@ -426,6 +428,11 @@ pub fn report() -> String {
             (false, None) => "not connected, no level: hidden".into(),
         };
         out += &format!("  {}  {}  {:?}  {shown}\n", j.id, j.name, j.class);
+    }
+    // Feature lookups and battery reads over HID++, nothing that changes a device.
+    out += "\nLogitech HID++ devices the app doesn't light:\n";
+    for d in crate::devices::logitech::other_batteries() {
+        out += &format!("  {}  {}  {:?}  listed at {}%\n", d.id, d.name, d.class, d.percent);
     }
     out
 }

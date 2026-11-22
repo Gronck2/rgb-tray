@@ -386,6 +386,97 @@ impl Device for Logitech {
     }
 }
 
+// ---------------------------------------------------------------- batteries of other devices
+
+/// Software id of the battery reads of devices the app doesn't light.
+const SW_ID_OTHERS: u8 = 0x0D;
+const FEATURE_NAME: u16 = 0x0005;
+const FEATURE_UNIFIED_BATTERY: u16 = 0x1004;
+const FEATURE_ADC: u16 = 0x1F20;
+/// The HID++ collection of Logitech headsets (G535: `046D:0AC4`, its own dongle, device index 0xFF).
+const HEADSET_PAGE: (u16, u16) = (0xFF43, 0x0202);
+
+/// What a HID++ device says its type is (0x0005 getDeviceType), headset for the headset collection.
+fn class_of(kind: Option<u8>, headset: bool) -> crate::sysbat::SysClass {
+    use crate::sysbat::SysClass;
+    match kind {
+        Some(0 | 2) => SysClass::Keyboard,
+        Some(3..=5) => SysClass::Mouse,
+        Some(8) => SysClass::Headset,
+        Some(11 | 12) => SysClass::Gamepad,
+        _ if headset => SysClass::Headset,
+        _ => SysClass::Other,
+    }
+}
+
+/// The charge from a 0x1001 (voltage), 0x1004 (unified battery) or 0x1F20 (ADC voltage) answer.
+fn percent_of(feature: u16, r: &[u8; 20]) -> Option<u8> {
+    match feature {
+        FEATURE_UNIFIED_BATTERY => (r[4] <= 100).then_some(r[4]),
+        // 0x1F20: bit 0 of the flags = a battery is there (as Solaar reads it).
+        FEATURE_ADC if r[6] & 0x01 == 0 => None,
+        _ => Some(percent_from_millivolts(u16::from_be_bytes([r[4], r[5]]))),
+    }
+}
+
+/// The name a HID++ device gives (0x0005: length, then up to 16 characters per request).
+fn name_of(hid: &Hid, dev: u8, feat: u8) -> Option<String> {
+    let len = request_tries(hid, dev, SW_ID_OTHERS, feat, 0, &[], 1).ok()?[4] as usize;
+    let mut name = Vec::new();
+    while name.len() < len.min(64) {
+        let r = request_tries(hid, dev, SW_ID_OTHERS, feat, 1, &[name.len() as u8], 1).ok()?;
+        let part: Vec<u8> = r[4..].iter().copied().take(len - name.len()).take_while(|&b| b != 0).collect();
+        if part.is_empty() {
+            break;
+        }
+        name.extend(part);
+    }
+    let name = short_name(String::from_utf8_lossy(&name).trim());
+    (!name.is_empty()).then_some(name)
+}
+
+/// "G502 LIGHTSPEED Wireless Gaming Mouse" → "G502 LIGHTSPEED": the generic words at the end don't fit the overlay
+/// and say nothing its icon doesn't. The first word always stays.
+fn short_name(name: &str) -> String {
+    const GENERIC: [&str; 6] = ["wireless", "gaming", "mouse", "headset", "keyboard", "receiver"];
+    let mut words: Vec<&str> = name.split_whitespace().collect();
+    while words.len() > 1 && words.last().is_some_and(|w| GENERIC.contains(&w.to_lowercase().as_str())) {
+        words.pop();
+    }
+    words.join(" ")
+}
+
+/// One device on a HID++ collection, if it has a battery and isn't a keyboard the app drives.
+fn other_battery(hid: &Hid, info: &hid::HidInfo, dev: u8, headset: bool) -> Option<crate::sysbat::SysDevice> {
+    let lookup = |f: u16| request_within(hid, dev, SW_ID_OTHERS, 0, 0, &f.to_be_bytes(), LOOKUP_WAIT).ok().map(|r| r[4]).filter(|&i| i != 0);
+    // A keyboard with per-key colors is the app's own (its battery is in the panel).
+    if !headset && lookup(FEATURE_PER_KEY).is_some() {
+        return None;
+    }
+    let (feature, index) = [FEATURE_UNIFIED_BATTERY, FEATURE_BATTERY_VOLTAGE, FEATURE_ADC].into_iter().find_map(|f| Some((f, lookup(f)?)))?;
+    let percent = percent_of(feature, &request_tries(hid, dev, SW_ID_OTHERS, index, if feature == FEATURE_UNIFIED_BATTERY { 1 } else { 0 }, &[], 1).ok()?)?;
+    let name_feat = lookup(FEATURE_NAME);
+    let name = name_feat.and_then(|f| name_of(hid, dev, f)).unwrap_or_else(|| if headset { "Logitech headset".into() } else { "Logitech device".into() });
+    let kind = name_feat.and_then(|f| request_tries(hid, dev, SW_ID_OTHERS, f, 2, &[], 1).ok()).map(|r| r[4]);
+    Some(crate::sysbat::SysDevice { id: format!("system-{}{dev:02X}", super::path_hash(&info.path)), name, class: class_of(kind, headset), percent })
+}
+
+/// Batteries of Logitech HID++ devices the app doesn't light: mice on a receiver or cable, headsets. Only feature
+/// lookups and battery and name reads; for the system devices of the overlay (`sysbat`), read on its worker thread.
+pub fn other_batteries() -> Vec<crate::sysbat::SysDevice> {
+    let mut out = Vec::new();
+    for info in hid::enumerate(VID) {
+        let headset = (info.usage_page, info.usage) == HEADSET_PAGE;
+        if !headset && (info.usage_page, info.usage) != (0xFF00, 0x0002) {
+            continue;
+        }
+        let Some(hid) = Hid::open(&info.path, true, true) else { continue };
+        let devs: &[u8] = if RECEIVER_PIDS.contains(&info.pid) { &[1, 2] } else { &[0xFF] };
+        out.extend(devs.iter().filter_map(|&dev| other_battery(&hid, &info, dev, headset)));
+    }
+    out
+}
+
 /// Sends a long HID++ 2.0 request and waits for its response. A sleeping wireless keyboard
 /// drops the packet that wakes it up, so unanswered requests are retried.
 ///
@@ -560,5 +651,38 @@ mod tests {
             assert!(p <= last, "{mv} mV: {p}% after {last}%");
             last = p;
         }
+    }
+
+    #[test]
+    fn other_device_battery_answers() {
+        let answer = |b: [u8; 3]| {
+            let mut r = [0u8; 20];
+            r[4..7].copy_from_slice(&b);
+            r
+        };
+        // G535 over 0x1F20: 4073 mV, battery there, not charging (read 22.11.2026).
+        assert_eq!(percent_of(FEATURE_ADC, &answer([0x0F, 0xE9, 0x01])), Some(91));
+        assert_eq!(percent_of(FEATURE_ADC, &answer([0x0F, 0xE9, 0x00])), None);
+        // G502 LIGHTSPEED over 0x1001: 3920 mV.
+        assert_eq!(percent_of(FEATURE_BATTERY_VOLTAGE, &answer([0x0F, 0x50, 0x00])), Some(70));
+        assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &answer([55, 4, 0])), Some(55));
+        assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &answer([200, 0, 0])), None);
+    }
+
+    #[test]
+    fn other_device_classes() {
+        use crate::sysbat::SysClass;
+        assert_eq!(class_of(Some(3), false), SysClass::Mouse);
+        assert_eq!(class_of(Some(8), false), SysClass::Headset);
+        assert_eq!(class_of(None, true), SysClass::Headset);
+        assert_eq!(class_of(None, false), SysClass::Other);
+    }
+
+    #[test]
+    fn generic_words_leave_the_name() {
+        assert_eq!(short_name("G502 LIGHTSPEED Wireless Gaming Mouse"), "G502 LIGHTSPEED");
+        assert_eq!(short_name("G535 Wireless Gaming Headset"), "G535");
+        assert_eq!(short_name("Wireless Mouse"), "Wireless");
+        assert_eq!(short_name("PRO X  Headset "), "PRO X");
     }
 }
