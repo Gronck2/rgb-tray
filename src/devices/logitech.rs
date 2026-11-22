@@ -461,12 +461,37 @@ fn short_name(name: &str) -> String {
     words.join(" ")
 }
 
-/// One device on a HID++ collection: Ok(None) when there is none with a battery there (or it is a keyboard, which the
-/// app's own drivers cover), Err when it didn't answer (asleep, off, out of range, or the receiver busy with another request).
+/// What one slot of a HID++ collection turned out to be.
+enum Other {
+    Device(crate::sysbat::SysDevice),
+    /// A keyboard (the app's own drivers cover it) or a device without a battery feature: asked no more while plugged in.
+    NotOurs,
+    /// A battery device whose level can't be read now (a headset off behind its dongle): left out this pass, asked again.
+    NoLevel,
+}
+
+/// A keyboard (the G915 or any other) is not for this list.
+fn is_keyboard(kind: Option<u8>) -> bool {
+    matches!(kind, Some(0 | 2))
+}
+
+/// One device on a HID++ collection. Its type (0x0005) is read first, so a keyboard gets no more than that. Err when it
+/// didn't answer (asleep, off, out of range, an empty receiver slot, or the receiver busy with another request).
 /// Never called for a slot the app drives (`other_batteries` skips those before any request).
-fn other_battery(hid: &Hid, info: &hid::HidInfo, dev: u8, headset: bool, sw: u8) -> Result<Option<crate::sysbat::SysDevice>, String> {
+fn other_battery(hid: &Hid, info: &hid::HidInfo, dev: u8, headset: bool, sw: u8) -> Result<Other, String> {
     // The feature's index, None when the device hasn't it.
-    let lookup = |f: u16| request_tries(hid, dev, sw, 0, 0, &f.to_be_bytes(), 2).map(|r| Some(r[4]).filter(|&i| i != 0));
+    let index_of = |r: [u8; 20]| Some(r[4]).filter(|&i| i != 0);
+    let lookup = |f: u16| request_tries(hid, dev, sw, 0, 0, &f.to_be_bytes(), 2).map(index_of);
+    // One short try for the first request of a silent slot (an empty or sleeping one: a retry would wake a mouse).
+    let name_feat = request_within(hid, dev, sw, 0, 0, &FEATURE_NAME.to_be_bytes(), LOOKUP_WAIT).map(index_of)?;
+    let kind = name_feat.and_then(|f| request_tries(hid, dev, sw, f, 2, &[], 1).ok()).map(|r| r[4]);
+    // On a receiver slot an unreadable type could be a keyboard: don't list it.
+    if kind.is_none() && dev != 0xFF {
+        return Err("type unreadable".into());
+    }
+    if is_keyboard(kind) {
+        return Ok(Other::NotOurs);
+    }
     let mut battery = None;
     for f in [FEATURE_UNIFIED_BATTERY, FEATURE_BATTERY_VOLTAGE, FEATURE_ADC] {
         if let Some(index) = lookup(f)? {
@@ -474,21 +499,20 @@ fn other_battery(hid: &Hid, info: &hid::HidInfo, dev: u8, headset: bool, sw: u8)
             break;
         }
     }
-    let Some((feature, index)) = battery else { return Ok(None) };
+    let Some((feature, index)) = battery else { return Ok(Other::NotOurs) };
     let unified = feature == FEATURE_UNIFIED_BATTERY;
     // 0x1004 getCapabilities (function 0), byte 5 = flags: tells whether getStatus carries a state of charge.
     let caps = if unified { request_tries(hid, dev, sw, index, 0, &[], 1).ok().map(|r| r[5]) } else { None };
     let answer = request_tries(hid, dev, sw, index, if unified { 1 } else { 0 }, &[], 2)?;
-    let Some(percent) = percent_of(feature, &answer, caps) else { return Ok(None) };
-    // The name and type are nice to have: a failed read doesn't drop the level.
-    let name_feat = lookup(FEATURE_NAME).ok().flatten();
+    let Some(percent) = percent_of(feature, &answer, caps) else { return Ok(Other::NoLevel) };
+    // The name is nice to have: a failed read doesn't drop the level.
     let name = name_feat.and_then(|f| name_of(hid, dev, sw, f)).unwrap_or_else(|| if headset { "Logitech headset".into() } else { "Logitech device".into() });
-    let kind = name_feat.and_then(|f| request_tries(hid, dev, sw, f, 2, &[], 1).ok()).map(|r| r[4]);
-    // A keyboard (the G915 or any other) is not for this list.
-    if matches!(kind, Some(0 | 2)) {
-        return Ok(None);
-    }
-    Ok(Some(crate::sysbat::SysDevice { id: format!("system-{}{dev:02X}", super::path_hash(&info.path)), name, class: class_of(kind, headset), percent }))
+    Ok(Other::Device(crate::sysbat::SysDevice {
+        id: format!("system-{}{dev:02X}", super::path_hash(&info.path)),
+        name,
+        class: class_of(kind, headset),
+        percent,
+    }))
 }
 
 /// How long a device that stopped answering keeps its last level while its receiver or dongle is still plugged in:
@@ -541,9 +565,13 @@ pub fn other_batteries(sw: u8) -> Vec<crate::sysbat::SysDevice> {
             let hid = hid.get_or_insert_with(|| Hid::open(&info.path, true, true));
             let read = hid.as_ref().ok_or_else(|| "cannot open".to_string()).and_then(|h| other_battery(h, info, dev, headset, sw));
             let at = last.iter().position(|(p, d, ..)| *p == info.path && *d == dev);
-            if matches!(read, Ok(None)) {
+            if matches!(read, Ok(Other::NotOurs)) {
                 OTHERS_SKIP.lock().unwrap().push(pair);
             }
+            let read = read.map(|o| match o {
+                Other::Device(d) => Some(d),
+                _ => None,
+            });
             match (read, at) {
                 (Ok(Some(d)), at) => {
                     let entry = (info.path.clone(), dev, d.clone(), std::time::Instant::now());
@@ -557,7 +585,7 @@ pub fn other_batteries(sw: u8) -> Vec<crate::sysbat::SysDevice> {
                     crate::log(&format!("battery of {}: {e}; showing the last level", last[i].2.name));
                     held.push(last[i].2.clone());
                 }
-                // Not a device of ours any more, or silent for too long.
+                // Not a device of ours any more, no level now, or silent for too long.
                 (_, Some(i)) => {
                     last.remove(i);
                 }
@@ -738,6 +766,9 @@ mod tests {
         assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &status(73, 4), Some(0x02)), Some(73));
         assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &status(0, 1), Some(0x02)), Some(0));
         assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &status(120, 4), Some(0x02)), None);
+        // No level is not "not ours": an empty bitmask is a passing state.
+        assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &status(0, 0), Some(0x00)), None);
+        assert!(is_keyboard(Some(0)) && is_keyboard(Some(2)) && !is_keyboard(Some(3)) && !is_keyboard(None));
         // Levels only: byte 4 is 0 and means nothing; the bitmask gives the percent.
         assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &status(0, 8), Some(0x00)), Some(90));
         assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &status(0, 4), Some(0x01)), Some(50));
