@@ -494,7 +494,7 @@ fn idle_seconds() -> u32 {
 fn spawn_battery_poller() {
     std::thread::spawn(|| loop {
         std::thread::sleep(BATTERY_POLL);
-        // Windows' own levels of Bluetooth devices: a property read asks no device, so idleness does not matter.
+        // Windows' own levels of Bluetooth devices ask no device; the Logitech HID++ part of the refresh checks idleness and `overlay_system` itself.
         sysbat::refresh_async();
         if idle_seconds() > IDLE_SKIP {
             continue;
