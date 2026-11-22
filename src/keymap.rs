@@ -182,6 +182,11 @@ const NAMES: &[(&str, u8, &str, &str, bool)] = &[
     ("KpDecimal", k(0x63), ".", "", false),
 ];
 
+/// The code of a key by its name in the layout files ("Esc", "KpEnter").
+pub fn code_of(name: &str) -> Option<u8> {
+    NAMES.iter().find(|n| n.0 == name).map(|n| n.1)
+}
+
 /// Layouts compiled in: (file name, contents). The first is the fallback.
 const BUILT_IN: &[(&str, &str)] = &[
     ("g915-tkl.toml", include_str!("../layouts/g915-tkl.toml")),

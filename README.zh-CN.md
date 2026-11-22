@@ -23,6 +23,7 @@
 | 另外约 90 款 Razer 鼠标、键盘和配件（Basilisk、DeathAdder、Viper、Cobra、BlackWidow、Huntsman、Ornata、Firefly、Goliathus、Base Station…），数据来自 OpenRazer — [列表](profiles) | USB / 接收器 | 常亮、呼吸、光谱循环、关闭；鼠标分区；电量。**未经测试**：设备卡片上会注明，欢迎反馈。HyperSpeed 无线键盘目前仅支持有线连接。 |
 | ASUS 笔记本键盘（Aura） | 内置 | 常亮、呼吸、光谱循环、关闭；通过 LampArray 控制键盘分区和机身灯 |
 | Geekboard MacroPad v2（QMK/VIA） | USB | 常亮、呼吸、光谱循环、关闭 |
+| MSI Vigor GK50 Elite | USB | 常亮、呼吸、光谱循环、关闭；单键颜色：暂未支持，等待在真机上验证 |
 | 其他支持 VIA 和 RGB 的 QMK 键盘（Keychron、客制化键盘…） | USB | 常亮、呼吸、光谱循环、关闭、亮度（呼吸和光谱循环由应用绘制） |
 | 支持 Windows 动态光效标准（HID LampArray）的设备 | USB / 内置 | 常亮、呼吸、光谱循环、关闭、设备自带的分区（呼吸和光谱循环由应用绘制） |
 | Tuya Wi-Fi 灯泡（Smart Life），例如 LINUS A60 | Wi-Fi，局域网 | 彩色、白光（选择接近白色的颜色时会启用白光 LED 及其色温）、呼吸、光谱循环、关闭；不会随显示器一起熄灭。需要灯泡的本地密钥，见下文 |
@@ -130,6 +131,6 @@ cargo build --release            # target\release\rgbtray.exe
 
 除非你另有明确声明，否则你有意提交以纳入本项目的任何贡献（按 Apache-2.0 许可证的定义）均应按上述方式双重许可，且不附加任何额外条款或条件。
 
-本项目与 Logitech、Razer、ASUS、Geekboard 或 Tuya 均无关联。商标归其各自所有者所有。
+本项目与 Logitech、Razer、ASUS、MSI、Geekboard 或 Tuya 均无关联。商标归其各自所有者所有。
 
 本文为译文，如有出入，以英文版 README 为准。
