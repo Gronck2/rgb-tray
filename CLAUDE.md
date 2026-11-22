@@ -93,7 +93,7 @@ Every G915 command is logged with milliseconds.
   layouts from `layouts/*.toml` (g915-tkl, tkl, full; ANSI/ISO in one file). `RGBTRAY_DEMO_LAYOUT=full` for editor snapshots.
 - `devices/mod.rs`: the `Device` trait, `kinds()` (every model, in panel order: Rust ones and profiles), `caps()`, `DRIVERS` (each driver module has one `DRIVER`: discover, batteries, answering, key editor, diagnose note), `discover()`,
   `interface_note()`. Drivers: `logitech.rs` (HID++ 0x8071 effects, 0x8081
-  per-key), `razer.rs` (91-byte feature report), `asus.rs` (Aura 0x5D/0x5A), `via.rs` (generic
+  per-key), `razer.rs` (91-byte feature report), `asus.rs` (Aura 0x5D/0x5A), `msi.rs` (MSI GK50 Elite, 64-byte vendor transactions; per-key mode 0B not enabled yet), `via.rs` (generic
   QMK/VIA), `lamparray.rs` (generic HID LampArray 0x59), `rawhid.rs` (`[hid]` profiles: report templates), `tuya.rs` (Tuya Wi-Fi bulbs, local protocol 3.3 over TCP 6668;
   bulbs listed in `%APPDATA%\rgbtray\tuya.toml`), `animation.rs` (60 fps app-drawn effects).
 - `devices/profile.rs`: TOML profiles (`profiles/`, built in via `BUILT_IN`; users add theirs in `%APPDATA%\rgbtray\devices\`).
