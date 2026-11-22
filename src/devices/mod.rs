@@ -2,6 +2,7 @@ pub mod animation;
 pub mod asus;
 pub mod lamparray;
 pub mod logitech;
+pub mod msi;
 pub mod profile;
 pub mod rawhid;
 pub mod razer;
@@ -175,7 +176,7 @@ impl Driver {
 
 /// Every driver. A native driver comes before the generic LampArray and QMK/VIA ones:
 /// `discover()` keeps the first device with a given id.
-pub const DRIVERS: &[Driver] = &[logitech::DRIVER, razer::DRIVER, asus::DRIVER, rawhid::DRIVER, via::DRIVER, lamparray::DRIVER, tuya::DRIVER];
+pub const DRIVERS: &[Driver] = &[logitech::DRIVER, razer::DRIVER, asus::DRIVER, msi::DRIVER, rawhid::DRIVER, via::DRIVER, lamparray::DRIVER, tuya::DRIVER];
 
 /// Battery levels of all connected wireless devices, by device id. Opens only devices that
 /// have a battery, so it is cheap enough to run periodically.
@@ -325,7 +326,7 @@ pub fn caps(id: &str) -> Caps {
 const ALL_EFFECTS: &[Effect] = &Effect::ALL;
 
 /// Models written in Rust, in panel order (profile models are placed among them by `kinds`).
-const NATIVE: [Kind; 5] = [
+const NATIVE: [Kind; 6] = [
     Kind {
         key: "logitech",
         names: ("Logitech G915 TKL", "Logitech G915 TKL"),
@@ -348,6 +349,23 @@ const NATIVE: [Kind; 5] = [
         port_id: false,
         effects: &[Effect::Static, Effect::Breathe, Effect::Cycle, Effect::Off, Effect::Wave],
         speed: Speed::Steps(3),
+        class: Class::Keyboard,
+        protocol: Protocol::Native,
+        tested: true,
+    },
+    // MSI Vigor GK50 Elite (msi.rs).
+    Kind {
+        key: "gk50",
+        names: ("MSI Vigor GK50 Elite", "MSI Vigor GK50 Elite"),
+        icon: "\u{E765}",
+        zones: &[],
+        // shortcut: no per-key colors yet (`layout: None` hides the key editor and Job::Keys), because mode 0B was never run
+        // on a real GK50 and the last byte of KEYS_TAIL may be a checksum; set `Some(crate::keymap::FULL)` once the owner of
+        // a GK50 confirms it and a capture with different key colors is compared.
+        layout: None,
+        port_id: true,
+        effects: &[Effect::Static, Effect::Breathe, Effect::Cycle, Effect::Off],
+        speed: Speed::Smooth,
         class: Class::Keyboard,
         protocol: Protocol::Native,
         tested: true,
