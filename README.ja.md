@@ -23,7 +23,7 @@
 | OpenRazer のデータに基づく、その他約 90 種の Razer マウス・キーボード・アクセサリー（Basilisk、DeathAdder、Viper、Cobra、BlackWidow、Huntsman、Ornata、Firefly、Goliathus、Base Station など）— [一覧](profiles) | USB / ドングル | 固定色、ブリージング、スペクトラム、消灯、マウスのゾーン、バッテリー。**未検証**：カードにその旨が表示されます。動作報告を歓迎します。ワイヤレスの HyperSpeed キーボードは現在のところ有線接続時のみ対応。 |
 | ASUS ノート PC のキーボード（Aura） | 内蔵 | 固定色、ブリージング、スペクトラム、消灯、LampArray によるキーボードのゾーンと本体のランプ |
 | Geekboard MacroPad v2（QMK/VIA） | USB | 固定色、ブリージング、スペクトラム、消灯 |
-| MSI Vigor GK50 Elite | USB | 固定色、ブリージング、スペクトラム、消灯。キーごとの色: 未対応(実機での確認待ち) |
+| MSI Vigor GK50 Elite | USB | 固定色、ブリージング、スペクトラム、消灯、キーごとの色 |
 | VIA と RGB に対応したその他の QMK キーボード（Keychron、自作キーボードなど） | USB | 固定色、ブリージング、スペクトラム、消灯、明るさ（ブリージングとスペクトラムはアプリ側で描画） |
 | Windows のダイナミック ライティング規格（HID LampArray）に対応したデバイス | USB / 内蔵 | 固定色、ブリージング、スペクトラム、消灯、デバイスが持つゾーン（ブリージングとスペクトラムはアプリ側で描画） |
 | Tuya の Wi-Fi 電球（Smart Life）、例：LINUS A60 | Wi-Fi、ローカルネットワーク | カラー、白色（白に近い色を選ぶと白色 LED とその色味が使われます）、ブリージング、スペクトラム、消灯。ディスプレイと連動して消灯はしません。電球のローカルキーが必要です（下記参照） |

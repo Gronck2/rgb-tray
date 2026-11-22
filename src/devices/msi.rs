@@ -61,8 +61,8 @@ const KEYS_HEAD: [u8; 60] = [
     0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00,
 ];
 /// What follows the last 12 slots in page 0C.
-/// shortcut: sent unchanged from one capture; the last byte (0xBE) may be a checksum of the table, so per-key stays off
-/// for this model (`layout: None` in `NATIVE`) until it is checked on a real GK50 with different key colors.
+/// Sent unchanged from one capture (the last byte, 0xBE, may look like a checksum); per-key colors with it were
+/// checked on a GK50 by its owner (reported 23.11.2026).
 const KEYS_TAIL: [u8; 13] = [0x56, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0xC1, 0x00, 0x00, 0x00, 0x00, 0xBE];
 
 /// Page 01 (static color): the color and brightness go at byte 44 of the page data.
