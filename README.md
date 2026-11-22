@@ -23,7 +23,7 @@ A tiny Windows tray app that controls RGB lighting of keyboards, mice and lights
 | About 90 more Razer mice, keyboards and accessories (Basilisk, DeathAdder, Viper, Cobra, BlackWidow, Huntsman, Ornata, Firefly, Goliathus, Base Station…), from OpenRazer's data — [list](profiles) | USB / dongle | Static, breathing, spectrum, off; zones of mice; battery. **Untested**: the card says so, and a report is welcome. Wireless HyperSpeed keyboards only on cable for now. |
 | ASUS laptop keyboard (Aura) | Built-in | Static, breathing, spectrum, off; keyboard zones and body lamps via LampArray |
 | Geekboard MacroPad v2 (QMK/VIA) | USB | Static, breathing, spectrum, off |
-| MSI Vigor GK50 Elite | USB | Static, breathing, spectrum, off; per-key colors: not yet, waiting for a check on the device |
+| MSI Vigor GK50 Elite | USB | Static, breathing, spectrum, off; per-key colors |
 | Other QMK keyboards with VIA and RGB (Keychron, custom boards…) | USB | Static, breathing, spectrum, off, brightness (breathing and spectrum drawn by the app) |
 | Devices with the Windows Dynamic Lighting standard (HID LampArray) | USB / built-in | Static, breathing, spectrum, off, zones from the device (breathing and spectrum drawn by the app) |
 | Tuya Wi-Fi bulbs (Smart Life), e.g. LINUS A60 | Wi-Fi, local network | Color, white (a white-ish color picks the white LEDs and their tint), breathing, spectrum, off; does not go dark with the display. Needs the bulb's local key, see below |

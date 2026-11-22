@@ -359,10 +359,7 @@ const NATIVE: [Kind; 6] = [
         names: ("MSI Vigor GK50 Elite", "MSI Vigor GK50 Elite"),
         icon: "\u{E765}",
         zones: &[],
-        // shortcut: no per-key colors yet (`layout: None` hides the key editor and Job::Keys), because mode 0B was never run
-        // on a real GK50 and the last byte of KEYS_TAIL may be a checksum; set `Some(crate::keymap::FULL)` once the owner of
-        // a GK50 confirms it and a capture with different key colors is compared.
-        layout: None,
+        layout: Some(crate::keymap::FULL),
         port_id: true,
         effects: &[Effect::Static, Effect::Breathe, Effect::Cycle, Effect::Off],
         speed: Speed::Smooth,
