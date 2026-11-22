@@ -61,6 +61,8 @@ const KEYS_HEAD: [u8; 60] = [
     0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00,
 ];
 /// What follows the last 12 slots in page 0C.
+/// shortcut: sent unchanged from one capture; the last byte (0xBE) may be a checksum of the table, so per-key stays off
+/// for this model (`layout: None` in `NATIVE`) until it is checked on a real GK50 with different key colors.
 const KEYS_TAIL: [u8; 13] = [0x56, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0xC1, 0x00, 0x00, 0x00, 0x00, 0xBE];
 
 /// Page 01 (static color): the color and brightness go at byte 44 of the page data.
@@ -124,7 +126,21 @@ pub struct Gk50 {
 }
 
 fn send(hid: &Hid, reports: &[Vec<u8>]) -> bool {
-    reports.iter().all(|r| hid.write(r))
+    send_with(|r| hid.write(r), reports)
+}
+
+/// Writes a transaction (`transaction` order: begin first, end last). If a write fails after the
+/// begin, still tries the end report so the keyboard is not left in an open transaction.
+fn send_with(mut write: impl FnMut(&[u8]) -> bool, reports: &[Vec<u8>]) -> bool {
+    for (i, r) in reports.iter().enumerate() {
+        if !write(r) {
+            if i > 0 && i + 1 < reports.len() {
+                write(&reports[reports.len() - 1]);
+            }
+            return false;
+        }
+    }
+    true
 }
 
 fn ours(i: &HidInfo) -> bool {
@@ -173,6 +189,7 @@ impl Device for Gk50 {
                 self.send(&static_reports(color.scaled(brightness)))?;
                 // Drawn by the app, from its own handle: the firmware effects need page 02,
                 // which isn't worked out.
+                // The contributor checked this at the animation's 60 fps on the device; there is no frame-rate cap here.
                 let hid = Hid::open(&self.path, true, true).ok_or("GK50: cannot open")?;
                 animation::start(
                     &self.path,
@@ -243,6 +260,28 @@ mod tests {
         // Every key of the full layout has a slot.
         let full = crate::keymap::get(crate::keymap::FULL);
         assert!(full.codes().iter().all(|&c| slot_of(c).is_some()));
+    }
+
+    #[test]
+    fn a_failed_write_still_ends_the_transaction() {
+        let reports = static_reports(Rgb(1, 2, 3));
+        for fail_at in 0..reports.len() {
+            let mut sent: Vec<Vec<u8>> = Vec::new();
+            let mut n = 0;
+            let ok = send_with(
+                |r| {
+                    n += 1;
+                    sent.push(r.to_vec());
+                    n - 1 != fail_at
+                },
+                &reports,
+            );
+            assert!(!ok);
+            // Once begun (and failing before the end), the end report goes out last; a failed begin or end sends nothing more.
+            let ended = sent.last() == reports.last();
+            assert_eq!(ended, fail_at > 0, "fail at {fail_at}");
+        }
+        assert!(send_with(|_| true, &reports));
     }
 
     #[test]
