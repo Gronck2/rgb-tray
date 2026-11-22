@@ -323,7 +323,7 @@ pub fn toggle() {
             if let Err(e) = unsafe { open() } {
                 crate::log(&format!("battery overlay: {e}"));
             } else {
-                // Windows keeps its own levels: reading them asks no device, so it is fine on every show.
+                // Windows' own levels ask no device; the Logitech HID++ reads are skipped when the user is idle or has system devices off.
                 sysbat::refresh_async();
             }
         }

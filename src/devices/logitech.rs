@@ -108,6 +108,10 @@ impl Logitech {
                     let mut seen = SEEN.lock().unwrap();
                     seen.retain(|(p, _)| *p != info.path);
                     seen.push((info.path.clone(), kb.id.clone()));
+                    let mut driven = DRIVEN.lock().unwrap();
+                    if !driven.contains(&(info.path.clone(), kb.dev)) {
+                        driven.push((info.path.clone(), kb.dev));
+                    }
                     out.push(kb);
                 }
                 Err(no_answer) => silent |= no_answer,
@@ -388,8 +392,10 @@ impl Device for Logitech {
 
 // ---------------------------------------------------------------- batteries of other devices
 
-/// Software id of the battery reads of devices the app doesn't light.
-const SW_ID_OTHERS: u8 = 0x0D;
+/// Software id of the battery reads of devices the app doesn't light, and the one of `--system-batteries` (another
+/// process: its answers mustn't be taken for the tray app's).
+pub const SW_ID_OTHERS: u8 = 0x0D;
+pub const SW_ID_REPORT: u8 = 0x0E;
 const FEATURE_NAME: u16 = 0x0005;
 const FEATURE_UNIFIED_BATTERY: u16 = 0x1004;
 const FEATURE_ADC: u16 = 0x1F20;
@@ -409,10 +415,19 @@ fn class_of(kind: Option<u8>, headset: bool) -> crate::sysbat::SysClass {
     }
 }
 
-/// The charge from a 0x1001 (voltage), 0x1004 (unified battery) or 0x1F20 (ADC voltage) answer.
-fn percent_of(feature: u16, r: &[u8; 20]) -> Option<u8> {
+/// The charge from a 0x1001 (voltage), 0x1004 (unified battery, `caps` = the flags byte of its getCapabilities)
+/// or 0x1F20 (ADC voltage) answer.
+fn percent_of(feature: u16, r: &[u8; 20], caps: Option<u8>) -> Option<u8> {
     match feature {
-        FEATURE_UNIFIED_BATTERY => (r[4] <= 100).then_some(r[4]),
+        // getStatus: byte 4 = state of charge, byte 5 = level bitmask. Without the state-of-charge capability (bit 1)
+        // byte 4 is 0, not a level: map the bitmask as Solaar does. Unreadable capabilities: a nonzero byte 4 counts.
+        FEATURE_UNIFIED_BATTERY => {
+            if caps.map_or(r[4] > 0, |c| c & 0x02 != 0) {
+                (r[4] <= 100).then_some(r[4])
+            } else {
+                [(8, 90), (4, 50), (2, 20), (1, 5)].into_iter().find(|&(bit, _)| r[5] & bit != 0).map(|(_, p)| p)
+            }
+        }
         // 0x1F20: bit 0 of the flags = a battery is there (as Solaar reads it).
         FEATURE_ADC if r[6] & 0x01 == 0 => None,
         _ => Some(percent_from_millivolts(u16::from_be_bytes([r[4], r[5]]))),
@@ -420,11 +435,11 @@ fn percent_of(feature: u16, r: &[u8; 20]) -> Option<u8> {
 }
 
 /// The name a HID++ device gives (0x0005: length, then up to 16 characters per request).
-fn name_of(hid: &Hid, dev: u8, feat: u8) -> Option<String> {
-    let len = request_tries(hid, dev, SW_ID_OTHERS, feat, 0, &[], 1).ok()?[4] as usize;
+fn name_of(hid: &Hid, dev: u8, sw: u8, feat: u8) -> Option<String> {
+    let len = request_tries(hid, dev, sw, feat, 0, &[], 1).ok()?[4] as usize;
     let mut name = Vec::new();
     while name.len() < len.min(64) {
-        let r = request_tries(hid, dev, SW_ID_OTHERS, feat, 1, &[name.len() as u8], 1).ok()?;
+        let r = request_tries(hid, dev, sw, feat, 1, &[name.len() as u8], 1).ok()?;
         let part: Vec<u8> = r[4..].iter().copied().take(len - name.len()).take_while(|&b| b != 0).collect();
         if part.is_empty() {
             break;
@@ -446,15 +461,12 @@ fn short_name(name: &str) -> String {
     words.join(" ")
 }
 
-/// One device on a HID++ collection: Ok(None) when there is none with a battery there or it is a keyboard the app
-/// drives, Err when it didn't answer (asleep, off, out of range, or the receiver busy with another request).
-fn other_battery(hid: &Hid, info: &hid::HidInfo, dev: u8, headset: bool) -> Result<Option<crate::sysbat::SysDevice>, String> {
+/// One device on a HID++ collection: Ok(None) when there is none with a battery there (or it is a keyboard, which the
+/// app's own drivers cover), Err when it didn't answer (asleep, off, out of range, or the receiver busy with another request).
+/// Never called for a slot the app drives (`other_batteries` skips those before any request).
+fn other_battery(hid: &Hid, info: &hid::HidInfo, dev: u8, headset: bool, sw: u8) -> Result<Option<crate::sysbat::SysDevice>, String> {
     // The feature's index, None when the device hasn't it.
-    let lookup = |f: u16| request_tries(hid, dev, SW_ID_OTHERS, 0, 0, &f.to_be_bytes(), 2).map(|r| Some(r[4]).filter(|&i| i != 0));
-    // A keyboard with per-key colors is the app's own (its battery is in the panel).
-    if !headset && lookup(FEATURE_PER_KEY)?.is_some() {
-        return Ok(None);
-    }
+    let lookup = |f: u16| request_tries(hid, dev, sw, 0, 0, &f.to_be_bytes(), 2).map(|r| Some(r[4]).filter(|&i| i != 0));
     let mut battery = None;
     for f in [FEATURE_UNIFIED_BATTERY, FEATURE_BATTERY_VOLTAGE, FEATURE_ADC] {
         if let Some(index) = lookup(f)? {
@@ -463,12 +475,19 @@ fn other_battery(hid: &Hid, info: &hid::HidInfo, dev: u8, headset: bool) -> Resu
         }
     }
     let Some((feature, index)) = battery else { return Ok(None) };
-    let answer = request_tries(hid, dev, SW_ID_OTHERS, index, if feature == FEATURE_UNIFIED_BATTERY { 1 } else { 0 }, &[], 2)?;
-    let Some(percent) = percent_of(feature, &answer) else { return Ok(None) };
+    let unified = feature == FEATURE_UNIFIED_BATTERY;
+    // 0x1004 getCapabilities (function 0), byte 5 = flags: tells whether getStatus carries a state of charge.
+    let caps = if unified { request_tries(hid, dev, sw, index, 0, &[], 1).ok().map(|r| r[5]) } else { None };
+    let answer = request_tries(hid, dev, sw, index, if unified { 1 } else { 0 }, &[], 2)?;
+    let Some(percent) = percent_of(feature, &answer, caps) else { return Ok(None) };
     // The name and type are nice to have: a failed read doesn't drop the level.
     let name_feat = lookup(FEATURE_NAME).ok().flatten();
-    let name = name_feat.and_then(|f| name_of(hid, dev, f)).unwrap_or_else(|| if headset { "Logitech headset".into() } else { "Logitech device".into() });
-    let kind = name_feat.and_then(|f| request_tries(hid, dev, SW_ID_OTHERS, f, 2, &[], 1).ok()).map(|r| r[4]);
+    let name = name_feat.and_then(|f| name_of(hid, dev, sw, f)).unwrap_or_else(|| if headset { "Logitech headset".into() } else { "Logitech device".into() });
+    let kind = name_feat.and_then(|f| request_tries(hid, dev, sw, f, 2, &[], 1).ok()).map(|r| r[4]);
+    // A keyboard (the G915 or any other) is not for this list.
+    if matches!(kind, Some(0 | 2)) {
+        return Ok(None);
+    }
     Ok(Some(crate::sysbat::SysDevice { id: format!("system-{}{dev:02X}", super::path_hash(&info.path)), name, class: class_of(kind, headset), percent }))
 }
 
@@ -481,22 +500,50 @@ type LastRead = (Vec<u16>, u8, crate::sysbat::SysDevice, std::time::Instant);
 /// The last levels read, to show while a device doesn't answer.
 static OTHERS_LAST: Mutex<Vec<LastRead>> = Mutex::new(Vec::new());
 
-/// Batteries of Logitech HID++ devices the app doesn't light: mice on a receiver or cable, headsets. Only feature
+/// Receivers other than LIGHTSPEED (Unifying, Bolt, Nano): not read (a receiver answers a cabled-device request with a
+/// HID++ 1.0 error, 2 x 500 ms lost). Mice and headsets on them are not covered.
+const OTHER_RECEIVER_PIDS: [u16; 6] = [0xC52B, 0xC52F, 0xC531, 0xC532, 0xC534, 0xC548];
+
+/// Slots the app's keyboard search found a keyboard in: (collection path, device index). Never sent anything by the
+/// battery reads of other devices.
+static DRIVEN: Mutex<Vec<(Vec<u16>, u8)>> = Mutex::new(Vec::new());
+/// Slots the battery reads of other devices found nothing for (no battery, or a keyboard): not asked again while plugged in.
+static OTHERS_SKIP: Mutex<Vec<(Vec<u16>, u8)>> = Mutex::new(Vec::new());
+
+/// Held entries (a device that didn't answer) without those a fresh read of this pass has the name of: a mouse on its
+/// charging cable answers on the cable while its receiver slot is still held.
+fn without_fresh(fresh: &[crate::sysbat::SysDevice], held: Vec<crate::sysbat::SysDevice>) -> Vec<crate::sysbat::SysDevice> {
+    held.into_iter().filter(|h| !fresh.iter().any(|f| f.name == h.name)).collect()
+}
+
+/// Batteries of Logitech HID++ devices the app doesn't light: mice on a LIGHTSPEED receiver or cable, headsets. Only feature
 /// lookups and battery and name reads; for the system devices of the overlay (`sysbat`), read on its worker thread.
+/// Nothing is sent to a slot the app's own keyboard search found a keyboard in. `sw` = the software id of the caller.
 /// A device that doesn't answer keeps its last level for `OTHERS_HOLD`; one whose collection is gone drops out.
-pub fn other_batteries() -> Vec<crate::sysbat::SysDevice> {
-    let mut out = Vec::new();
-    let infos: Vec<hid::HidInfo> =
-        hid::enumerate(VID).into_iter().filter(|i| matches!((i.usage_page, i.usage), (0xFF00, 0x0002)) || (i.usage_page, i.usage) == HEADSET_PAGE).collect();
+pub fn other_batteries(sw: u8) -> Vec<crate::sysbat::SysDevice> {
+    let (mut fresh, mut held) = (Vec::new(), Vec::new());
+    let infos: Vec<hid::HidInfo> = hid::enumerate(VID)
+        .into_iter()
+        .filter(|i| (matches!((i.usage_page, i.usage), (0xFF00, 0x0002)) || (i.usage_page, i.usage) == HEADSET_PAGE) && !OTHER_RECEIVER_PIDS.contains(&i.pid))
+        .collect();
     let mut last = OTHERS_LAST.lock().unwrap();
     last.retain(|(path, ..)| infos.iter().any(|i| i.path == *path));
+    OTHERS_SKIP.lock().unwrap().retain(|(path, _)| infos.iter().any(|i| i.path == *path));
     for info in &infos {
         let headset = (info.usage_page, info.usage) == HEADSET_PAGE;
-        let hid = Hid::open(&info.path, true, true);
+        let mut hid = None;
         let devs: &[u8] = if RECEIVER_PIDS.contains(&info.pid) { &[1, 2] } else { &[0xFF] };
         for &dev in devs {
-            let read = hid.as_ref().ok_or_else(|| "cannot open".to_string()).and_then(|h| other_battery(h, info, dev, headset));
+            let pair = (info.path.clone(), dev);
+            if DRIVEN.lock().unwrap().contains(&pair) || OTHERS_SKIP.lock().unwrap().contains(&pair) {
+                continue;
+            }
+            let hid = hid.get_or_insert_with(|| Hid::open(&info.path, true, true));
+            let read = hid.as_ref().ok_or_else(|| "cannot open".to_string()).and_then(|h| other_battery(h, info, dev, headset, sw));
             let at = last.iter().position(|(p, d, ..)| *p == info.path && *d == dev);
+            if matches!(read, Ok(None)) {
+                OTHERS_SKIP.lock().unwrap().push(pair);
+            }
             match (read, at) {
                 (Ok(Some(d)), at) => {
                     let entry = (info.path.clone(), dev, d.clone(), std::time::Instant::now());
@@ -504,11 +551,11 @@ pub fn other_batteries() -> Vec<crate::sysbat::SysDevice> {
                         Some(i) => last[i] = entry,
                         None => last.push(entry),
                     }
-                    out.push(d);
+                    fresh.push(d);
                 }
                 (Err(e), Some(i)) if last[i].3.elapsed() < OTHERS_HOLD => {
                     crate::log(&format!("battery of {}: {e}; showing the last level", last[i].2.name));
-                    out.push(last[i].2.clone());
+                    held.push(last[i].2.clone());
                 }
                 // Not a device of ours any more, or silent for too long.
                 (_, Some(i)) => {
@@ -519,7 +566,9 @@ pub fn other_batteries() -> Vec<crate::sysbat::SysDevice> {
             }
         }
     }
-    out
+    let held = without_fresh(&fresh, held);
+    fresh.extend(held);
+    fresh
 }
 
 /// Sends a long HID++ 2.0 request and waits for its response. A sleeping wireless keyboard
@@ -678,6 +727,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unified_battery_with_and_without_state_of_charge() {
+        let status = |soc: u8, level: u8| {
+            let mut r = [0u8; 20];
+            r[4] = soc;
+            r[5] = level;
+            r
+        };
+        // State of charge supported (flags bit 1): byte 4 is the percent, 0 included.
+        assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &status(73, 4), Some(0x02)), Some(73));
+        assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &status(0, 1), Some(0x02)), Some(0));
+        assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &status(120, 4), Some(0x02)), None);
+        // Levels only: byte 4 is 0 and means nothing; the bitmask gives the percent.
+        assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &status(0, 8), Some(0x00)), Some(90));
+        assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &status(0, 4), Some(0x01)), Some(50));
+        assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &status(0, 2), Some(0x00)), Some(20));
+        assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &status(0, 1), Some(0x00)), Some(5));
+        assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &status(0, 0), Some(0x00)), None);
+        // Capabilities unreadable: a nonzero byte 4 counts, a zero one falls back to the levels.
+        assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &status(55, 4), None), Some(55));
+        assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &status(0, 4), None), Some(50));
+    }
+
+    #[test]
+    fn held_entry_dropped_when_a_fresh_read_has_its_name() {
+        use crate::sysbat::{SysClass, SysDevice};
+        let dev = |id: &str, name: &str, percent| SysDevice { id: id.into(), name: name.into(), class: SysClass::Mouse, percent };
+        let fresh = [dev("system-A", "G502 LIGHTSPEED", 80)];
+        let held = vec![dev("system-B01", "G502 LIGHTSPEED", 82), dev("system-B02", "G304", 40)];
+        let kept = without_fresh(&fresh, held);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].name, "G304");
+    }
+
+    #[test]
     fn battery_percent_from_voltage() {
         assert_eq!(percent_from_millivolts(4300), 100);
         assert_eq!(percent_from_millivolts(4186), 100);
@@ -706,12 +789,12 @@ mod tests {
             r
         };
         // G535 over 0x1F20: 4073 mV, battery there, not charging (read 22.11.2026).
-        assert_eq!(percent_of(FEATURE_ADC, &answer([0x0F, 0xE9, 0x01])), Some(91));
-        assert_eq!(percent_of(FEATURE_ADC, &answer([0x0F, 0xE9, 0x00])), None);
+        assert_eq!(percent_of(FEATURE_ADC, &answer([0x0F, 0xE9, 0x01]), None), Some(91));
+        assert_eq!(percent_of(FEATURE_ADC, &answer([0x0F, 0xE9, 0x00]), None), None);
         // G502 LIGHTSPEED over 0x1001: 3920 mV.
-        assert_eq!(percent_of(FEATURE_BATTERY_VOLTAGE, &answer([0x0F, 0x50, 0x00])), Some(70));
-        assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &answer([55, 4, 0])), Some(55));
-        assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &answer([200, 0, 0])), None);
+        assert_eq!(percent_of(FEATURE_BATTERY_VOLTAGE, &answer([0x0F, 0x50, 0x00]), None), Some(70));
+        assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &answer([55, 4, 0]), None), Some(55));
+        assert_eq!(percent_of(FEATURE_UNIFIED_BATTERY, &answer([200, 0, 0]), None), None);
     }
 
     #[test]

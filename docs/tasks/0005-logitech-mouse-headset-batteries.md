@@ -19,10 +19,11 @@ LIGHTSPEED dongles are neither of those.
 
 ## Scope
 
-- `logitech::other_batteries`: every Logitech `FF00:0002` collection (receiver slots 1-2, cable 0xFF) and every
-  `FF43:0202` collection; skips keyboards with `0x8081` (the app's own); level from `0x1004`, `0x1001` or `0x1F20`
+- `logitech::other_batteries`: every Logitech `FF00:0002` collection of a LIGHTSPEED receiver (slots 1-2) or a cable (0xFF)
+  and every `FF43:0202` collection; skips every slot the app's keyboard search drives and keyboards by type; level from `0x1004`, `0x1001` or `0x1F20`
   (voltage through the existing curve); name from `0x0005` without the generic words at the end; class from its type.
-  Feature lookups and reads only, its own software id.
+  Feature lookups and reads only, its own software id (`--system-batteries` another one).
+- Unifying (`C52B` etc.) and Bolt (`C548`) receivers are not covered: not read at all.
 - `sysbat::refresh` adds them to the system devices (same setting, same refresh times, worker thread);
   `--system-batteries` lists them.
 

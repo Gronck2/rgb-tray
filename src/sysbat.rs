@@ -2,9 +2,12 @@
 //! for which Windows holds a level (the one Settings > Bluetooth & devices shows, `DEVPKEY_Bluetooth_Battery`).
 //! They are listed on the battery overlay and raise the low-battery alert.
 //!
-//! This only reads PnP properties of the device nodes, which are a cache in the Windows store: no device handle is
-//! opened and nothing is sent to a device (no GATT, HFP or vendor protocol), so nothing is woken. System devices are
-//! kept apart from `PRESENT`, `STATUS` and `config.devices`: the panel, hotkeys and settings never see them.
+//! The Bluetooth part only reads PnP properties of the device nodes, which are a cache in the Windows store: no device
+//! handle is opened and nothing is sent to a device (no GATT, HFP or vendor protocol), so nothing is woken.
+//! The one exception: Logitech mice and headsets on a LIGHTSPEED receiver, a cable or a headset dongle are asked their
+//! battery over HID++ (`logitech::other_batteries`, reads only). That runs only while the user is active
+//! (`IDLE_SKIP`) and `overlay_system` is on, and never touches a slot the app's own Logitech driver drives.
+//! System devices are kept apart from `PRESENT`, `STATUS` and `config.devices`: the panel, hotkeys and settings never see them.
 //!
 //! The level sits on a service node (e.g. the Hands-Free one), the connection state on the device node
 //! (`DEV_<address>`): nodes are joined by the Bluetooth address in the instance id.
@@ -53,6 +56,8 @@ pub struct SysDevice {
 
 /// The devices found by the last read.
 static SYSTEM: Mutex<Vec<SysDevice>> = Mutex::new(Vec::new());
+/// The last Logitech HID++ rows (`logitech::other_batteries`), kept while a read is skipped (the user is away).
+static HIDPP: Mutex<Vec<SysDevice>> = Mutex::new(Vec::new());
 
 /// The class of a device from its Bluetooth Class of Device (classic devices only; none for most LE ones).
 fn class_of(cod: Option<u32>) -> SysClass {
@@ -366,8 +371,19 @@ fn refresh() -> bool {
         }
     }
     let mut found = devices(join(&nodes));
-    // Wireless mice and headsets Windows has no level for: Logitech ones over HID++.
-    found.extend(crate::devices::logitech::other_batteries());
+    // Wireless mice and headsets Windows has no level for: Logitech ones over HID++. That asks the devices, so only
+    // while the user is active and wants system devices; else the last rows stay (or go, when the setting is off).
+    let on = crate::config().overlay_system;
+    let mut hidpp = HIDPP.lock().unwrap();
+    if !on {
+        hidpp.clear();
+    } else if crate::idle_seconds() <= crate::IDLE_SKIP {
+        // Serialised with applies and polls: no two requests to a receiver at once.
+        let _guard = crate::APPLY_LOCK.lock().unwrap();
+        *hidpp = crate::devices::logitech::other_batteries(crate::devices::logitech::SW_ID_OTHERS);
+    }
+    found.extend(hidpp.iter().cloned());
+    drop(hidpp);
     let mut cur = SYSTEM.lock().unwrap();
     let changed = *cur != found;
     *cur = found;
@@ -431,7 +447,7 @@ pub fn report() -> String {
     }
     // Feature lookups and battery reads over HID++, nothing that changes a device.
     out += "\nLogitech HID++ devices the app doesn't light:\n";
-    for d in crate::devices::logitech::other_batteries() {
+    for d in crate::devices::logitech::other_batteries(crate::devices::logitech::SW_ID_REPORT) {
         out += &format!("  {}  {}  {:?}  listed at {}%\n", d.id, d.name, d.class, d.percent);
     }
     out
