@@ -446,33 +446,78 @@ fn short_name(name: &str) -> String {
     words.join(" ")
 }
 
-/// One device on a HID++ collection, if it has a battery and isn't a keyboard the app drives.
-fn other_battery(hid: &Hid, info: &hid::HidInfo, dev: u8, headset: bool) -> Option<crate::sysbat::SysDevice> {
-    let lookup = |f: u16| request_within(hid, dev, SW_ID_OTHERS, 0, 0, &f.to_be_bytes(), LOOKUP_WAIT).ok().map(|r| r[4]).filter(|&i| i != 0);
+/// One device on a HID++ collection: Ok(None) when there is none with a battery there or it is a keyboard the app
+/// drives, Err when it didn't answer (asleep, off, out of range, or the receiver busy with another request).
+fn other_battery(hid: &Hid, info: &hid::HidInfo, dev: u8, headset: bool) -> Result<Option<crate::sysbat::SysDevice>, String> {
+    // The feature's index, None when the device hasn't it.
+    let lookup = |f: u16| request_tries(hid, dev, SW_ID_OTHERS, 0, 0, &f.to_be_bytes(), 2).map(|r| Some(r[4]).filter(|&i| i != 0));
     // A keyboard with per-key colors is the app's own (its battery is in the panel).
-    if !headset && lookup(FEATURE_PER_KEY).is_some() {
-        return None;
+    if !headset && lookup(FEATURE_PER_KEY)?.is_some() {
+        return Ok(None);
     }
-    let (feature, index) = [FEATURE_UNIFIED_BATTERY, FEATURE_BATTERY_VOLTAGE, FEATURE_ADC].into_iter().find_map(|f| Some((f, lookup(f)?)))?;
-    let percent = percent_of(feature, &request_tries(hid, dev, SW_ID_OTHERS, index, if feature == FEATURE_UNIFIED_BATTERY { 1 } else { 0 }, &[], 1).ok()?)?;
-    let name_feat = lookup(FEATURE_NAME);
+    let mut battery = None;
+    for f in [FEATURE_UNIFIED_BATTERY, FEATURE_BATTERY_VOLTAGE, FEATURE_ADC] {
+        if let Some(index) = lookup(f)? {
+            battery = Some((f, index));
+            break;
+        }
+    }
+    let Some((feature, index)) = battery else { return Ok(None) };
+    let answer = request_tries(hid, dev, SW_ID_OTHERS, index, if feature == FEATURE_UNIFIED_BATTERY { 1 } else { 0 }, &[], 2)?;
+    let Some(percent) = percent_of(feature, &answer) else { return Ok(None) };
+    // The name and type are nice to have: a failed read doesn't drop the level.
+    let name_feat = lookup(FEATURE_NAME).ok().flatten();
     let name = name_feat.and_then(|f| name_of(hid, dev, f)).unwrap_or_else(|| if headset { "Logitech headset".into() } else { "Logitech device".into() });
     let kind = name_feat.and_then(|f| request_tries(hid, dev, SW_ID_OTHERS, f, 2, &[], 1).ok()).map(|r| r[4]);
-    Some(crate::sysbat::SysDevice { id: format!("system-{}{dev:02X}", super::path_hash(&info.path)), name, class: class_of(kind, headset), percent })
+    Ok(Some(crate::sysbat::SysDevice { id: format!("system-{}{dev:02X}", super::path_hash(&info.path)), name, class: class_of(kind, headset), percent }))
 }
+
+/// How long a device that stopped answering keeps its last level while its receiver or dongle is still plugged in:
+/// a mouse asleep in the middle of a session shouldn't drop out of the overlay.
+const OTHERS_HOLD: Duration = Duration::from_secs(10 * 60);
+
+/// The last level read from a device: (collection path, device index, the device, when it was read).
+type LastRead = (Vec<u16>, u8, crate::sysbat::SysDevice, std::time::Instant);
+/// The last levels read, to show while a device doesn't answer.
+static OTHERS_LAST: Mutex<Vec<LastRead>> = Mutex::new(Vec::new());
 
 /// Batteries of Logitech HID++ devices the app doesn't light: mice on a receiver or cable, headsets. Only feature
 /// lookups and battery and name reads; for the system devices of the overlay (`sysbat`), read on its worker thread.
+/// A device that doesn't answer keeps its last level for `OTHERS_HOLD`; one whose collection is gone drops out.
 pub fn other_batteries() -> Vec<crate::sysbat::SysDevice> {
     let mut out = Vec::new();
-    for info in hid::enumerate(VID) {
+    let infos: Vec<hid::HidInfo> =
+        hid::enumerate(VID).into_iter().filter(|i| matches!((i.usage_page, i.usage), (0xFF00, 0x0002)) || (i.usage_page, i.usage) == HEADSET_PAGE).collect();
+    let mut last = OTHERS_LAST.lock().unwrap();
+    last.retain(|(path, ..)| infos.iter().any(|i| i.path == *path));
+    for info in &infos {
         let headset = (info.usage_page, info.usage) == HEADSET_PAGE;
-        if !headset && (info.usage_page, info.usage) != (0xFF00, 0x0002) {
-            continue;
-        }
-        let Some(hid) = Hid::open(&info.path, true, true) else { continue };
+        let hid = Hid::open(&info.path, true, true);
         let devs: &[u8] = if RECEIVER_PIDS.contains(&info.pid) { &[1, 2] } else { &[0xFF] };
-        out.extend(devs.iter().filter_map(|&dev| other_battery(&hid, &info, dev, headset)));
+        for &dev in devs {
+            let read = hid.as_ref().ok_or_else(|| "cannot open".to_string()).and_then(|h| other_battery(h, info, dev, headset));
+            let at = last.iter().position(|(p, d, ..)| *p == info.path && *d == dev);
+            match (read, at) {
+                (Ok(Some(d)), at) => {
+                    let entry = (info.path.clone(), dev, d.clone(), std::time::Instant::now());
+                    match at {
+                        Some(i) => last[i] = entry,
+                        None => last.push(entry),
+                    }
+                    out.push(d);
+                }
+                (Err(e), Some(i)) if last[i].3.elapsed() < OTHERS_HOLD => {
+                    crate::log(&format!("battery of {}: {e}; showing the last level", last[i].2.name));
+                    out.push(last[i].2.clone());
+                }
+                // Not a device of ours any more, or silent for too long.
+                (_, Some(i)) => {
+                    last.remove(i);
+                }
+                // Nothing in this slot that was ever read (an empty receiver slot doesn't answer either).
+                (_, None) => {}
+            }
+        }
     }
     out
 }
