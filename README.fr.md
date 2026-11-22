@@ -23,6 +23,7 @@ Une petite application Windows pour la zone de notification qui pilote l'éclair
 | Environ 90 autres souris, claviers et accessoires Razer (Basilisk, DeathAdder, Viper, Cobra, BlackWidow, Huntsman, Ornata, Firefly, Goliathus, Base Station…), d'après les données d'OpenRazer — [liste](profiles) | USB / dongle | Statique, respiration, spectre, éteint ; zones des souris ; batterie. **Non testé** : la carte l'indique, et tout retour est le bienvenu. Les claviers sans fil HyperSpeed ne fonctionnent pour l'instant qu'en filaire. |
 | Clavier de portable ASUS (Aura) | Intégré | Statique, respiration, spectre, éteint ; zones du clavier et lampes du châssis via LampArray |
 | Geekboard MacroPad v2 (QMK/VIA) | USB | Statique, respiration, spectre, éteint |
+| MSI Vigor GK50 Elite | USB | Statique, respiration, spectre, éteint; couleurs touche par touche |
 | Autres claviers QMK avec VIA et RGB (Keychron, claviers personnalisés…) | USB | Statique, respiration, spectre, éteint, luminosité (respiration et spectre dessinés par l'application) |
 | Périphériques conformes au standard Windows Éclairage dynamique (HID LampArray) | USB / intégré | Statique, respiration, spectre, éteint, zones fournies par le périphérique (respiration et spectre dessinés par l'application) |
 | Ampoules Wi-Fi Tuya (Smart Life), par ex. LINUS A60 | Wi-Fi, réseau local | Couleur, blanc (une couleur proche du blanc sélectionne les LED blanches et leur teinte), respiration, spectre, éteint ; ne s'éteint pas avec l'écran. Nécessite la clé locale de l'ampoule, voir ci-dessous |
@@ -130,6 +131,6 @@ Distribué sous la licence [MIT](LICENSE-MIT) ou [Apache-2.0](LICENSE-APACHE), a
 
 Sauf mention contraire explicite de votre part, toute contribution que vous soumettez intentionnellement en vue de son inclusion dans ce projet, au sens de la licence Apache-2.0, sera soumise à la double licence ci-dessus, sans conditions ni modalités supplémentaires.
 
-Sans lien avec Logitech, Razer, ASUS, Geekboard ou Tuya. Les marques citées appartiennent à leurs propriétaires respectifs.
+Sans lien avec Logitech, Razer, ASUS, MSI, Geekboard ou Tuya. Les marques citées appartiennent à leurs propriétaires respectifs.
 
 Ceci est une traduction : en cas de divergence, le README en anglais fait foi.

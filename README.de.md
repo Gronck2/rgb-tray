@@ -23,6 +23,7 @@ Eine kleine Windows-Tray-App, die die RGB-Beleuchtung von Tastaturen, Mäusen un
 | Rund 90 weitere Razer-Mäuse, -Tastaturen und -Zubehörteile (Basilisk, DeathAdder, Viper, Cobra, BlackWidow, Huntsman, Ornata, Firefly, Goliathus, Base Station…) auf Basis der Daten von OpenRazer – [Liste](profiles) | USB / Dongle | Statisch, Atmen, Spektrum, aus; Zonen bei Mäusen; Akku. **Ungetestet**: Die Karte weist darauf hin, und ein Bericht ist willkommen. Kabellose HyperSpeed-Tastaturen vorerst nur per Kabel. |
 | ASUS-Laptoptastatur (Aura) | Eingebaut | Statisch, Atmen, Spektrum, aus; Tastaturzonen und Gehäuseleuchten über LampArray |
 | Geekboard MacroPad v2 (QMK/VIA) | USB | Statisch, Atmen, Spektrum, aus |
+| MSI Vigor GK50 Elite | USB | Statisch, Atmen, Spektrum, aus; Farben pro Taste |
 | Andere QMK-Tastaturen mit VIA und RGB (Keychron, Eigenbauten…) | USB | Statisch, Atmen, Spektrum, aus, Helligkeit (Atmen und Spektrum werden von der App gezeichnet) |
 | Geräte mit dem Windows-Standard „Dynamische Beleuchtung“ (HID LampArray) | USB / eingebaut | Statisch, Atmen, Spektrum, aus, Zonen vom Gerät (Atmen und Spektrum werden von der App gezeichnet) |
 | Tuya-WLAN-Lampen (Smart Life), z. B. LINUS A60 | WLAN, lokales Netzwerk | Farbe, Weiß (eine weißliche Farbe wählt die weißen LEDs und deren Farbton), Atmen, Spektrum, aus; wird nicht mit dem Bildschirm dunkel. Benötigt den lokalen Schlüssel der Lampe, siehe unten |
@@ -130,6 +131,6 @@ Lizenziert nach Ihrer Wahl unter [MIT](LICENSE-MIT) oder [Apache-2.0](LICENSE-AP
 
 Sofern Sie nicht ausdrücklich etwas anderes angeben, wird jeder Beitrag, den Sie absichtlich zur Aufnahme in dieses Projekt einreichen, im Sinne der Apache-2.0-Lizenz wie oben doppelt lizenziert, ohne zusätzliche Bedingungen oder Konditionen.
 
-Nicht verbunden mit Logitech, Razer, ASUS, Geekboard oder Tuya. Marken gehören ihren jeweiligen Inhabern.
+Nicht verbunden mit Logitech, Razer, ASUS, MSI, Geekboard oder Tuya. Marken gehören ihren jeweiligen Inhabern.
 
 Dies ist eine Übersetzung; maßgeblich ist die englische README.

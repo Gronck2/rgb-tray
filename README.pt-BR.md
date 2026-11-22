@@ -23,6 +23,7 @@ Um pequeno aplicativo de bandeja do Windows que controla a iluminação RGB de t
 | Cerca de 90 outros mouses, teclados e acessórios Razer (Basilisk, DeathAdder, Viper, Cobra, BlackWidow, Huntsman, Ornata, Firefly, Goliathus, Base Station…), a partir dos dados do OpenRazer: [lista](profiles) | USB / dongle | Estático, respiração, espectro, desligado; zonas dos mouses; bateria. **Não testados**: o card do dispositivo avisa isso, e um relato é bem-vindo. Teclados sem fio HyperSpeed, por enquanto, só no cabo. |
 | Teclado de notebook ASUS (Aura) | Integrado | Estático, respiração, espectro, desligado; zonas do teclado e luzes do corpo via LampArray |
 | Geekboard MacroPad v2 (QMK/VIA) | USB | Estático, respiração, espectro, desligado |
+| MSI Vigor GK50 Elite | USB | Estático, respiração, espectro, desligado; cores por tecla |
 | Outros teclados QMK com VIA e RGB (Keychron, teclados customizados…) | USB | Estático, respiração, espectro, desligado, brilho (respiração e espectro desenhados pelo aplicativo) |
 | Dispositivos com o padrão Iluminação Dinâmica do Windows (HID LampArray) | USB / integrado | Estático, respiração, espectro, desligado, zonas informadas pelo dispositivo (respiração e espectro desenhados pelo aplicativo) |
 | Lâmpadas Wi-Fi Tuya (Smart Life), por exemplo LINUS A60 | Wi-Fi, rede local | Cor, branco (uma cor quase branca usa os LEDs brancos e sua tonalidade), respiração, espectro, desligado; não apaga junto com a tela. Precisa da chave local da lâmpada, veja abaixo |
@@ -130,6 +131,6 @@ Licenciado sob [MIT](LICENSE-MIT) ou [Apache-2.0](LICENSE-APACHE), à sua escolh
 
 Salvo declaração explícita em contrário de sua parte, qualquer contribuição enviada intencionalmente por você para inclusão neste projeto, conforme definido na licença Apache-2.0, será licenciada duplamente como acima, sem quaisquer termos ou condições adicionais.
 
-Sem afiliação com Logitech, Razer, ASUS, Geekboard ou Tuya. As marcas registradas pertencem a seus respectivos proprietários.
+Sem afiliação com Logitech, Razer, ASUS, MSI, Geekboard ou Tuya. As marcas registradas pertencem a seus respectivos proprietários.
 
 Este documento é uma tradução; em caso de divergência, prevalece o README em inglês.

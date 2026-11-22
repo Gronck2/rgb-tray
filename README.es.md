@@ -23,6 +23,7 @@ Una pequeña aplicación de la bandeja de Windows que controla la iluminación R
 | Unos 90 ratones, teclados y accesorios Razer más (Basilisk, DeathAdder, Viper, Cobra, BlackWidow, Huntsman, Ornata, Firefly, Goliathus, Base Station…), a partir de los datos de OpenRazer: [lista](profiles) | USB / dongle | Estático, respiración, espectro, apagado; zonas de los ratones; batería. **Sin probar**: la tarjeta lo indica, y cualquier informe es bienvenido. Por ahora, los teclados inalámbricos HyperSpeed solo funcionan por cable. |
 | Teclado de portátil ASUS (Aura) | Integrado | Estático, respiración, espectro, apagado; zonas del teclado y luces del chasis mediante LampArray |
 | Geekboard MacroPad v2 (QMK/VIA) | USB | Estático, respiración, espectro, apagado |
+| MSI Vigor GK50 Elite | USB | Estático, respiración, espectro, apagado; colores por tecla |
 | Otros teclados QMK con VIA y RGB (Keychron, teclados personalizados…) | USB | Estático, respiración, espectro, apagado, brillo (la respiración y el espectro los dibuja la aplicación) |
 | Dispositivos con el estándar Iluminación dinámica de Windows (HID LampArray) | USB / integrado | Estático, respiración, espectro, apagado, zonas del propio dispositivo (la respiración y el espectro los dibuja la aplicación) |
 | Bombillas Wi-Fi Tuya (Smart Life), p. ej. LINUS A60 | Wi-Fi, red local | Color, blanco (un color casi blanco usa los LED blancos y su tono), respiración, espectro, apagado; no se apaga junto con la pantalla. Requiere la clave local de la bombilla, ver más abajo |
@@ -130,6 +131,6 @@ Con licencia [MIT](LICENSE-MIT) o [Apache-2.0](LICENSE-APACHE), a tu elección.
 
 Salvo que indiques expresamente lo contrario, cualquier contribución que envíes intencionadamente para su inclusión en este proyecto, tal como se define en la licencia Apache-2.0, tendrá la doble licencia indicada arriba, sin términos ni condiciones adicionales.
 
-Sin afiliación con Logitech, Razer, ASUS, Geekboard ni Tuya. Las marcas comerciales pertenecen a sus propietarios.
+Sin afiliación con Logitech, Razer, ASUS, MSI, Geekboard ni Tuya. Las marcas comerciales pertenecen a sus propietarios.
 
 Esta es una traducción; en caso de discrepancia, prevalece el README en inglés.
