@@ -42,20 +42,26 @@ impl Matcher {
 }
 
 /// Replaces the watched list and installs or removes the hook accordingly. Call on the thread with the message loop.
-pub fn set(list: Vec<(i32, Hotkey)>) {
+/// Returns false when the hook could not be installed (the list is then cleared, so `is_shared` claims nothing).
+pub fn set(list: Vec<(i32, Hotkey)>) -> bool {
     let empty = list.is_empty();
     *SHARED.lock().unwrap() = list;
     if empty {
         uninstall();
-    } else if HOOK.load(Ordering::Relaxed).is_null() {
+        return true;
+    }
+    if HOOK.load(Ordering::Relaxed).is_null() {
         unsafe {
             let h = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), GetModuleHandleW(core::ptr::null()), 0);
             if h.is_null() {
                 crate::log(&format!("shared hotkeys: hook failed, error {}", GetLastError()));
+                SHARED.lock().unwrap().clear();
+                return false;
             }
             HOOK.store(h as *mut _, Ordering::Relaxed);
         }
     }
+    true
 }
 
 pub fn is_shared(id: i32) -> bool {

@@ -707,7 +707,10 @@ fn register_hotkeys() {
             register(MAX_HOTKEYS + devices.len() as i32, h, &cfg.display_name(&id));
             devices.push(id);
         }
-        hotkey_hook::set(shared);
+        let overlay_shared = shared.iter().any(|(id, _)| *id == OVERLAY_HOTKEY_ID);
+        if !hotkey_hook::set(shared) && overlay_shared {
+            OVERLAY_HOTKEY_TAKEN.store(true, Ordering::Relaxed);
+        }
     }
 }
 
