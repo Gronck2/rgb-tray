@@ -144,6 +144,20 @@ mod tests {
     }
 
     #[test]
+    fn modifier_released_first_still_rearms() {
+        let list = [(1, hk(2 | 8, 65))];
+        let mut m = Matcher { held: Vec::new() };
+        assert_eq!(m.on_key(0x5B, true, || 8, &list), None); // Win down
+        assert_eq!(m.on_key(0x11, true, || 10, &list), None); // Ctrl down
+        assert_eq!(m.on_key(65, true, || 10, &list), Some(1));
+        m.on_key(0x5B, false, || 2, &list); // Win up first
+        m.on_key(0x11, false, || 0, &list);
+        assert_eq!(m.on_key(65, true, || 0, &list), None); // still held: auto-repeat
+        m.on_key(65, false, || 0, &list);
+        assert_eq!(m.on_key(65, true, || 10, &list), Some(1));
+    }
+
+    #[test]
     fn each_vk_fires_its_own_id() {
         let list = [(1, hk(2, 65)), (2, hk(2, 66))];
         let mut m = Matcher { held: Vec::new() };
