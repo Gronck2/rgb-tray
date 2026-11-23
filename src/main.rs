@@ -9,6 +9,7 @@ mod devices;
 mod draw;
 mod editor;
 mod hid;
+mod hotkey_hook;
 mod installer;
 mod keymap;
 mod overlay;
@@ -49,6 +50,8 @@ const WM_BATTERY: u32 = WM_APP + 4;
 const WM_REGISTER_HOTKEYS: u32 = WM_APP + 5;
 /// Posted by a second launch of the app: open the panel.
 const WM_SHOW_PANEL: u32 = WM_APP + 6;
+/// A hotkey shared with another program was pressed (wparam = id relative to `HOTKEY_BASE`).
+const WM_SHARED_HOTKEY: u32 = WM_APP + 7;
 
 const TIMER_REAPPLY: usize = 1;
 /// Second pass after wake: the ASUS keyboard may reset to white a few seconds later.
@@ -670,12 +673,19 @@ fn register_hotkeys() {
             UnregisterHotKey(hwnd, HOTKEY_BASE + id);
         }
         let cfg = config();
-        let register = |id: i32, h: config::Hotkey, what: &str| {
-            let ok = RegisterHotKey(hwnd, HOTKEY_BASE + id, h.mods | MOD_NOREPEAT, h.vk) != 0;
-            if !ok {
-                log(&format!("hotkey {} for \"{what}\" is taken by another app", h.label()));
+        let mut shared = Vec::new();
+        // Returns false only when the key is lost; error 1409 (held by another program) falls back to the observing hook.
+        let mut register = |id: i32, h: config::Hotkey, what: &str| {
+            if RegisterHotKey(hwnd, HOTKEY_BASE + id, h.mods | MOD_NOREPEAT, h.vk) != 0 {
+                return true;
             }
-            ok
+            if GetLastError() == ERROR_HOTKEY_ALREADY_REGISTERED {
+                log(&format!("hotkey {} for \"{what}\" is shared with another program, observing", h.label()));
+                shared.push((id, h));
+                return true;
+            }
+            log(&format!("hotkey {} for \"{what}\" is taken by another app", h.label()));
+            false
         };
         let overlay_ok = cfg.overlay_hotkey.is_none_or(|h| register(OVERLAY_HOTKEY_ID, h, "battery overlay"));
         OVERLAY_HOTKEY_TAKEN.store(!overlay_ok, Ordering::Relaxed);
@@ -690,6 +700,20 @@ fn register_hotkeys() {
             register(MAX_HOTKEYS + devices.len() as i32, h, &cfg.display_name(&id));
             devices.push(id);
         }
+        hotkey_hook::set(shared);
+    }
+}
+
+/// Runs the action of a hotkey id (relative to `HOTKEY_BASE`).
+fn dispatch_hotkey(id: i32) {
+    if id == OVERLAY_HOTKEY_ID {
+        overlay::toggle();
+    } else if (0..MAX_HOTKEYS).contains(&id) {
+        apply_preset(id as usize);
+        ui::refresh();
+    } else if let Some(device) = usize::try_from(id - MAX_HOTKEYS).ok().and_then(|i| DEVICE_HOTKEYS.lock().unwrap().get(i).cloned()) {
+        toggle_device(&device);
+        ui::refresh();
     }
 }
 
@@ -1679,16 +1703,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             1
         }
         WM_HOTKEY => {
-            let id = wparam as i32 - HOTKEY_BASE;
-            if id == OVERLAY_HOTKEY_ID {
-                overlay::toggle();
-            } else if (0..MAX_HOTKEYS).contains(&id) {
-                apply_preset(id as usize);
-                ui::refresh();
-            } else if let Some(device) = usize::try_from(id - MAX_HOTKEYS).ok().and_then(|i| DEVICE_HOTKEYS.lock().unwrap().get(i).cloned()) {
-                toggle_device(&device);
-                ui::refresh();
-            }
+            dispatch_hotkey(wparam as i32 - HOTKEY_BASE);
+            0
+        }
+        WM_SHARED_HOTKEY => {
+            dispatch_hotkey(wparam as i32);
             0
         }
         WM_REGISTER_HOTKEYS => {
@@ -1732,6 +1751,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 log(&line);
             }
             destroy_other_windows(hwnd);
+            hotkey_hook::uninstall();
             PostQuitMessage(0);
             0
         }

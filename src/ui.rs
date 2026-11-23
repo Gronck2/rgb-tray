@@ -2217,9 +2217,11 @@ impl Flyout {
         // Divider and the hotkey section title.
         self.fill(rt, R { x: panel.x, y: line_after_actions + MENU_GAP / 2.0 - 0.5, w: panel.w, h: 1.0 }, 0.0, t.stroke);
         // The overlay's saved key may be held by another program: say so in place of the title.
-        let taken = target == MenuTarget::Overlay && hotkey.is_some() && crate::OVERLAY_HOTKEY_TAKEN.load(Ordering::Relaxed);
-        let (title, title_color) = if taken {
+        let overlay_key = target == MenuTarget::Overlay && hotkey.is_some();
+        let (title, title_color) = if overlay_key && crate::OVERLAY_HOTKEY_TAKEN.load(Ordering::Relaxed) {
             (tr!("Клавишу занимает другая программа", "Key is taken by another program"), t.accent)
+        } else if overlay_key && crate::hotkey_hook::is_shared(crate::OVERLAY_HOTKEY_ID) {
+            (tr!("Общая с другой программой", "Shared with another program"), t.accent)
         } else {
             (tr!("Горячая клавиша", "Hotkey"), t.text2)
         };
