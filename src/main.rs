@@ -675,7 +675,14 @@ fn register_hotkeys() {
         let cfg = config();
         let mut shared = Vec::new();
         // Returns false only when the key is lost; error 1409 (held by another program) falls back to the observing hook.
+        let mut seen: Vec<(u32, u32)> = Vec::new();
         let mut register = |id: i32, h: config::Hotkey, what: &str| {
+            // A duplicate inside our own config fails with 1409 too, but it must stay dropped, not observed.
+            if seen.contains(&(h.mods, h.vk)) {
+                log(&format!("hotkey {} for \"{what}\" is taken by another app", h.label()));
+                return false;
+            }
+            seen.push((h.mods, h.vk));
             if RegisterHotKey(hwnd, HOTKEY_BASE + id, h.mods | MOD_NOREPEAT, h.vk) != 0 {
                 return true;
             }

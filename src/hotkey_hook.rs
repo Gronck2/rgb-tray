@@ -50,6 +50,9 @@ pub fn set(list: Vec<(i32, Hotkey)>) {
     } else if HOOK.load(Ordering::Relaxed).is_null() {
         unsafe {
             let h = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), GetModuleHandleW(core::ptr::null()), 0);
+            if h.is_null() {
+                crate::log(&format!("shared hotkeys: hook failed, error {}", GetLastError()));
+            }
             HOOK.store(h as *mut _, Ordering::Relaxed);
         }
     }
