@@ -4,8 +4,8 @@ RGB Tray (crate `rgbtray`) is a single Windows executable (Rust, Win32 + Direct2
 the tray and drives RGB lighting of keyboards, mice and lights directly over HID, and Tuya bulbs over the LAN.
 
 - Entry point and global state: `src/main.rs` (CLI tools, hidden window and message loop, apply/reapply on wake
-- Shared hotkeys: `src/hotkey_hook.rs` (a hotkey another program owns, error 1409, is watched by an observing low-level keyboard hook that never suppresses keys; installed only while one exists).
   and hot-plug, hotkeys, battery poller).
+- Shared hotkeys: `src/hotkey_hook.rs` (a hotkey another program owns, error 1409, is watched by an observing low-level keyboard hook that never suppresses keys; installed only while one exists).
 - System batteries: `src/sysbat.rs` (Bluetooth devices Windows reports a level for, read-only, plus Logitech mice and headsets over HID++ battery reads while the user is active; shown on the overlay and covered by the low-battery alert).
 - UI: `src/ui.rs` (flyout panel), `src/editor.rs` (per-key editor), `src/traymenu.rs`, `src/alert.rs`,
   `src/installer.rs`; shared drawing in `src/draw.rs`; strings via `tr!` in `src/i18n.rs`.
