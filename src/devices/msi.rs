@@ -17,6 +17,7 @@
 
 use super::{animation, Device, Effect, Rgb};
 use crate::hid::{self, Exchange, Hid, HidInfo, Patience};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -132,18 +133,30 @@ pub struct Gk50 {
     hid: Hid,
 }
 
-/// The answer to a report repeats its first two bytes (both with the report id in front).
+/// The answer to a report repeats its first two bytes (both with the report id in front); for the one-byte end report
+/// `41` only the first, as its answer isn't in the capture.
 fn answers(report: &[u8], answer: &[u8]) -> bool {
-    answer.len() >= 3 && answer[1..3] == report[1..3]
+    answer.len() >= 3 && answer[1] == report[1] && (report[2] == 0 || answer[2] == report[2])
 }
 
-fn send(hid: &Hid, reports: &[Vec<u8>]) -> bool {
+/// `patience`: how long an answer is waited for; after a lost one it drops to zero for the rest of the transaction (and,
+/// for an animation that keeps it, its later frames): a keyboard that stopped answering would cost 100 ms a report, and the
+/// animation thread draws every device's frames.
+fn send(hid: &Hid, reports: &[Vec<u8>], patience: &mut Duration) -> bool {
+    static LOGGED: AtomicBool = AtomicBool::new(false);
     let mut buf = [0u8; 65];
     send_with(
-        |r| match hid.exchange(r, &mut buf, 64, Patience::Total(ANSWER), |a| answers(r, a).then_some(())) {
+        |r| match hid.exchange(r, &mut buf, 64, Patience::Total(*patience), |a| answers(r, a).then_some(())) {
             Ok(()) => true,
+            Err(Exchange::Write(_) | Exchange::Gone) => false,
             // The report was taken; a lost answer alone doesn't fail the transaction.
-            Err(e) => !matches!(e, Exchange::Write(_) | Exchange::Gone),
+            Err(Exchange::NoAnswer) => {
+                if *patience > Duration::ZERO && !LOGGED.swap(true, Ordering::Relaxed) {
+                    crate::log(&format!("GK50: no answer to {:02X?}", &r[1..3]));
+                }
+                *patience = Duration::ZERO;
+                true
+            }
         },
         reports,
     )
@@ -177,7 +190,7 @@ fn find_all() -> Vec<Gk50> {
 
 impl Gk50 {
     fn send(&self, reports: &[Vec<u8>]) -> Result<(), String> {
-        if send(&self.hid, reports) {
+        if send(&self.hid, reports, &mut { ANSWER }) {
             Ok(())
         } else {
             Err("GK50: send failed".into())
@@ -211,6 +224,7 @@ impl Device for Gk50 {
                 // which isn't worked out.
                 let hid = Hid::open(&self.path, true, true).ok_or("GK50: cannot open")?;
                 let mut last: Option<(Instant, Rgb)> = None;
+                let mut patience = ANSWER;
                 animation::start(
                     &self.path,
                     Box::new(move |t| {
@@ -222,9 +236,8 @@ impl Device for Gk50 {
                         if last.is_some_and(|(at, shown)| shown == c || at.elapsed() < FRAME) {
                             return true;
                         }
-                        let ok = send(&hid, &static_reports(c));
                         last = Some((Instant::now(), c));
-                        ok
+                        send(&hid, &static_reports(c), &mut patience)
                     }),
                 );
                 Ok(())
@@ -293,6 +306,8 @@ mod tests {
         let begin = report(&[0x41, 0x80]);
         assert!(answers(&begin, &report(&[0x41, 0x80])));
         assert!(!answers(&begin, &report(&[0x41])));
+        // The end report: any answer starting with its command.
+        assert!(answers(&report(&[0x41]), &report(&[0x41, 0x80])) && !answers(&report(&[0x41]), &report(&[0x56, 0x21])));
         assert!(answers(&page(0x01, &[1, 2]), &report(&[0x56, 0x21, 0x01])));
         assert!(!answers(&begin, &[0, 0x41]));
     }
