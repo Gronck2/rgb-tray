@@ -7,7 +7,7 @@
 use std::cell::RefCell;
 use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 use windows::core::w;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -315,7 +315,7 @@ pub fn is_visible() -> bool {
 /// Shows the plate, or hides it when it is shown; the choice is remembered for the next start. The plate also goes away
 /// when the app exits, but that is not the user's choice and is not remembered.
 pub fn toggle() {
-    RESTORE.store(false, Ordering::Relaxed);
+    RESTORE.store(0, Ordering::Relaxed);
     let plate = OVERLAY.with(|c| c.borrow().as_ref().map(|o| o.hwnd));
     let shown = match plate {
         Some(h) => {
@@ -331,26 +331,33 @@ pub fn toggle() {
     cfg.save();
 }
 
-/// The plate was left on and waits for the first levels after start (`restore`); a toggle before that cancels it.
-static RESTORE: AtomicBool = AtomicBool::new(false);
+/// What the plate left on still waits for after start (`restore`): `AFTER_APPLY` and `AFTER_SYSTEM`; 0 = nothing to restore.
+/// A toggle before that cancels it.
+static RESTORE: AtomicU8 = AtomicU8::new(0);
+/// The first apply has filled the levels of the app's own devices.
+pub const AFTER_APPLY: u8 = 1;
+/// The first read of the system devices is done.
+pub const AFTER_SYSTEM: u8 = 2;
 
 /// At start: whether the plate was left on; it is then shown by `restore` once the levels are known.
 pub fn restore_pending() -> bool {
     let wanted = crate::config().overlay_shown;
-    RESTORE.store(wanted, Ordering::Relaxed);
+    RESTORE.store(if wanted { AFTER_APPLY | AFTER_SYSTEM } else { 0 }, Ordering::Relaxed);
     wanted
 }
 
-/// Shows the plate left on at the last run, once: after the first apply or battery poll, or the fallback timer.
-pub fn restore() {
-    if take_restore() && !is_visible() {
+/// Marks `done` as known and shows the plate left on at the last run once nothing is missing (once; the fallback timer
+/// passes both).
+pub fn restore(done: u8) {
+    if take_restore(done) && !is_visible() {
         show();
     }
 }
 
-/// Whether the plate still waits to be restored; true only once.
-fn take_restore() -> bool {
-    RESTORE.swap(false, Ordering::Relaxed)
+/// Whether `done` was the last thing the plate waited for; true only once.
+fn take_restore(done: u8) -> bool {
+    let before = RESTORE.fetch_and(!done, Ordering::Relaxed);
+    before != 0 && before & !done == 0
 }
 
 /// Opens the plate and reads the system devices; whether it opened.
@@ -903,13 +910,19 @@ mod tests {
     use crate::sysbat::SysClass;
 
     #[test]
-    fn restore_is_taken_once_and_a_toggle_cancels_it() {
-        RESTORE.store(true, Ordering::Relaxed);
-        assert!(take_restore() && !take_restore());
-        RESTORE.store(true, Ordering::Relaxed);
+    fn restore_waits_for_both_once_and_a_toggle_cancels_it() {
+        let all = AFTER_APPLY | AFTER_SYSTEM;
+        RESTORE.store(all, Ordering::Relaxed);
+        // A second apply before the system devices are read is not enough.
+        assert!(!take_restore(AFTER_APPLY) && !take_restore(AFTER_APPLY));
+        assert!(take_restore(AFTER_SYSTEM) && !take_restore(AFTER_SYSTEM) && !take_restore(all));
+        // The fallback timer passes both.
+        RESTORE.store(all, Ordering::Relaxed);
+        assert!(take_restore(all) && !take_restore(all));
         // What `toggle` does first: a plate switched by hand before the first levels is not restored after it.
-        RESTORE.store(false, Ordering::Relaxed);
-        assert!(!take_restore());
+        RESTORE.store(all, Ordering::Relaxed);
+        RESTORE.store(0, Ordering::Relaxed);
+        assert!(!take_restore(AFTER_APPLY) && !take_restore(AFTER_SYSTEM));
     }
 
     #[test]
