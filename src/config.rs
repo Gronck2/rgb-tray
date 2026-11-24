@@ -145,6 +145,20 @@ fn lenient_bool_true<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::
     })
 }
 
+/// A value that is not a bool reads as false: it must never make the settings file unreadable.
+fn lenient_bool_false<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Bool(bool),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Raw::deserialize(d)? {
+        Raw::Bool(b) => b,
+        Raw::Other(_) => false,
+    })
+}
+
 fn is_true(b: &bool) -> bool {
     *b
 }
@@ -430,6 +444,9 @@ pub struct Config {
     /// Bluetooth devices Windows reports a level for are listed on the overlay and raise the low-battery alert; a garbled value reads as on.
     #[serde(deserialize_with = "lenient_bool_true", skip_serializing_if = "is_true")]
     pub overlay_system: bool,
+    /// The user left the battery overlay on: it is shown again at the next start. Only the hotkey and the tray item change it.
+    #[serde(deserialize_with = "lenient_bool_false", skip_serializing_if = "is_false")]
+    pub overlay_shown: bool,
     pub presets: Vec<Preset>,
     /// Programs whose "it drives the lighting too" warning the user hid (`conflicts::App::key`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -461,6 +478,7 @@ impl Default for Config {
             overlay_style: OverlayStyle::Full,
             overlay_pos: None,
             overlay_system: true,
+            overlay_shown: false,
             presets: Vec::new(),
             ignored_apps: Vec::new(),
             per_key: false,
@@ -1399,6 +1417,24 @@ mod tests {
         cfg.overlay_system = false;
         let text = toml::to_string(&cfg).unwrap();
         assert!(text.contains("overlay_system = false") && !toml::from_str::<Config>(&text).unwrap().overlay_system);
+    }
+
+    #[test]
+    fn overlay_shown_defaults_off_is_lenient_and_round_trips() {
+        let load = |s: &str| toml::from_str::<Config>(s).unwrap().overlay_shown;
+        assert!(!Config::default().overlay_shown && !load("brightness = 50\n"));
+        assert!(load("overlay_shown = true\nfuture_field = 1\n"));
+        for bad in ["1", "\"on\"", "[true]", "{ on = true }"] {
+            let cfg = toml::from_str::<Config>(&format!("brightness = 42\noverlay_shown = {bad}\n")).unwrap();
+            assert!(!cfg.overlay_shown && cfg.brightness == 42, "{bad}");
+        }
+        let mut cfg = Config::default();
+        assert!(!toml::to_string(&cfg).unwrap().contains("overlay_shown"));
+        cfg.overlay_shown = true;
+        // With the position set too: its table must not swallow the flag.
+        cfg.overlay_pos = Some(OverlayPos { x: 1, y: 2, right: false, bottom: true });
+        let back: Config = toml::from_str(&toml::to_string_pretty(&cfg).unwrap()).unwrap();
+        assert!(back.overlay_shown && back.overlay_pos == cfg.overlay_pos);
     }
 
     #[test]

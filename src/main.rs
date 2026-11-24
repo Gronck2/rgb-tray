@@ -60,6 +60,8 @@ const TIMER_REAPPLY_LATE: usize = 2;
 const TIMER_REAPPLY_EARLY: usize = 3;
 /// Reads the system devices again, 2 s after the last device change (only while the overlay is up).
 const TIMER_SYSTEM: usize = 4;
+/// Shows the overlay left on even when the first levels never come (no devices with a battery).
+const TIMER_OVERLAY_RESTORE: usize = 5;
 
 /// GUID_CONSOLE_DISPLAY_STATE: 0 off, 1 on, 2 dimmed. Modern Standby (S0ix) laptops
 /// send no resume broadcast, so the display turning back on is the wake signal.
@@ -1393,7 +1395,10 @@ fn import_settings() {
                 let _ = std::fs::copy(Config::dir().join("config.toml"), Config::dir().join("config.before-import.toml"));
                 {
                     let mut cfg = config();
+                    // The overlay stays as the user has it now: only its hotkey and tray item switch it.
+                    let overlay_shown = cfg.overlay_shown;
                     *cfg = new;
+                    cfg.overlay_shown = overlay_shown;
                     cfg.save();
                 }
                 ui::PINNED.store(config().pinned, Ordering::Relaxed);
@@ -1748,11 +1753,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             sysbat::refresh_async();
             0
         }
+        WM_TIMER if wparam == TIMER_OVERLAY_RESTORE => {
+            KillTimer(hwnd, TIMER_OVERLAY_RESTORE);
+            overlay::restore(overlay::AFTER_APPLY | overlay::AFTER_SYSTEM);
+            0
+        }
         WM_APPLIED | WM_BATTERY => {
             check_batteries();
             update_tray(hwnd, NIM_MODIFY);
             ui::refresh();
             overlay::refresh();
+            overlay::restore(if msg == WM_APPLIED { overlay::AFTER_APPLY } else { overlay::AFTER_SYSTEM });
             0
         }
         WM_DESTROY => {
@@ -1952,7 +1963,12 @@ fn main() {
         apply_all();
         devices::logitech::spawn_watcher(|| post(WM_REAPPLY_SOON));
         spawn_battery_poller();
-        sysbat::refresh_async();
+        // Posts WM_BATTERY even with no system devices: the plate left on waits for this first read.
+        sysbat::refresh_and_notify();
+        // Not shown yet: before the first levels the plate would say there are no devices.
+        if overlay::restore_pending() {
+            SetTimer(hwnd, TIMER_OVERLAY_RESTORE, 10_000, None);
+        }
         spawn_link_watch();
         update::spawn_checker();
         if std::env::args().any(|a| a == "--show") {
