@@ -1,7 +1,9 @@
 //! MSI Vigor GK50 Elite (USB 0DB0:0B5B), protocol read from a USB capture of MSI Center.
 //!
 //! The vendor collection (FF00:0001) takes 64-byte output reports (no report id) and answers
-//! each one. Every change is a transaction: `41 80` (begin), `56 21 <page> 00 <data>` (write a
+//! each one; the next goes out only after the answer, as MSI Center does (except after its save). Sent
+//! without waiting, 240 reports a second, the channel stopped taking reports until a replug (24.11.2026;
+//! most likely because of that). Every change is a transaction: `41 80` (begin), `56 21 <page> 00 <data>` (write a
 //! settings page), `51 28 00 00 <mode>`, `41` (end). Modes: 01 static (page 01), 02 breathe and
 //! 03 wave (page 02), 0B per-key (pages 05-0C), 0C off.
 //!
@@ -14,13 +16,18 @@
 //! gaps of the full-size layout (MSI Center reads them back as black).
 
 use super::{animation, Device, Effect, Rgb};
-use crate::hid::{self, Hid, HidInfo};
+use crate::hid::{self, Exchange, Hid, HidInfo, Patience};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 const VID: u16 = 0x0DB0;
 const PID: u16 = 0x0B5B;
 const USAGE_PAGE: u16 = 0xFF00;
 const USAGE: u16 = 0x0001;
+/// How long a report's answer is waited for (in the capture it comes within about 3 ms).
+const ANSWER: Duration = Duration::from_millis(100);
+/// Between the frames of an app-drawn effect: four reports each, and the keyboard needs rest between them.
+const FRAME: Duration = Duration::from_millis(40);
 
 /// Key of each slot of the per-key table, by its name in `keymap` ("" = no LED).
 #[rustfmt::skip]
@@ -125,8 +132,21 @@ pub struct Gk50 {
     hid: Hid,
 }
 
+/// The answer to a report repeats its first two bytes (both with the report id in front).
+fn answers(report: &[u8], answer: &[u8]) -> bool {
+    answer.len() >= 3 && answer[1..3] == report[1..3]
+}
+
 fn send(hid: &Hid, reports: &[Vec<u8>]) -> bool {
-    send_with(|r| hid.write(r), reports)
+    let mut buf = [0u8; 65];
+    send_with(
+        |r| match hid.exchange(r, &mut buf, 64, Patience::Total(ANSWER), |a| answers(r, a).then_some(())) {
+            Ok(()) => true,
+            // The report was taken; a lost answer alone doesn't fail the transaction.
+            Err(e) => !matches!(e, Exchange::Write(_) | Exchange::Gone),
+        },
+        reports,
+    )
 }
 
 /// Writes a transaction (`transaction` order: begin first, end last). If a write fails after the
@@ -189,8 +209,8 @@ impl Device for Gk50 {
                 self.send(&static_reports(color.scaled(brightness)))?;
                 // Drawn by the app, from its own handle: the firmware effects need page 02,
                 // which isn't worked out.
-                // The contributor checked this at the animation's 60 fps on the device; there is no frame-rate cap here.
                 let hid = Hid::open(&self.path, true, true).ok_or("GK50: cannot open")?;
+                let mut last: Option<(Instant, Rgb)> = None;
                 animation::start(
                     &self.path,
                     Box::new(move |t| {
@@ -198,7 +218,13 @@ impl Device for Gk50 {
                             Effect::Breathe => color.scaled((brightness as f32 * animation::breathe(t)) as u8),
                             _ => crate::hue(animation::cycle_hue(t)).scaled(brightness),
                         };
-                        send(&hid, &static_reports(c))
+                        // Not at the animation's 60 fps, and nothing while the color stays.
+                        if last.is_some_and(|(at, shown)| shown == c || at.elapsed() < FRAME) {
+                            return true;
+                        }
+                        let ok = send(&hid, &static_reports(c));
+                        last = Some((Instant::now(), c));
+                        ok
                     }),
                 );
                 Ok(())
@@ -260,6 +286,15 @@ mod tests {
         // Every key of the full layout has a slot.
         let full = crate::keymap::get(crate::keymap::FULL);
         assert!(full.codes().iter().all(|&c| slot_of(c).is_some()));
+    }
+
+    #[test]
+    fn an_answer_repeats_the_command() {
+        let begin = report(&[0x41, 0x80]);
+        assert!(answers(&begin, &report(&[0x41, 0x80])));
+        assert!(!answers(&begin, &report(&[0x41])));
+        assert!(answers(&page(0x01, &[1, 2]), &report(&[0x56, 0x21, 0x01])));
+        assert!(!answers(&begin, &[0, 0x41]));
     }
 
     #[test]
