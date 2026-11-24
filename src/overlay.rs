@@ -7,7 +7,7 @@
 use std::cell::RefCell;
 use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use windows::core::w;
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -315,6 +315,7 @@ pub fn is_visible() -> bool {
 /// Shows the plate, or hides it when it is shown; the choice is remembered for the next start. The plate also goes away
 /// when the app exits, but that is not the user's choice and is not remembered.
 pub fn toggle() {
+    RESTORE.store(false, Ordering::Relaxed);
     let plate = OVERLAY.with(|c| c.borrow().as_ref().map(|o| o.hwnd));
     let shown = match plate {
         Some(h) => {
@@ -330,12 +331,26 @@ pub fn toggle() {
     cfg.save();
 }
 
-/// At start: shows the plate when the user left it on.
-pub fn restore() {
+/// The plate was left on and waits for the first levels after start (`restore`); a toggle before that cancels it.
+static RESTORE: AtomicBool = AtomicBool::new(false);
+
+/// At start: whether the plate was left on; it is then shown by `restore` once the levels are known.
+pub fn restore_pending() -> bool {
     let wanted = crate::config().overlay_shown;
-    if wanted && !is_visible() {
+    RESTORE.store(wanted, Ordering::Relaxed);
+    wanted
+}
+
+/// Shows the plate left on at the last run, once: after the first apply or battery poll, or the fallback timer.
+pub fn restore() {
+    if take_restore() && !is_visible() {
         show();
     }
+}
+
+/// Whether the plate still waits to be restored; true only once.
+fn take_restore() -> bool {
+    RESTORE.swap(false, Ordering::Relaxed)
 }
 
 /// Opens the plate and reads the system devices; whether it opened.
@@ -886,6 +901,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 mod tests {
     use super::*;
     use crate::sysbat::SysClass;
+
+    #[test]
+    fn restore_is_taken_once_and_a_toggle_cancels_it() {
+        RESTORE.store(true, Ordering::Relaxed);
+        assert!(take_restore() && !take_restore());
+        RESTORE.store(true, Ordering::Relaxed);
+        // What `toggle` does first: a plate switched by hand before the first levels is not restored after it.
+        RESTORE.store(false, Ordering::Relaxed);
+        assert!(!take_restore());
+    }
 
     #[test]
     fn plate_outside_work_area_overlaps_taskbar() {

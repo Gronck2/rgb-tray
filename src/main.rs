@@ -60,6 +60,8 @@ const TIMER_REAPPLY_LATE: usize = 2;
 const TIMER_REAPPLY_EARLY: usize = 3;
 /// Reads the system devices again, 2 s after the last device change (only while the overlay is up).
 const TIMER_SYSTEM: usize = 4;
+/// Shows the overlay left on even when the first levels never come (no devices with a battery).
+const TIMER_OVERLAY_RESTORE: usize = 5;
 
 /// GUID_CONSOLE_DISPLAY_STATE: 0 off, 1 on, 2 dimmed. Modern Standby (S0ix) laptops
 /// send no resume broadcast, so the display turning back on is the wake signal.
@@ -1751,11 +1753,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             sysbat::refresh_async();
             0
         }
+        WM_TIMER if wparam == TIMER_OVERLAY_RESTORE => {
+            KillTimer(hwnd, TIMER_OVERLAY_RESTORE);
+            overlay::restore();
+            0
+        }
         WM_APPLIED | WM_BATTERY => {
             check_batteries();
             update_tray(hwnd, NIM_MODIFY);
             ui::refresh();
             overlay::refresh();
+            overlay::restore();
             0
         }
         WM_DESTROY => {
@@ -1956,7 +1964,10 @@ fn main() {
         devices::logitech::spawn_watcher(|| post(WM_REAPPLY_SOON));
         spawn_battery_poller();
         sysbat::refresh_async();
-        overlay::restore();
+        // Not shown yet: before the first levels the plate would say there are no devices.
+        if overlay::restore_pending() {
+            SetTimer(hwnd, TIMER_OVERLAY_RESTORE, 10_000, None);
+        }
         spawn_link_watch();
         update::spawn_checker();
         if std::env::args().any(|a| a == "--show") {
