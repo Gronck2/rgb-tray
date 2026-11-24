@@ -1393,7 +1393,10 @@ fn import_settings() {
                 let _ = std::fs::copy(Config::dir().join("config.toml"), Config::dir().join("config.before-import.toml"));
                 {
                     let mut cfg = config();
+                    // The overlay stays as the user has it now: only its hotkey and tray item switch it.
+                    let overlay_shown = cfg.overlay_shown;
                     *cfg = new;
+                    cfg.overlay_shown = overlay_shown;
                     cfg.save();
                 }
                 ui::PINNED.store(config().pinned, Ordering::Relaxed);
@@ -1953,6 +1956,7 @@ fn main() {
         devices::logitech::spawn_watcher(|| post(WM_REAPPLY_SOON));
         spawn_battery_poller();
         sysbat::refresh_async();
+        overlay::restore();
         spawn_link_watch();
         update::spawn_checker();
         if std::env::args().any(|a| a == "--show") {

@@ -1,5 +1,5 @@
 //! Battery overlay: a small always-on-top plate with the charge of every device, shown and hidden
-//! by a hotkey or the tray menu. It has no background: only the icons, percents and (full style) names and bars are drawn, with a
+//! by a hotkey or the tray menu; left on, it comes back at the next start. It has no background: only the icons, percents and (full style) names and bars are drawn, with a
 //! contrasting halo so they read on anything. It takes no focus and lets mouse clicks through, except while Ctrl and Shift are held: then it can be dragged
 //! (the position is saved), and a double click puts it back in the default corner. It shows the last
 //! known levels and never asks a device (that would wake sleeping wireless ones).
@@ -312,22 +312,41 @@ pub fn is_visible() -> bool {
     OVERLAY.with(|c| c.borrow().is_some())
 }
 
-/// Shows the plate, or hides it when it is shown.
+/// Shows the plate, or hides it when it is shown; the choice is remembered for the next start. The plate also goes away
+/// when the app exits, but that is not the user's choice and is not remembered.
 pub fn toggle() {
-    let shown = OVERLAY.with(|c| c.borrow().as_ref().map(|o| o.hwnd));
-    match shown {
-        Some(h) => unsafe {
-            DestroyWindow(h);
-        },
-        None => {
-            if let Err(e) = unsafe { open() } {
-                crate::log(&format!("battery overlay: {e}"));
-            } else {
-                // Windows' own levels ask no device; the Logitech HID++ reads are skipped when the user is idle or has system devices off.
-                sysbat::refresh_async();
-            }
+    let plate = OVERLAY.with(|c| c.borrow().as_ref().map(|o| o.hwnd));
+    let shown = match plate {
+        Some(h) => {
+            unsafe { DestroyWindow(h) };
+            false
         }
+        // A plate that could not be opened changes nothing.
+        None if !show() => return,
+        None => true,
+    };
+    let mut cfg = crate::config();
+    cfg.overlay_shown = shown;
+    cfg.save();
+}
+
+/// At start: shows the plate when the user left it on.
+pub fn restore() {
+    let wanted = crate::config().overlay_shown;
+    if wanted && !is_visible() {
+        show();
     }
+}
+
+/// Opens the plate and reads the system devices; whether it opened.
+fn show() -> bool {
+    if let Err(e) = unsafe { open() } {
+        crate::log(&format!("battery overlay: {e}"));
+        return false;
+    }
+    // Windows' own levels ask no device; the Logitech HID++ reads are skipped when the user is idle or has system devices off.
+    sysbat::refresh_async();
+    true
 }
 
 /// Draws the plate again and puts it on screen; nothing when it is hidden.

@@ -69,7 +69,7 @@ With [Claude Code](https://claude.com/claude-code) you can get a device working 
 - Updates: once a day the app asks GitHub for the latest release; a newer version shows a card on the panel that installs it in one click. The check can be switched off in the tray menu.
 - Follows the display: the lighting dims when Windows dims the screen and goes off while the screen is off (idle, locked, asleep). Can be switched off in the tray menu.
 - Low battery alerts at 10% and 5%.
-- A small always-on-top battery plate (all devices, last known levels; full, compact row or column layout, chosen in the tray menu) shown and hidden by a hotkey you record or the tray item "Battery overlay"; it takes no focus and clicks pass through (Ctrl+Shift+drag moves it, Ctrl+Shift+double-click resets it). It shows over windowed and borderless games, not over exclusive full screen.
+- A small always-on-top battery plate (all devices, last known levels; full, compact row or column layout, chosen in the tray menu) shown and hidden by a hotkey you record or the tray item "Battery overlay", and back after a restart if left on; it takes no focus and clicks pass through (Ctrl+Shift+drag moves it, Ctrl+Shift+double-click resets it). It shows over windowed and borderless games, not over exclusive full screen.
 - The battery plate also lists connected Bluetooth devices that Windows reports a battery level for (headphones, mice, keyboards, gamepads), with their Windows name and a fitting icon, and the low-battery alert covers them too. The app only reads the level Windows already holds and sends nothing to these devices; the tray item "System devices" turns this off.
 - The tray icon shows the current color.
 - Pinned mode: the panel stays open on top and can be dragged by its header.
