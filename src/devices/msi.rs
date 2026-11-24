@@ -1,7 +1,9 @@
 //! MSI Vigor GK50 Elite (USB 0DB0:0B5B), protocol read from a USB capture of MSI Center.
 //!
 //! The vendor collection (FF00:0001) takes 64-byte output reports (no report id) and answers
-//! each one. Every change is a transaction: `41 80` (begin), `56 21 <page> 00 <data>` (write a
+//! each one; the next goes out only after the answer, as MSI Center does (except after its save). Sent
+//! without waiting, 240 reports a second, the channel stopped taking reports until a replug (24.11.2026;
+//! most likely because of that). Every change is a transaction: `41 80` (begin), `56 21 <page> 00 <data>` (write a
 //! settings page), `51 28 00 00 <mode>`, `41` (end). Modes: 01 static (page 01), 02 breathe and
 //! 03 wave (page 02), 0B per-key (pages 05-0C), 0C off.
 //!
@@ -14,13 +16,19 @@
 //! gaps of the full-size layout (MSI Center reads them back as black).
 
 use super::{animation, Device, Effect, Rgb};
-use crate::hid::{self, Hid, HidInfo};
+use crate::hid::{self, Exchange, Hid, HidInfo, Patience};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 const VID: u16 = 0x0DB0;
 const PID: u16 = 0x0B5B;
 const USAGE_PAGE: u16 = 0xFF00;
 const USAGE: u16 = 0x0001;
+/// How long a report's answer is waited for (in the capture it comes within about 3 ms).
+const ANSWER: Duration = Duration::from_millis(100);
+/// Between the frames of an app-drawn effect: four reports each, and the keyboard needs rest between them.
+const FRAME: Duration = Duration::from_millis(40);
 
 /// Key of each slot of the per-key table, by its name in `keymap` ("" = no LED).
 #[rustfmt::skip]
@@ -125,8 +133,33 @@ pub struct Gk50 {
     hid: Hid,
 }
 
-fn send(hid: &Hid, reports: &[Vec<u8>]) -> bool {
-    send_with(|r| hid.write(r), reports)
+/// The answer to a report repeats its first two bytes (both with the report id in front); for the one-byte end report
+/// `41` only the first, as its answer isn't in the capture.
+fn answers(report: &[u8], answer: &[u8]) -> bool {
+    answer.len() >= 3 && answer[1] == report[1] && (report[2] == 0 || answer[2] == report[2])
+}
+
+/// `patience`: how long an answer is waited for; after a lost one it drops to zero for the rest of the transaction (and,
+/// for an animation that keeps it, its later frames): a keyboard that stopped answering would cost 100 ms a report, and the
+/// animation thread draws every device's frames.
+fn send(hid: &Hid, reports: &[Vec<u8>], patience: &mut Duration) -> bool {
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+    let mut buf = [0u8; 65];
+    send_with(
+        |r| match hid.exchange(r, &mut buf, 64, Patience::Total(*patience), |a| answers(r, a).then_some(())) {
+            Ok(()) => true,
+            Err(Exchange::Write(_) | Exchange::Gone) => false,
+            // The report was taken; a lost answer alone doesn't fail the transaction.
+            Err(Exchange::NoAnswer) => {
+                if *patience > Duration::ZERO && !LOGGED.swap(true, Ordering::Relaxed) {
+                    crate::log(&format!("GK50: no answer to {:02X?}", &r[1..3]));
+                }
+                *patience = Duration::ZERO;
+                true
+            }
+        },
+        reports,
+    )
 }
 
 /// Writes a transaction (`transaction` order: begin first, end last). If a write fails after the
@@ -157,7 +190,7 @@ fn find_all() -> Vec<Gk50> {
 
 impl Gk50 {
     fn send(&self, reports: &[Vec<u8>]) -> Result<(), String> {
-        if send(&self.hid, reports) {
+        if send(&self.hid, reports, &mut { ANSWER }) {
             Ok(())
         } else {
             Err("GK50: send failed".into())
@@ -189,8 +222,9 @@ impl Device for Gk50 {
                 self.send(&static_reports(color.scaled(brightness)))?;
                 // Drawn by the app, from its own handle: the firmware effects need page 02,
                 // which isn't worked out.
-                // The contributor checked this at the animation's 60 fps on the device; there is no frame-rate cap here.
                 let hid = Hid::open(&self.path, true, true).ok_or("GK50: cannot open")?;
+                let mut last: Option<(Instant, Rgb)> = None;
+                let mut patience = ANSWER;
                 animation::start(
                     &self.path,
                     Box::new(move |t| {
@@ -198,7 +232,12 @@ impl Device for Gk50 {
                             Effect::Breathe => color.scaled((brightness as f32 * animation::breathe(t)) as u8),
                             _ => crate::hue(animation::cycle_hue(t)).scaled(brightness),
                         };
-                        send(&hid, &static_reports(c))
+                        // Not at the animation's 60 fps, and nothing while the color stays.
+                        if last.is_some_and(|(at, shown)| shown == c || at.elapsed() < FRAME) {
+                            return true;
+                        }
+                        last = Some((Instant::now(), c));
+                        send(&hid, &static_reports(c), &mut patience)
                     }),
                 );
                 Ok(())
@@ -260,6 +299,17 @@ mod tests {
         // Every key of the full layout has a slot.
         let full = crate::keymap::get(crate::keymap::FULL);
         assert!(full.codes().iter().all(|&c| slot_of(c).is_some()));
+    }
+
+    #[test]
+    fn an_answer_repeats_the_command() {
+        let begin = report(&[0x41, 0x80]);
+        assert!(answers(&begin, &report(&[0x41, 0x80])));
+        assert!(!answers(&begin, &report(&[0x41])));
+        // The end report: any answer starting with its command.
+        assert!(answers(&report(&[0x41]), &report(&[0x41, 0x80])) && !answers(&report(&[0x41]), &report(&[0x56, 0x21])));
+        assert!(answers(&page(0x01, &[1, 2]), &report(&[0x56, 0x21, 0x01])));
+        assert!(!answers(&begin, &[0, 0x41]));
     }
 
     #[test]
